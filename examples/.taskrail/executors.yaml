@@ -1,0 +1,66 @@
+# Executor adapters: config-driven wrappers around coding-agent CLIs.
+# Agent CLI flags change often. Each entry records the version it was tested against;
+# `taskrail doctor` compares it with what is installed.
+#
+# Placeholders in cmd/env/files: {prompt} {model} {workdir} {proxy_url} (ends in /v1) {proxy_root} {proxy_token}.
+# Workers get a scrubbed environment: no provider API keys, only the per-run proxy token.
+# `files` are written into the worktree for one attempt and restored afterwards (never committed).
+
+executors:
+  opencode:
+    # Per opencode.ai/docs (V2): prompt is positional; project config in opencode.json supports {env:VAR}.
+    # UNVERIFIED: `run` flags are not documented. Check `opencode run --help` for the model flag and
+    # confirm the provider/permissions shape below, then set tested_version.
+    cmd: ["opencode", "run", "{prompt}"]
+    model_args: ["--model", "taskrail/{model}"]
+    brief_file: AGENTS.md
+    version_cmd: ["opencode", "--version"]
+    tested_version: null
+    env:
+      TASKRAIL_PROXY_TOKEN: "{proxy_token}"
+    files:
+      opencode.json: |
+        {
+          "$schema": "https://opencode.ai/config.json",
+          "providers": {
+            "taskrail": {
+              "name": "Taskrail metering proxy",
+              "env": ["TASKRAIL_PROXY_TOKEN"],
+              "package": "@opencode/ai/providers/openai-compatible",
+              "settings": { "baseURL": "{proxy_url}", "apiKey": "{env:TASKRAIL_PROXY_TOKEN}" },
+              "models": { "{model}": { "name": "{model}" } }
+            }
+          },
+          "permissions": [
+            { "action": "edit", "resource": "*", "effect": "allow" },
+            { "action": "shell", "resource": "*", "effect": "allow" },
+            { "action": "external_directory", "resource": "*", "effect": "deny" }
+          ]
+        }
+    capabilities:
+      headless: true
+      model_override: true
+      structured_output: false
+      session_resume: false
+      reports_tokens: false
+      permission_modes: true
+      proxy_routable: true
+
+  claude-code:
+    # UNVERIFIED: confirm flags against current Claude Code docs before first use (M3).
+    cmd: ["claude", "-p", "{prompt}", "--output-format", "json", "--permission-mode", "acceptEdits"]
+    model_args: ["--model", "{model}"]
+    brief_file: CLAUDE.md
+    version_cmd: ["claude", "--version"]
+    tested_version: null
+    env:
+      ANTHROPIC_BASE_URL: "{proxy_root}"
+      ANTHROPIC_AUTH_TOKEN: "{proxy_token}"
+    capabilities:
+      headless: true
+      model_override: true
+      structured_output: true
+      session_resume: true
+      reports_tokens: true
+      permission_modes: true
+      proxy_routable: true

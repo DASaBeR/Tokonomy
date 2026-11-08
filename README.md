@@ -4,7 +4,7 @@
 
 Taskrail is an open-source CLI that coordinates coding agents, routes work across models, enforces deterministic quality gates, and measures the real **cost per successful task**.
 
-> **Status: pre-alpha (M0).** The CLI skeleton, config, ledger and release pipeline work. Planning, supervised runs and benchmarking land in M1–M3. "Taskrail" is a working name.
+> **Status: pre-alpha (M1).** Planning, supervised runs with gates and retries, the metering proxy, the cost ledger and the benchmark harness work. Not yet available: architect takeover and handoff (M2) and a second executor adapter (M3). The OpenCode adapter's flags have not yet been verified against a real install. "Taskrail" is a working name.
 
 ## The hypothesis
 
@@ -37,19 +37,28 @@ Both installers verify SHA-256 checksums. Single-file binaries are published for
 
 ```sh
 cd your-repo
-taskrail init        # detect stack, write .taskrail/policy.yaml and executors.yaml
-taskrail doctor      # check git, executor, API key, gate tools, prices
-taskrail report      # show the ledger
+taskrail init                          # detect stack, write .taskrail/ (set models and prices next)
+taskrail doctor                        # check git, executor, API key, gate tools, prices
+taskrail plan "Add rate limiting to /login"   # architect writes a contract (units, rules, don'ts)
+taskrail run                           # cheap worker executes each unit; gates decide; one commit per unit
+git merge taskrail/<run-id>            # the result lives on its own branch
+taskrail report <run-id>               # cost per tier, tokens, architect share
+```
+
+`plan --strategy` picks how the task is done: `4` (default, architect + cheap worker + gates), `3`, `2`, `1b` or `1`. See [docs/benchmarking.md](docs/benchmarking.md).
+
+```sh
+taskrail bench examples/tasks.yaml --strategies 1,1b,2,3,4 --repeat 3
 ```
 
 | Command | Status |
 |---|---|
 | `init` | ✅ |
 | `doctor` | ✅ basic checks |
+| `plan "<task>"` | ✅ |
+| `run` | ✅ (takeover lands in M2; until then an escalation fails the unit) |
 | `report` | ✅ |
-| `plan "<task>"` | M1 |
-| `run` | M1 |
-| `bench <taskset>` | M1 (strategies 1, 1b, 2), M3 (all) |
+| `bench <taskset>` | ✅ all five strategies; strategy 4 without takeover until M2 |
 
 ## Security
 
@@ -68,6 +77,7 @@ Requires the .NET 10 SDK.
 ## Docs
 
 - [Configuration](docs/config.md)
+- [Benchmarking](docs/benchmarking.md)
 - [Threat model](docs/threat-model.md)
 - [Project brief](PROJECT_BRIEF.md)
 

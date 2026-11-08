@@ -6,9 +6,22 @@ public sealed class Policy
     public ModelsConfig Models { get; set; } = new();
     public ExecutorSelection Executors { get; set; } = new();
     public ProviderConfig Provider { get; set; } = new();
+    /// <summary>Commands run once per run before the baseline (dependency restore). Network is allowed.</summary>
+    public List<GateConfig> Prepare { get; set; } = [];
+
     public List<GateConfig> Gates { get; set; } = [];
     public EscalationConfig Escalation { get; set; } = new();
     public BudgetConfig Budget { get; set; } = new();
+    public IsolationConfig Isolation { get; set; } = new();
+}
+
+public sealed class IsolationConfig
+{
+    /// <summary>Extra environment variable names passed to workers on top of the built-in allowlist.</summary>
+    public List<string> WorkerEnvAllow { get; set; } = [];
+
+    /// <summary>Keep the run worktree on disk after the run (the run branch is always kept).</summary>
+    public bool KeepWorktree { get; set; }
 }
 
 public sealed class ModelsConfig

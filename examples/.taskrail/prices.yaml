@@ -1,0 +1,11 @@
+# Model prices in USD per million tokens, used to cost architect calls and metered worker calls.
+# Taskrail ships no built-in prices: they change often. Fill in the models you use from your
+# provider's pricing page. Calls to models missing here are recorded with cost "estimated".
+#
+# models:
+#   "provider/model-id":
+#     input: 0.00
+#     output: 0.00
+#     cached_input: 0.00
+
+models: {}

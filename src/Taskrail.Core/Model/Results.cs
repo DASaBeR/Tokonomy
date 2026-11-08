@@ -8,6 +8,9 @@ public sealed record Brief
 
     /// <summary>Full brief written to the executor's native instructions file.</summary>
     public required string Body { get; init; }
+
+    /// <summary>Identifies the attempt (e.g. <c>U1-a2</c>); used for log file names.</summary>
+    public string Label { get; init; } = "attempt";
 }
 
 public sealed record RunResult

@@ -1,0 +1,46 @@
+# Seed taskset for `taskrail bench`. Success is judged ONLY by the hidden acceptance tests in
+# acceptance/<task>/, which are copied over the result after the run; workers never see them.
+#
+#   taskrail bench examples/tasks.yaml --strategies 1,1b,2 --repeat 3 --dry-run
+#
+# Prompts state the public API precisely (as a real ticket would) so the hidden tests are fair.
+# Add tasks from your own repositories: point `repo` at a local clone or a git URL and `base` at a commit.
+
+config: .taskrail
+
+tasks:
+  - id: rate-limit-login
+    repo: login-demo
+    prompt: |
+      Add per-username rate limiting to login in app/auth.py.
+      Create app/ratelimit.py with class RateLimiter(max_attempts: int, window_seconds: float, clock=time.monotonic).
+      Change the signature to login(username, password, users, limiter=None). When a limiter is given:
+      if the username already has max_attempts failed logins within the last window_seconds (measured with
+      the injected clock), return "locked" without checking the password; otherwise check the password and
+      record a failure when it is wrong. Without a limiter, behavior is unchanged. No module-level mutable
+      state. Add unit tests.
+    acceptance:
+      files: acceptance/rate-limit-login
+      cmd: ["python", "-m", "unittest", "discover", "-s", "tests", "-t", "."]
+      timeout_seconds: 120
+
+  - id: password-policy
+    repo: login-demo
+    prompt: |
+      Add app/passwords.py with validate_password(password: str) -> list[str]. It returns error codes in
+      this order, including each one that applies: "too_short" (fewer than 12 characters), "no_digit",
+      "no_uppercase". A valid password returns []. Add unit tests.
+    acceptance:
+      files: acceptance/password-policy
+      cmd: ["python", "-m", "unittest", "discover", "-s", "tests", "-t", "."]
+      timeout_seconds: 120
+
+  - id: username-normalization
+    repo: login-demo
+    prompt: |
+      Make login in app/auth.py treat usernames case-insensitively and ignore surrounding whitespace
+      (stored usernames are lowercase). Passwords must not be normalized. Add unit tests.
+    acceptance:
+      files: acceptance/username-normalization
+      cmd: ["python", "-m", "unittest", "discover", "-s", "tests", "-t", "."]
+      timeout_seconds: 120

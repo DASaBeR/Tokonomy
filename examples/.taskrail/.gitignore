@@ -1,0 +1,5 @@
+# Taskrail local state. Commit policy.yaml, executors.yaml and prices.yaml; ignore the rest.
+runs/
+tmp/
+ledger.db
+ledger.db-*

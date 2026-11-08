@@ -58,6 +58,22 @@ public static class Scaffolder
         sb.AppendLine("executors:");
         sb.AppendLine("  default: opencode");
         sb.AppendLine();
+        sb.AppendLine("# Run once per run in the fresh worktree, before the baseline (network allowed).");
+        var prepare = stacks.SelectMany(s => s.Prepare).ToList();
+        if (prepare.Count == 0)
+        {
+            sb.AppendLine("prepare: []   # e.g. [{ name: deps, cmd: [\"pip\", \"install\", \"-e\", \".\"] }]");
+        }
+        else
+        {
+            sb.AppendLine("prepare:");
+            foreach (var step in prepare)
+            {
+                sb.AppendLine("  - " + InlineGate(step));
+            }
+        }
+
+        sb.AppendLine();
         sb.AppendLine("# Gates are argument arrays, never shell strings. They run on the base commit first;");
         sb.AppendLine("# only failures that are new relative to that baseline block a unit.");
         sb.AppendLine("gates:");
@@ -79,7 +95,7 @@ public static class Scaffolder
         sb.AppendLine("  - { type: locked_regions }");
         sb.AppendLine();
         sb.AppendLine("escalation:");
-        sb.AppendLine("  max_retries_per_unit: 2");
+        sb.AppendLine("  max_retries_per_unit: 2    # failed attempts on a unit before escalation");
         sb.AppendLine("  protected_paths: []        # e.g. [\"src/auth/**\", \"migrations/**\"]");
         sb.AppendLine("  max_diff_lines: 400        # larger diffs are rejected and the unit is split");
         sb.AppendLine("  review_on_new_dependency: true");
@@ -88,6 +104,10 @@ public static class Scaffolder
         sb.AppendLine("budget:");
         sb.AppendLine("  max_usd_per_task: 3.00     # hard abort");
         sb.AppendLine("  max_architect_token_share: 0.30");
+        sb.AppendLine();
+        sb.AppendLine("isolation:");
+        sb.AppendLine("  worker_env_allow: []       # extra env var names workers may see (keys are never passed)");
+        sb.AppendLine("  keep_worktree: false");
         return sb.ToString();
     }
 
@@ -116,18 +136,41 @@ public static class Scaffolder
         # Agent CLI flags change often. Each entry records the version it was tested against;
         # `taskrail doctor` compares it with what is installed.
         #
-        # Placeholders: {prompt} {model} {workdir}; env values may use {proxy_url} {proxy_token}.
+        # Placeholders in cmd/env/files: {prompt} {model} {workdir} {proxy_url} (ends in /v1) {proxy_root} {proxy_token}.
         # Workers get a scrubbed environment: no provider API keys, only the per-run proxy token.
+        # `files` are written into the worktree for one attempt and restored afterwards (never committed).
 
         executors:
           opencode:
-            # UNVERIFIED: confirm flags against current OpenCode docs before first use (M1).
+            # Per opencode.ai/docs (V2): prompt is positional; project config in opencode.json supports {env:VAR}.
+            # UNVERIFIED: `run` flags are not documented. Check `opencode run --help` for the model flag and
+            # confirm the provider/permissions shape below, then set tested_version.
             cmd: ["opencode", "run", "{prompt}"]
-            model_args: ["--model", "{model}"]
+            model_args: ["--model", "taskrail/{model}"]
             brief_file: AGENTS.md
             version_cmd: ["opencode", "--version"]
             tested_version: null
-            env: {}
+            env:
+              TASKRAIL_PROXY_TOKEN: "{proxy_token}"
+            files:
+              opencode.json: |
+                {
+                  "$schema": "https://opencode.ai/config.json",
+                  "providers": {
+                    "taskrail": {
+                      "name": "Taskrail metering proxy",
+                      "env": ["TASKRAIL_PROXY_TOKEN"],
+                      "package": "@opencode/ai/providers/openai-compatible",
+                      "settings": { "baseURL": "{proxy_url}", "apiKey": "{env:TASKRAIL_PROXY_TOKEN}" },
+                      "models": { "{model}": { "name": "{model}" } }
+                    }
+                  },
+                  "permissions": [
+                    { "action": "edit", "resource": "*", "effect": "allow" },
+                    { "action": "shell", "resource": "*", "effect": "allow" },
+                    { "action": "external_directory", "resource": "*", "effect": "deny" }
+                  ]
+                }
             capabilities:
               headless: true
               model_override: true
@@ -145,7 +188,7 @@ public static class Scaffolder
             version_cmd: ["claude", "--version"]
             tested_version: null
             env:
-              ANTHROPIC_BASE_URL: "{proxy_url}"
+              ANTHROPIC_BASE_URL: "{proxy_root}"
               ANTHROPIC_AUTH_TOKEN: "{proxy_token}"
             capabilities:
               headless: true

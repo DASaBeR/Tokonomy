@@ -24,8 +24,17 @@ public sealed class ExecutorDefinition
     /// <summary>Version this adapter was tested against.</summary>
     public string? TestedVersion { get; set; }
 
-    /// <summary>Environment variables passed to the worker. Values may use <c>{proxy_url}</c> and <c>{proxy_token}</c>.</summary>
+    /// <summary>
+    /// Environment variables passed to the worker. Values may use <c>{proxy_url}</c> (OpenAI-style base, ends in /v1),
+    /// <c>{proxy_root}</c> (bare origin), <c>{proxy_token}</c> and <c>{model}</c>.
+    /// </summary>
     public Dictionary<string, string> Env { get; set; } = [];
+
+    /// <summary>
+    /// Files written into the worktree for the duration of one attempt (e.g. an agent config that routes traffic
+    /// through the metering proxy). Same placeholders as <see cref="Env"/>. Existing files are restored afterwards.
+    /// </summary>
+    public Dictionary<string, string> Files { get; set; } = [];
 
     public ExecutorCapabilities Capabilities { get; set; } = new();
 }

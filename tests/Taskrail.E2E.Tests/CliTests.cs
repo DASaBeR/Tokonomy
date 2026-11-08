@@ -110,16 +110,34 @@ public sealed class CliTests : IDisposable
         Assert.Equal(1, exit);
     }
 
-    [Theory]
-    [InlineData("plan", "do something")]
-    [InlineData("run")]
-    [InlineData("bench", "tasks.yaml")]
-    public async Task Pending_commands_exit_with_not_implemented(params string[] args)
+    [Fact]
+    public async Task Run_without_a_plan_is_a_usage_error()
     {
-        var (exit, output) = await Run(args);
+        await Run("init", "--path", _repo);
 
-        Assert.Equal(64, exit);
-        Assert.Contains("not implemented yet", output, StringComparison.Ordinal);
+        var (exit, output) = await Run("run", "--config", ConfigDir);
+
+        Assert.Equal(2, exit);
+        Assert.Contains("taskrail plan", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Plan_requires_models()
+    {
+        await Run("init", "--path", _repo);
+
+        var (exit, output) = await Run("plan", "do something", "--config", ConfigDir);
+
+        Assert.Equal(3, exit);
+        Assert.Contains("models.architect", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Bench_with_missing_taskset_is_a_usage_error()
+    {
+        var (exit, _) = await Run("bench", Path.Combine(_repo, "nope.yaml"));
+
+        Assert.Equal(2, exit);
     }
 
     [Fact]

@@ -3,7 +3,11 @@ using Taskrail.Core.Config;
 
 namespace Taskrail.Runtime.Config;
 
-public sealed record StackInfo(string Name, string Marker, IReadOnlyList<GateConfig> Gates);
+public sealed record StackInfo(string Name, string Marker, IReadOnlyList<GateConfig> Gates)
+{
+    /// <summary>Dependency-restore commands run once per run before the baseline.</summary>
+    public IReadOnlyList<GateConfig> Prepare { get; init; } = [];
+}
 
 /// <summary>Detects the project stack from marker files at the repo root and proposes default gates.</summary>
 public static class StackDetector
@@ -22,7 +26,10 @@ public static class StackDetector
                 Gate("build", "dotnet", "build", "--nologo"),
                 GateWithReport("test", $"{TmpDir}/test-results.trx", "dotnet", "test", "--nologo", "--logger", "trx;LogFileName=test-results.trx", "--results-directory", TmpDir),
                 Gate("format", "dotnet", "format", "--verify-no-changes"),
-            ]));
+            ])
+            {
+                Prepare = [Gate("restore", "dotnet", "restore")],
+            });
         }
 
         if (File.Exists(Path.Combine(repoRoot, "package.json")))
@@ -44,7 +51,10 @@ public static class StackDetector
                 gates.Add(Gate("types", "npx", "--no-install", "tsc", "--noEmit"));
             }
 
-            stacks.Add(new("node", "package.json", gates));
+            var install = File.Exists(Path.Combine(repoRoot, "package-lock.json"))
+                ? Gate("install", "npm", "ci")
+                : Gate("install", "npm", "install");
+            stacks.Add(new("node", "package.json", gates) { Prepare = [install] });
         }
 
         if (File.Exists(Path.Combine(repoRoot, "pyproject.toml")))

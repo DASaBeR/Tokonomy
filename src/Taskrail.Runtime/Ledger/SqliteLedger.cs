@@ -7,8 +7,15 @@ namespace Taskrail.Runtime.Ledger;
 public interface ILedger
 {
     void StartRun(RunRecord run);
+    void SetRunStatus(string runId, RunStatus status);
     void FinishRun(string runId, RunStatus status, DateTimeOffset ended);
+    void MarkEstimated(string runId);
     void RecordLlmCall(LlmCallRecord call);
+    void UpsertUnit(string runId, string unitId, string name, string status, int attempts, int takeovers);
+    long RecordAttempt(AttemptRecord attempt);
+    void RecordGateResult(long attemptId, GateResult result, string? outputPath);
+    void RecordBenchResult(BenchResultRecord result);
+    IReadOnlyList<BenchResultRecord> ListBenchResults(string benchId);
     void RecordEvent(string runId, DateTimeOffset ts, string kind, string payloadJson);
     RunRecord? GetRun(string runId);
     IReadOnlyList<RunRecord> ListRuns(int limit);
@@ -90,6 +97,23 @@ public sealed class SqliteLedger : ILedger, IDisposable
         );
         CREATE INDEX ix_events_run ON events(run_id);
         """,
+        """
+        CREATE TABLE bench_results(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            bench_id TEXT NOT NULL,
+            task_id TEXT NOT NULL,
+            strategy TEXT NOT NULL,
+            repeat INTEGER NOT NULL,
+            run_id TEXT NOT NULL,
+            run_status TEXT NOT NULL,
+            accepted INTEGER NOT NULL,
+            usd_micros INTEGER NOT NULL,
+            cost_source TEXT NOT NULL,
+            duration_ms INTEGER NOT NULL,
+            note TEXT
+        );
+        CREATE INDEX ix_bench_results_bench ON bench_results(bench_id);
+        """,
     ];
 
     private readonly SqliteConnection _connection;
@@ -119,8 +143,91 @@ public sealed class SqliteLedger : ILedger, IDisposable
             ("$st", run.Status.ToString()), ("$start", Iso(run.Started)), ("$cs", run.CostSource.ToString()));
     }
 
+    public void SetRunStatus(string runId, RunStatus status) =>
+        Execute("UPDATE runs SET status = $st WHERE id = $id", ("$st", status.ToString()), ("$id", runId));
+
     public void FinishRun(string runId, RunStatus status, DateTimeOffset ended) =>
         Execute("UPDATE runs SET status = $st, ended = $e WHERE id = $id", ("$st", status.ToString()), ("$e", Iso(ended)), ("$id", runId));
+
+    public void MarkEstimated(string runId) =>
+        Execute("UPDATE runs SET cost_source = 'Estimated' WHERE id = $id", ("$id", runId));
+
+    public void UpsertUnit(string runId, string unitId, string name, string status, int attempts, int takeovers) =>
+        Execute(
+            """
+            INSERT INTO units(id, run_id, name, status, attempts, takeovers) VALUES($u, $r, $n, $s, $a, $t)
+            ON CONFLICT(run_id, id) DO UPDATE SET status = $s, attempts = $a, takeovers = $t
+            """,
+            ("$u", unitId), ("$r", runId), ("$n", name), ("$s", status), ("$a", attempts), ("$t", takeovers));
+
+    public long RecordAttempt(AttemptRecord attempt)
+    {
+        ArgumentNullException.ThrowIfNull(attempt);
+        using var cmd = Command(
+            """
+            INSERT INTO attempts(run_id, unit_id, n, executor, model, exit_code, duration_ms, diff_lines, decision, reason)
+            VALUES($r, $u, $n, $e, $m, $x, $d, $l, $dec, $why);
+            SELECT last_insert_rowid();
+            """,
+            ("$r", attempt.RunId), ("$u", attempt.UnitId), ("$n", attempt.Number), ("$e", attempt.Executor), ("$m", attempt.Model),
+            ("$x", attempt.ExitCode), ("$d", (long)attempt.Duration.TotalMilliseconds), ("$l", attempt.DiffLines),
+            ("$dec", attempt.Decision.ToString()), ("$why", attempt.Reason));
+        return Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture);
+    }
+
+    public void RecordGateResult(long attemptId, GateResult result, string? outputPath)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        Execute(
+            "INSERT INTO gate_results(attempt_id, gate, status, baseline_passed, new_failures_json, output_path) VALUES($a, $g, $s, $b, $f, $o)",
+            ("$a", attemptId), ("$g", result.Gate), ("$s", result.Status.ToString()),
+            ("$b", result.BaselinePassed is { } bp ? (bp ? 1 : 0) : null),
+            ("$f", System.Text.Json.JsonSerializer.Serialize(result.NewFailures)), ("$o", outputPath));
+    }
+
+    public void RecordBenchResult(BenchResultRecord result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        Execute(
+            """
+            INSERT INTO bench_results(bench_id, task_id, strategy, repeat, run_id, run_status, accepted, usd_micros, cost_source, duration_ms, note)
+            VALUES($b, $t, $s, $r, $run, $st, $acc, $usd, $cs, $d, $note)
+            """,
+            ("$b", result.BenchId), ("$t", result.TaskId), ("$s", result.Strategy), ("$r", result.Repeat), ("$run", result.RunId),
+            ("$st", result.RunStatus.ToString()), ("$acc", result.Accepted ? 1 : 0), ("$usd", ToMicros(result.Usd)),
+            ("$cs", result.CostSource.ToString()), ("$d", (long)result.Duration.TotalMilliseconds), ("$note", result.Note));
+    }
+
+    public IReadOnlyList<BenchResultRecord> ListBenchResults(string benchId)
+    {
+        using var cmd = Command(
+            """
+            SELECT bench_id, task_id, strategy, repeat, run_id, run_status, accepted, usd_micros, cost_source, duration_ms, note
+            FROM bench_results WHERE bench_id = $b ORDER BY id
+            """,
+            ("$b", benchId));
+        using var reader = cmd.ExecuteReader();
+        var list = new List<BenchResultRecord>();
+        while (reader.Read())
+        {
+            list.Add(new BenchResultRecord
+            {
+                BenchId = reader.GetString(0),
+                TaskId = reader.GetString(1),
+                Strategy = reader.GetString(2),
+                Repeat = reader.GetInt32(3),
+                RunId = reader.GetString(4),
+                RunStatus = Enum.Parse<RunStatus>(reader.GetString(5)),
+                Accepted = reader.GetInt64(6) == 1,
+                Usd = FromMicros(reader.GetInt64(7)),
+                CostSource = Enum.Parse<CostSource>(reader.GetString(8)),
+                Duration = TimeSpan.FromMilliseconds(reader.GetInt64(9)),
+                Note = reader.IsDBNull(10) ? null : reader.GetString(10),
+            });
+        }
+
+        return list;
+    }
 
     public void RecordLlmCall(LlmCallRecord call)
     {
