@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\Taskrail.Core\Taskrail.Core.csproj" />
+    <PackageReference Include="YamlDotNet" />
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <InternalsVisibleTo Include="Taskrail.Runtime.Tests" />
+  </ItemGroup>
+</Project>

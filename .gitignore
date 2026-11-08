@@ -1,0 +1,13 @@
+bin/
+obj/
+artifacts/
+publish/
+*.user
+.vs/
+.vscode/
+.idea/
+TestResults/
+*.db
+*.db-shm
+*.db-wal
+.taskrail/runs/

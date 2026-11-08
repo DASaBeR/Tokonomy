@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Taskrail.Bench/Taskrail.Bench.csproj" />
+    <Project Path="src/Taskrail.Cli/Taskrail.Cli.csproj" />
+    <Project Path="src/Taskrail.Core/Taskrail.Core.csproj" />
+    <Project Path="src/Taskrail.Llm/Taskrail.Llm.csproj" />
+    <Project Path="src/Taskrail.Runtime/Taskrail.Runtime.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Taskrail.Core.Tests/Taskrail.Core.Tests.csproj" />
+    <Project Path="tests/Taskrail.E2E.Tests/Taskrail.E2E.Tests.csproj" />
+    <Project Path="tests/Taskrail.Runtime.Tests/Taskrail.Runtime.Tests.csproj" />
+  </Folder>
+</Solution>

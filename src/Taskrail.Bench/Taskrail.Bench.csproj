@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\Taskrail.Runtime\Taskrail.Runtime.csproj" />
+    <ProjectReference Include="..\Taskrail.Llm\Taskrail.Llm.csproj" />
+  </ItemGroup>
+</Project>

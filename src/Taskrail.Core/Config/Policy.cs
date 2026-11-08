@@ -1,0 +1,72 @@
+namespace Taskrail.Core.Config;
+
+/// <summary>Contents of <c>.taskrail/policy.yaml</c>.</summary>
+public sealed class Policy
+{
+    public ModelsConfig Models { get; set; } = new();
+    public ExecutorSelection Executors { get; set; } = new();
+    public ProviderConfig Provider { get; set; } = new();
+    public List<GateConfig> Gates { get; set; } = [];
+    public EscalationConfig Escalation { get; set; } = new();
+    public BudgetConfig Budget { get; set; } = new();
+}
+
+public sealed class ModelsConfig
+{
+    public string Architect { get; set; } = "";
+    public string Worker { get; set; } = "";
+}
+
+public sealed class ExecutorSelection
+{
+    public string Default { get; set; } = "opencode";
+}
+
+public sealed class ProviderConfig
+{
+    /// <summary>OpenAI-compatible base URL. OpenRouter is the default universal route.</summary>
+    public string BaseUrl { get; set; } = "https://openrouter.ai/api/v1";
+
+    /// <summary>Name of the environment variable holding the API key. The key itself never lives in config.</summary>
+    public string ApiKeyEnv { get; set; } = "OPENROUTER_API_KEY";
+}
+
+public sealed class GateConfig
+{
+    public const string CommandType = "command";
+    public const string LockedRegionsType = "locked_regions";
+
+    /// <summary>Gate kind: <c>command</c> (default) or <c>locked_regions</c>.</summary>
+    public string Type { get; set; } = CommandType;
+
+    public string? Name { get; set; }
+
+    /// <summary>Argument array. Never a shell string.</summary>
+    public List<string> Cmd { get; set; } = [];
+
+    /// <summary>Optional test report path (TRX or JUnit XML) used for per-test baselining.</summary>
+    public string? Report { get; set; }
+
+    public int TimeoutSeconds { get; set; } = 900;
+
+    /// <summary>Declares that this gate needs network access.</summary>
+    public bool Network { get; set; }
+
+    public string DisplayName => Name ?? (Cmd.Count > 0 ? string.Join(' ', Cmd) : Type);
+}
+
+public sealed class EscalationConfig
+{
+    public int MaxRetriesPerUnit { get; set; } = 2;
+    public List<string> ProtectedPaths { get; set; } = [];
+    public int MaxDiffLines { get; set; } = 400;
+    public bool ReviewOnNewDependency { get; set; } = true;
+    public int WorkerTimeoutSeconds { get; set; } = 1200;
+}
+
+public sealed class BudgetConfig
+{
+    public decimal MaxUsdPerTask { get; set; } = 3.00m;
+    public decimal? MaxUsdPerRun { get; set; }
+    public double MaxArchitectTokenShare { get; set; } = 0.30;
+}

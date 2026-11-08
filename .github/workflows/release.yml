@@ -1,0 +1,100 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  build:
+    name: build (${{ matrix.rid }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Self-contained (non-AOT) builds cross-publish from Linux. macOS builds run on macOS
+          # because the apphost must be code-signed (ad-hoc) to start on Apple Silicon.
+          - { rid: linux-x64,        runner: ubuntu-latest, smoke: true }
+          - { rid: linux-arm64,      runner: ubuntu-latest }
+          - { rid: linux-musl-x64,   runner: ubuntu-latest }
+          - { rid: linux-musl-arm64, runner: ubuntu-latest }
+          - { rid: win-x64,          runner: ubuntu-latest }
+          - { rid: win-arm64,        runner: ubuntu-latest }
+          - { rid: osx-x64,          runner: macos-latest }
+          - { rid: osx-arm64,        runner: macos-latest, smoke: true }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Version from tag
+        id: v
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish
+        shell: bash
+        run: |
+          dotnet publish src/Taskrail.Cli -c Release -r ${{ matrix.rid }} --self-contained \
+            -p:Version=${{ steps.v.outputs.version }} -o out/${{ matrix.rid }}
+
+      - name: Smoke test
+        if: matrix.smoke
+        shell: bash
+        run: ./out/${{ matrix.rid }}/taskrail --help
+
+      - name: Archive
+        shell: bash
+        run: |
+          name="taskrail-${{ steps.v.outputs.version }}-${{ matrix.rid }}"
+          mkdir -p dist
+          cp LICENSE out/${{ matrix.rid }}/
+          cd out/${{ matrix.rid }}
+          rm -f *.pdb
+          if [[ "${{ matrix.rid }}" == win-* ]]; then
+            zip -q "../../dist/$name.zip" taskrail.exe LICENSE
+          else
+            chmod +x taskrail
+            tar -czf "../../dist/$name.tar.gz" taskrail LICENSE
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.rid }}
+          path: dist/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cp install/install.sh install/install.ps1 dist/
+          cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=""
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then flags="--prerelease"; fi
+          gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes $flags

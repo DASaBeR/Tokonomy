@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\Taskrail.Core\Taskrail.Core.csproj" />
+    <PackageReference Include="Microsoft.Extensions.AI" />
+    <PackageReference Include="Microsoft.Extensions.AI.OpenAI" />
+    <PackageReference Include="YamlDotNet" />
+    <InternalsVisibleTo Include="Taskrail.Runtime.Tests" />
+  </ItemGroup>
+</Project>
