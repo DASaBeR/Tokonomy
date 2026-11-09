@@ -3,11 +3,11 @@
 # Prompts state the public API precisely (as a real ticket would); the traps are in the edge cases.
 #
 #   python examples/verify_tasks.py                       # proves each task fails on the base and passes with the reference
-#   taskrail bench examples/tasks-hard.yaml --strategies 2 --repeat 1 --max-usd 0.60 --dry-run
+#   tokonomy bench examples/tasks-hard.yaml --strategies 2 --repeat 1 --max-usd 0.60 --dry-run
 #
 # Keep reference solutions (examples/reference/) out of the fixture: workers only ever see shop-demo.
 
-config: .taskrail
+config: .tokonomy
 
 tasks:
   - id: sale-rounding

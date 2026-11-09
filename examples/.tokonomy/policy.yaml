@@ -1,0 +1,40 @@
+# Tokonomy policy. Docs: docs/config.md
+# LLMs produce content; this file makes decisions.
+
+models:
+  architect: gpt-6.1-sol          # strong: plans (and, in strategies 1/1b, does the work)
+  worker: deepseek-v4.1-flash     # cheap: executes each unit via OpenCode
+
+# AvalAI (OpenAI-compatible). Entry-level rate limits are low: at tier 1 claude-sonnet-5-5 allows only 2 requests/min,
+# fine for planning but too slow as the *worker* (strategies 1 and 1b), so the strong model here is gpt-6.1-sol (50/min).
+provider:
+  base_url: https://api.avalai.ir/v1
+  api_key_env: AVALAI_API_KEY   # the variable NAME; the key never goes in this file
+
+executors:
+  default: opencode
+
+# Run once per run in the fresh worktree, before the baseline (network allowed).
+prepare: []   # e.g. [{ name: deps, cmd: ["pip", "install", "-e", "."] }]
+
+# Gates are argument arrays, never shell strings. They run on the base commit first;
+# only failures that are new relative to that baseline block a unit.
+gates:
+  # The visible test suite of login-demo (the hidden acceptance tests are separate; see tasks.yaml).
+  - { name: unittest, cmd: ["python", "-m", "unittest", "discover", "-s", "tests", "-t", "."], timeout_seconds: 120 }
+  - { type: locked_regions }
+
+escalation:
+  max_retries_per_unit: 2    # failed attempts on a unit before escalation
+  protected_paths: []        # e.g. ["src/auth/**", "migrations/**"]
+  max_diff_lines: 400        # larger diffs are rejected and the unit is split
+  review_on_new_dependency: true
+  worker_timeout_seconds: 1200
+
+budget:
+  max_usd_per_task: 0.50     # hard abort; these tasks are small
+  max_architect_token_share: 0.30
+
+isolation:
+  worker_env_allow: []       # extra env var names workers may see (keys are never passed)
+  keep_worktree: false

@@ -1,15 +1,15 @@
 #!/bin/sh
-# Taskrail installer for Linux and macOS.
-#   curl -fsSL https://github.com/taskrail/taskrail/releases/latest/download/install.sh | sh
+# Tokonomy installer for Linux and macOS.
+#   curl -fsSL https://github.com/tokonomy/tokonomy/releases/latest/download/install.sh | sh
 # Environment:
-#   TASKRAIL_VERSION      version to install (default: latest), e.g. 0.1.0
-#   TASKRAIL_INSTALL_DIR  target directory (default: $HOME/.local/bin)
+#   TOKONOMY_VERSION      version to install (default: latest), e.g. 0.1.0
+#   TOKONOMY_INSTALL_DIR  target directory (default: $HOME/.local/bin)
 set -eu
 
-REPO="${TASKRAIL_REPO:-taskrail/taskrail}"
-INSTALL_DIR="${TASKRAIL_INSTALL_DIR:-$HOME/.local/bin}"
+REPO="${TOKONOMY_REPO:-tokonomy/tokonomy}"
+INSTALL_DIR="${TOKONOMY_INSTALL_DIR:-$HOME/.local/bin}"
 
-err() { echo "taskrail-install: $*" >&2; exit 1; }
+err() { echo "tokonomy-install: $*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || err "required tool '$1' not found"; }
 
 need curl
@@ -36,20 +36,20 @@ case "$os" in
   *) err "unsupported OS: $os (use install.ps1 on Windows)" ;;
 esac
 
-if [ -z "${TASKRAIL_VERSION:-}" ]; then
+if [ -z "${TOKONOMY_VERSION:-}" ]; then
   # The /latest redirect target ends in /tag/vX.Y.Z.
   url="$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest")"
-  TASKRAIL_VERSION="${url##*/v}"
-  [ -n "$TASKRAIL_VERSION" ] && [ "$TASKRAIL_VERSION" != "$url" ] || err "could not determine latest version"
+  TOKONOMY_VERSION="${url##*/v}"
+  [ -n "$TOKONOMY_VERSION" ] && [ "$TOKONOMY_VERSION" != "$url" ] || err "could not determine latest version"
 fi
-version="${TASKRAIL_VERSION#v}"
+version="${TOKONOMY_VERSION#v}"
 
-archive="taskrail-$version-$rid.tar.gz"
+archive="tokonomy-$version-$rid.tar.gz"
 base="https://github.com/$REPO/releases/download/v$version"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
-echo "Downloading taskrail $version ($rid)..."
+echo "Downloading tokonomy $version ($rid)..."
 curl -fsSL "$base/$archive" -o "$tmp/$archive" || err "download failed: $base/$archive"
 curl -fsSL "$base/SHA256SUMS" -o "$tmp/SHA256SUMS" || err "checksum download failed"
 
@@ -66,10 +66,10 @@ fi
 
 tar -xzf "$tmp/$archive" -C "$tmp"
 mkdir -p "$INSTALL_DIR"
-mv "$tmp/taskrail" "$INSTALL_DIR/taskrail"
-chmod +x "$INSTALL_DIR/taskrail"
+mv "$tmp/tokonomy" "$INSTALL_DIR/tokonomy"
+chmod +x "$INSTALL_DIR/tokonomy"
 
-echo "Installed taskrail $version to $INSTALL_DIR/taskrail"
+echo "Installed tokonomy $version to $INSTALL_DIR/tokonomy"
 case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;
   *) echo "Note: $INSTALL_DIR is not on your PATH. Add it to your shell profile." ;;

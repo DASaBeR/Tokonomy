@@ -1,6 +1,6 @@
 # login-demo
 
-A tiny standard-library Python project used as a Taskrail benchmark fixture.
+A tiny standard-library Python project used as a Tokonomy benchmark fixture.
 
 Run the tests with:
 

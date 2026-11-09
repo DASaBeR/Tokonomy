@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>tokonomy</AssemblyName>
+    <RootNamespace>Tokonomy.Cli</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- single-file publish settings; RID is supplied by the release workflow -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Tokonomy.Runtime\Tokonomy.Runtime.csproj" />
+    <ProjectReference Include="..\Tokonomy.Llm\Tokonomy.Llm.csproj" />
+    <ProjectReference Include="..\Tokonomy.Bench\Tokonomy.Bench.csproj" />
+    <PackageReference Include="Spectre.Console.Cli" />
+    <InternalsVisibleTo Include="Tokonomy.E2E.Tests" />
+  </ItemGroup>
+</Project>

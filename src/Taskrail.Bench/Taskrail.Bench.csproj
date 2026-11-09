@@ -1,9 +1,0 @@
-<Project Sdk="Microsoft.NET.Sdk">
-  <ItemGroup>
-    <ProjectReference Include="..\Taskrail.Runtime\Taskrail.Runtime.csproj" />
-    <ProjectReference Include="..\Taskrail.Llm\Taskrail.Llm.csproj" />
-    <PackageReference Include="YamlDotNet" />
-    <InternalsVisibleTo Include="Taskrail.E2E.Tests" />
-    <InternalsVisibleTo Include="Taskrail.Runtime.Tests" />
-  </ItemGroup>
-</Project>

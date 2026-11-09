@@ -1,12 +1,12 @@
-# Seed taskset for `taskrail bench`. Success is judged ONLY by the hidden acceptance tests in
+# Seed taskset for `tokonomy bench`. Success is judged ONLY by the hidden acceptance tests in
 # acceptance/<task>/, which are copied over the result after the run; workers never see them.
 #
-#   taskrail bench examples/tasks.yaml --strategies 1,1b,2 --repeat 3 --dry-run
+#   tokonomy bench examples/tasks.yaml --strategies 1,1b,2 --repeat 3 --dry-run
 #
 # Prompts state the public API precisely (as a real ticket would) so the hidden tests are fair.
 # Add tasks from your own repositories: point `repo` at a local clone or a git URL and `base` at a commit.
 
-config: .taskrail
+config: .tokonomy
 
 tasks:
   - id: rate-limit-login

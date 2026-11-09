@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Tokonomy.Bench/Tokonomy.Bench.csproj" />
+    <Project Path="src/Tokonomy.Cli/Tokonomy.Cli.csproj" />
+    <Project Path="src/Tokonomy.Core/Tokonomy.Core.csproj" />
+    <Project Path="src/Tokonomy.Llm/Tokonomy.Llm.csproj" />
+    <Project Path="src/Tokonomy.Runtime/Tokonomy.Runtime.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Tokonomy.Core.Tests/Tokonomy.Core.Tests.csproj" />
+    <Project Path="tests/Tokonomy.E2E.Tests/Tokonomy.E2E.Tests.csproj" />
+    <Project Path="tests/Tokonomy.Runtime.Tests/Tokonomy.Runtime.Tests.csproj" />
+  </Folder>
+</Solution>

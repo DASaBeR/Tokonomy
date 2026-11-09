@@ -10,4 +10,4 @@ TestResults/
 *.db
 *.db-shm
 *.db-wal
-.taskrail/runs/
+.tokonomy/runs/

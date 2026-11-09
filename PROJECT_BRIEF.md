@@ -1,4 +1,4 @@
-# Taskrail — Project Brief v2
+# Tokonomy — Project Brief v2
 
 > **Make AI coding cheaper. Keep engineering quality high.**
 >
@@ -7,7 +7,7 @@
 **Status:** Draft v2 (design phase)
 **Language:** C# / .NET
 **License:** MIT or Apache-2.0
-**Name:** "Taskrail" is a working name. Before committing, check GitHub, NuGet, npm, domains, and trademarks. Do the same for any alternative name.
+**Name:** "Tokonomy" is a working name. Before committing, check GitHub, NuGet, npm, domains, and trademarks. Do the same for any alternative name.
 
 ### What changed from v1
 
@@ -263,12 +263,12 @@ Git worktrees isolate changes, not execution. Workers can run arbitrary commands
 ## 10. CLI surface (v1)
 
 ```
-taskrail init            # detect stack, scaffold policy.yaml and executors.yaml
-taskrail doctor          # check git, executors, capabilities, API keys, gate tools
-taskrail plan "<task>"   # architect produces contract + unit DAG
-taskrail run             # execute units under supervision
-taskrail report          # cost and quality ledger
-taskrail bench <taskset> # compare strategies (see section 11)
+tokonomy init            # detect stack, scaffold policy.yaml and executors.yaml
+tokonomy doctor          # check git, executors, capabilities, API keys, gate tools
+tokonomy plan "<task>"   # architect produces contract + unit DAG
+tokonomy run             # execute units under supervision
+tokonomy report          # cost and quality ledger
+tokonomy bench <taskset> # compare strategies (see section 11)
 ```
 
 `init` auto-detects the project stack and writes default gates:

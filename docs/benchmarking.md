@@ -1,6 +1,6 @@
 # Benchmarking
 
-Taskrail's premise is a hypothesis. `taskrail bench` exists to test it on your own tasks before anyone believes it.
+Tokonomy's premise is a hypothesis. `tokonomy bench` exists to test it on your own tasks before anyone believes it.
 
 ## Primary metric
 
@@ -23,7 +23,7 @@ The decision after M3 compares **4 vs 1b** (the architect/worker split's own val
 ## Writing a taskset
 
 ```yaml
-config: .taskrail            # policy, executors, prices and ledger used for every trial
+config: .tokonomy            # policy, executors, prices and ledger used for every trial
 
 tasks:
   - id: rate-limit-login
@@ -48,12 +48,12 @@ Rules that keep results honest:
 ## Running
 
 ```sh
-taskrail bench examples/tasks.yaml --strategies 1,1b,2,3,4 --repeat 3 --dry-run   # trial matrix + budget ceiling
-taskrail bench examples/tasks.yaml --strategies 1,1b,2 --repeat 3
+tokonomy bench examples/tasks.yaml --strategies 1,1b,2,3,4 --repeat 3 --dry-run   # trial matrix + budget ceiling
+tokonomy bench examples/tasks.yaml --strategies 1,1b,2 --repeat 3
 ```
 
 **Spending limit.** `--max-usd 3.00` caps the total across the whole run. Each trial may spend at most the smaller of `budget.max_usd_per_task` and what is left, and no new trial starts once less than $0.01 remains (the run reports how many trials were skipped). Use it whenever the budget is tight, and start with the cheapest strategy (`--strategies 2`) to find out which tasks the cheap model can already solve.
 
-Each trial runs in a fresh clone under the system temp directory. The report is printed and saved to `.taskrail/runs/bench-<id>.md`; every trial is a normal run in the ledger (`taskrail report <run-id>`).
+Each trial runs in a fresh clone under the system temp directory. The report is printed and saved to `.tokonomy/runs/bench-<id>.md`; every trial is a normal run in the ledger (`tokonomy report <run-id>`).
 
 Untrusted repositories execute code through their build and test commands. Run tasksets you did not write inside a VM or container.

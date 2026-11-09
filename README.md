@@ -1,4 +1,4 @@
-# Taskrail: Cut AI Coding Costs with Multi-Model Agent Orchestration
+# Tokonomy: Cut AI Coding Costs with Multi-Model Agent Orchestration
 
 > **Make AI coding cheaper. Keep engineering quality high.**
 
@@ -6,15 +6,15 @@
 ![.NET 10](https://img.shields.io/badge/.NET-10-512BD4)
 ![Status: pre-alpha](https://img.shields.io/badge/status-pre--alpha-orange)
 
-**Taskrail is an open-source CLI that reduces the cost of AI-assisted software development.** It sits on top of the coding agents you already use (OpenCode today, more planned). A strong LLM plans the work once. A cheap LLM does the editing. Deterministic quality gates (build, lint, tests) decide whether the result is accepted. Taskrail records what every successful task actually cost.
+**Tokonomy (token + economy) is an open-source CLI that reduces the cost of AI-assisted software development.** It sits on top of the coding agents you already use (OpenCode today, more planned). A strong LLM plans the work once. A cheap LLM does the editing. Deterministic quality gates (build, lint, tests) decide whether the result is accepted. Tokonomy records what every successful task actually cost.
 
-If you use Claude Code, Codex, Gemini CLI, OpenCode or Aider and your token bill keeps growing, Taskrail is an experiment in spending expensive-model tokens only where they matter.
+If you use Claude Code, Codex, Gemini CLI, OpenCode or Aider and your token bill keeps growing, Tokonomy is an experiment in spending expensive-model tokens only where they matter.
 
-> **Status: pre-alpha (M2).** Planning, supervised runs with gates and retries, architect takeover with handoff and locked regions, the metering proxy, the cost ledger and the benchmark harness work. The OpenCode adapter is verified against OpenCode 1.19.5 and a real OpenAI-compatible provider (AvalAI). Not yet available: a second executor adapter (M3) and splitting oversized units. Early benchmark numbers are in [docs/benchmarking.md](docs/benchmarking.md); they are small and **not conclusive**. "Taskrail" is a working name.
+> **Status: pre-alpha (M2).** Planning, supervised runs with gates and retries, architect takeover with handoff and locked regions, the metering proxy, the cost ledger and the benchmark harness work. The OpenCode adapter is verified against OpenCode 1.19.5 and a real OpenAI-compatible provider (AvalAI). Not yet available: a second executor adapter (M3) and splitting oversized units. Early benchmark numbers are in [docs/benchmarking.md](docs/benchmarking.md); they are small and **not conclusive**.
 
 ## Table of contents
 
-- [Why Taskrail](#why-taskrail)
+- [Why Tokonomy](#why-tokonomy)
 - [How it works](#how-it-works)
 - [Key features](#key-features)
 - [Install](#install)
@@ -27,7 +27,7 @@ If you use Claude Code, Codex, Gemini CLI, OpenCode or Aider and your token bill
 - [Contributing](#contributing)
 - [License](#license)
 
-## Why Taskrail
+## Why Tokonomy
 
 Developers routinely spend frontier-model tokens on routine edits. Cheap models handle much of that work well, but they fail on hard sections and drift from your architecture standards. A cheap run that fails is not a saving, so the right metric is **cost per successful task**, not cost per token.
 
@@ -37,13 +37,13 @@ No neutral, open tool currently combines these in one workflow:
 - deterministic quality gates that outrank model opinion,
 - an honest, per-task cost record.
 
-Taskrail is built to do that, and to test whether it really saves money.
+Tokonomy is built to do that, and to test whether it really saves money.
 
 ### The hypothesis
 
 A strong model used sparingly (planning, takeover, final review), plus a cheap model for execution, verified by deterministic gates, completes tasks at comparable quality for significantly lower cost per successful task than a strong model alone.
 
-This is a hypothesis, not a claim. The project's first job is to test it with a public benchmark. If it fails, Taskrail becomes a gates + cost ledger + multi-agent runner.
+This is a hypothesis, not a claim. The project's first job is to test it with a public benchmark. If it fails, Tokonomy becomes a gates + cost ledger + multi-agent runner.
 
 ## How it works
 
@@ -86,12 +86,12 @@ Design principles:
 
 ```sh
 # Linux / macOS
-curl -fsSL https://github.com/taskrail/taskrail/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/tokonomy/tokonomy/releases/latest/download/install.sh | sh
 ```
 
 ```powershell
 # Windows
-irm https://github.com/taskrail/taskrail/releases/latest/download/install.ps1 | iex
+irm https://github.com/tokonomy/tokonomy/releases/latest/download/install.ps1 | iex
 ```
 
 Both installers verify SHA-256 checksums. Single-file binaries are published for Linux (x64/arm64, glibc and musl), macOS (x64/arm64) and Windows (x64/arm64).
@@ -100,12 +100,12 @@ Both installers verify SHA-256 checksums. Single-file binaries are published for
 
 ```sh
 cd your-repo
-taskrail init                                 # detect stack, write .taskrail/ (set models and prices next)
-taskrail doctor                               # check git, executor, API key, gate tools, prices
-taskrail plan "Add rate limiting to /login"   # architect writes a contract (units, rules, don'ts)
-taskrail run                                  # cheap worker executes each unit; gates decide; one commit per unit
-git merge taskrail/<run-id>                   # the result lives on its own branch
-taskrail report <run-id>                      # cost per tier, tokens, architect share
+tokonomy init                                 # detect stack, write .tokonomy/ (set models and prices next)
+tokonomy doctor                               # check git, executor, API key, gate tools, prices
+tokonomy plan "Add rate limiting to /login"   # architect writes a contract (units, rules, don'ts)
+tokonomy run                                  # cheap worker executes each unit; gates decide; one commit per unit
+git merge tokonomy/<run-id>                   # the result lives on its own branch
+tokonomy report <run-id>                      # cost per tier, tokens, architect share
 ```
 
 `plan --strategy` picks how the task is done: `4` (default: architect + cheap worker + gates), `3`, `2`, `1b` or `1`. See [docs/benchmarking.md](docs/benchmarking.md).
@@ -122,21 +122,21 @@ taskrail report <run-id>                      # cost per tier, tokens, architect
 ## Benchmarking: cost per successful task
 
 ```sh
-taskrail bench examples/tasks.yaml --strategies 1,1b,2,3,4 --repeat 3
+tokonomy bench examples/tasks.yaml --strategies 1,1b,2,3,4 --repeat 3
 ```
 
 The harness runs the same tasks under each strategy, verifies results independently, and reports cost per *successful* task. Results so far are small and inconclusive; see [docs/benchmarking.md](docs/benchmarking.md) for the data and its limits. Contributions of tasksets and results are welcome.
 
 ## Security
 
-Git worktrees isolate changes, **not execution**. Workers run with your privileges. Read [docs/threat-model.md](docs/threat-model.md) before running Taskrail on code you do not trust.
+Git worktrees isolate changes, **not execution**. Workers run with your privileges. Read [docs/threat-model.md](docs/threat-model.md) before running Tokonomy on code you do not trust.
 
 ## FAQ
 
 **How do I reduce my AI coding agent costs?**
-Stop using a frontier model for every edit. Taskrail lets a strong model plan once and a cheap model execute, with tests and linters deciding what is accepted. Whether this saves money on your codebase is exactly what `taskrail bench` measures.
+Stop using a frontier model for every edit. Tokonomy lets a strong model plan once and a cheap model execute, with tests and linters deciding what is accepted. Whether this saves money on your codebase is exactly what `tokonomy bench` measures.
 
-**Is Taskrail a new coding agent or IDE?**
+**Is Tokonomy a new coding agent or IDE?**
 No. It orchestrates existing coding-agent CLIs and does not replace them.
 
 **Which agents and models are supported?**
@@ -153,7 +153,7 @@ No. It is pre-alpha and the core hypothesis is still being tested.
 ```sh
 dotnet build
 dotnet test
-dotnet run --project src/Taskrail.Cli -- --help
+dotnet run --project src/Tokonomy.Cli -- --help
 ```
 
 Requires the .NET 10 SDK.

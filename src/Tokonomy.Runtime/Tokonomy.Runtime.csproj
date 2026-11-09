@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\Tokonomy.Core\Tokonomy.Core.csproj" />
+    <ProjectReference Include="..\Tokonomy.Llm\Tokonomy.Llm.csproj" />
+    <PackageReference Include="YamlDotNet" />
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <InternalsVisibleTo Include="Tokonomy.Runtime.Tests" />
+  </ItemGroup>
+</Project>

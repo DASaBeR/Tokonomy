@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <InternalsVisibleTo Include="Tokonomy.Core.Tests" />
+  </ItemGroup>
+</Project>

@@ -44,27 +44,27 @@ jobs:
       - name: Publish
         shell: bash
         run: |
-          dotnet publish src/Taskrail.Cli -c Release -r ${{ matrix.rid }} --self-contained \
+          dotnet publish src/Tokonomy.Cli -c Release -r ${{ matrix.rid }} --self-contained \
             -p:Version=${{ steps.v.outputs.version }} -o out/${{ matrix.rid }}
 
       - name: Smoke test
         if: matrix.smoke
         shell: bash
-        run: ./out/${{ matrix.rid }}/taskrail --help
+        run: ./out/${{ matrix.rid }}/tokonomy --help
 
       - name: Archive
         shell: bash
         run: |
-          name="taskrail-${{ steps.v.outputs.version }}-${{ matrix.rid }}"
+          name="tokonomy-${{ steps.v.outputs.version }}-${{ matrix.rid }}"
           mkdir -p dist
           cp LICENSE out/${{ matrix.rid }}/
           cd out/${{ matrix.rid }}
           rm -f *.pdb
           if [[ "${{ matrix.rid }}" == win-* ]]; then
-            zip -q "../../dist/$name.zip" taskrail.exe LICENSE
+            zip -q "../../dist/$name.zip" tokonomy.exe LICENSE
           else
-            chmod +x taskrail
-            tar -czf "../../dist/$name.tar.gz" taskrail LICENSE
+            chmod +x tokonomy
+            tar -czf "../../dist/$name.tar.gz" tokonomy LICENSE
           fi
 
       - uses: actions/upload-artifact@v4

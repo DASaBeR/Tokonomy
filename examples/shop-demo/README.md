@@ -1,6 +1,6 @@
 # shop-demo
 
-A small standard-library Python project used as a Taskrail benchmark fixture.
+A small standard-library Python project used as a Tokonomy benchmark fixture.
 
 ```sh
 python -m unittest discover -s tests -t .

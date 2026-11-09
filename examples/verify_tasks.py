@@ -62,7 +62,7 @@ def main(argv: list[str]) -> int:
     for task in sorted(declared - set(tasks) if not argv else []):
         failures.append(f"{task}: declared in tasks-hard.yaml but has no reference solution")
 
-    with tempfile.TemporaryDirectory(prefix="taskrail-verify-") as tmp_name:
+    with tempfile.TemporaryDirectory(prefix="tokonomy-verify-") as tmp_name:
         tmp = Path(tmp_name)
         ok, last = run_tests(fresh_copy(tmp, "base"))
         print(f"{'ok  ' if ok else 'FAIL'} fixture visible tests pass on the untouched fixture ({last})")

@@ -1,4 +1,4 @@
-"""A deliberately small login module used as a Taskrail benchmark fixture."""
+"""A deliberately small login module used as a Tokonomy benchmark fixture."""
 
 import hashlib
 

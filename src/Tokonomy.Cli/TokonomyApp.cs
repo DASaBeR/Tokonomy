@@ -1,0 +1,65 @@
+using Spectre.Console;
+using Spectre.Console.Cli;
+using Tokonomy.Cli.Commands;
+using Tokonomy.Cli.Infrastructure;
+using Tokonomy.Runtime.Process;
+
+namespace Tokonomy.Cli;
+
+public static class TokonomyApp
+{
+    public static async Task<int> RunAsync(string[] args, IAnsiConsole console, IProcessRunner? runner = null, Services? services = null)
+    {
+        var registrar = new TypeRegistrar();
+        registrar.RegisterInstance(typeof(IAnsiConsole), console);
+        registrar.RegisterInstance(typeof(IProcessRunner), runner ?? new ProcessRunner());
+        registrar.RegisterInstance(typeof(Services), services ?? new Services());
+
+        var app = new CommandApp(registrar);
+        app.Configure(config =>
+        {
+            config.SetApplicationName("tokonomy");
+            config.ConfigureConsole(console);
+            config.SetExceptionHandler((ex, _) =>
+            {
+                if (ex is OperationCanceledException)
+                {
+                    Output.Warn(console, "Cancelled.");
+                    return 130;
+                }
+
+                Output.Error(console, ex.Message);
+                return ex is CommandParseException or CommandRuntimeException ? ExitCodes.Usage : ExitCodes.Failed;
+            });
+
+            config.AddCommand<InitCommand>("init").WithDescription("Detect the stack and scaffold .tokonomy/ config.");
+            config.AddCommand<DoctorCommand>("doctor").WithDescription("Check git, executors, capabilities, API keys and gate tools.");
+            config.AddCommand<PlanCommand>("plan").WithDescription("Architect produces a contract and unit DAG.")
+                .WithExample("plan", "\"Add rate limiting to /login\"");
+            config.AddCommand<RunCommand>("run").WithDescription("Execute the latest plan under supervision.");
+            config.AddCommand<ReportCommand>("report").WithDescription("Show the cost and quality ledger.");
+            config.AddCommand<BenchCommand>("bench").WithDescription("Compare strategies on a taskset.")
+                .WithExample("bench", "tasks.yaml", "--strategies", "1,1b,2", "--repeat", "3");
+        });
+
+        using var cts = new CancellationTokenSource();
+        ConsoleCancelEventHandler onCancel = (_, e) =>
+        {
+            // First Ctrl+C cancels gracefully (kills worker process trees, records the run); a second one exits.
+            if (!cts.IsCancellationRequested)
+            {
+                e.Cancel = true;
+                cts.Cancel();
+            }
+        };
+        Console.CancelKeyPress += onCancel;
+        try
+        {
+            return await app.RunAsync(args, cts.Token);
+        }
+        finally
+        {
+            Console.CancelKeyPress -= onCancel;
+        }
+    }
+}
