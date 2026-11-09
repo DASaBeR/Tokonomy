@@ -57,3 +57,26 @@ tokonomy bench examples/tasks.yaml --strategies 1,1b,2 --repeat 3
 Each trial runs in a fresh clone under the system temp directory. The report is printed and saved to `.tokonomy/runs/bench-<id>.md`; every trial is a normal run in the ledger (`tokonomy report <run-id>`).
 
 Untrusted repositories execute code through their build and test commands. Run tasksets you did not write inside a VM or container.
+
+## Results so far
+
+> **Small and not conclusive.** One taskset, one repository fixture, one executor, one run. Do not generalise from it.
+
+**Setup.** 8 tasks in `examples/tasks-hard.yaml` (the `shop-demo` fixture), success judged only by hidden acceptance tests. Provider: AvalAI. Strong model / architect: `claude-sonnet-5-5` ($2 in / $10 out per million tokens). Cheap worker: `deepseek-v4.1-flash` via OpenCode 1.19.5. Run on 2026-11-09 with `--repeat 3 --max-usd 4.50`; the cap stopped the run, so 4 of 48 trials did not run.
+
+| Strategy | Trials | Passed | Total cost | Cost per success | Cost per trial (min–max) |
+|---|---:|---:|---:|---:|---:|
+| 1b: strong model + gates + retry | 23 | 23 (100%) | $3.51 | **$0.153** | $0.127–$0.192 |
+| 4: architect plan + cheap worker + gates + supervision | 21 | 21 (100%) | $0.99 | **$0.047** | $0.024–$0.077 |
+
+Both strategies passed every trial on 7 of the 8 tasks (3/3 each). `ttl-cache` is incomplete: 1b ran 2 of 3 trials (both passed) and strategy 4 ran none.
+
+**What this does and does not show**
+
+- On these tasks, strategy 4 cost about 3.3× less per successful task than the strong model alone, at the same pass rate.
+- The cheap worker never failed, so no takeover was triggered. These tasks do not test where supervision earns its cost.
+- With 100% pass rates on both sides, the pass-rate comparison is uninformative. Only the cost difference is measured.
+- Sonnet 5.5 used about twice the tokens per task of `gpt-6.1-sol` in an earlier run ($0.153 vs $0.078 per success for 1b), so the strong baseline here is expensive; a cheaper strong model would shrink the gap.
+- Not measured: strategies 1, 2 and 3 in this run, other repositories, other languages, other executors, larger tasks.
+
+Needed before any public claim: harder tasks where the cheap worker fails, more than one repository, a second executor, and more repeats.

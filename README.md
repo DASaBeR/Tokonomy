@@ -125,7 +125,7 @@ tokonomy report <run-id>                      # cost per tier, tokens, architect
 tokonomy bench examples/tasks.yaml --strategies 1,1b,2,3,4 --repeat 3
 ```
 
-The harness runs the same tasks under each strategy, verifies results independently, and reports cost per *successful* task. Results so far are small and inconclusive; see [docs/benchmarking.md](docs/benchmarking.md) for the data and its limits. Contributions of tasksets and results are welcome.
+The harness runs the same tasks under each strategy, verifies results independently, and reports cost per *successful* task. Results so far are small and **not conclusive**. In one early run on 8 tasks (Claude Sonnet 5.5 as the strong model, DeepSeek V4.1 Flash as the worker), architect + cheap worker + gates passed 21/21 trials at about **$0.047 per successful task**, against 23/23 at **$0.153** for the strong model alone with gates, roughly 3× cheaper at the same pass rate. That is one small taskset, one repository and one executor, and the cheap worker never failed, so it shows the direction, not proof. See [docs/benchmarking.md](docs/benchmarking.md) for the data and its limits. Contributions of tasksets and results are welcome.
 
 ## Security
 
