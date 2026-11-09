@@ -1,0 +1,18 @@
+Add a new module shop/strictjson.py: a hand-written strict JSON parser. Public API: loads(text: str) and class StrictJSONError(ValueError) with attributes .line (1-based), .column (1-based, counted in characters) and .code (a string). The json module must not be used (no "import json" / "from json" anywhere in the module). loads raises TypeError for non-str input.
+
+Grammar is RFC 8259 and the top-level value may be any value. Results: object -> dict, array -> list, string -> str, true/false/null -> True/False/None, integer (no fraction/exponent) -> int of any size, number with fraction or exponent -> float. "-0" gives int 0, "-0.0" gives float -0.0. Whitespace is only space, \t, \n, \r. No trailing commas, comments, single quotes, "+1", ".5", "1.", NaN/Infinity. Numbers are tokenised by the grammar: "0" followed by a digit simply ends the number, so "01" is the number 0 followed by a stray "1". Literals true/false/null must match exactly.
+
+Strings: raw characters below U+0020 are invalid. Valid escapes are \" \\ \/ \b \f \n \r \t and \uXXXX (hex case-insensitive); anything else after a backslash is invalid. A \uD800-\uDBFF escape must be immediately followed by a \uDC00-\uDFFF escape and the pair becomes one character. A lone low surrogate, or a high surrogate not followed by a low one, is invalid. Object keys must be strings and must be unique after escape decoding (per object; the same key in different objects is fine). Nesting depth is at most 64; the outermost array/object has depth 1.
+
+Errors: scanning is strictly left to right and the first problem is reported at once. Positions: lines advance only on \n and the column resets to 1 after it (\r is an ordinary one-column character). "End position" means the position just after the last character. Codes:
+- bom: text starts with U+FEFF; 1:1 (checked first; a U+FEFF anywhere else is just an unexpected character, or fine inside a string).
+- empty: nothing but whitespace; end position.
+- unexpected_end: the text ends while a value, string, escape, literal or number is incomplete or a "," ":" "]" "}" is still needed; end position.
+- unexpected_char: a character that the grammar does not allow there, at that character. This includes a bad character after a backslash or inside the 4 hex digits of \u (at the character itself), and a bad character after "-", ".", "e/E" or an exponent sign.
+- control_char: raw character below U+0020 inside a string, at that character.
+- bad_surrogate: at the column of the backslash of the high escape (or of the lone low escape). It is decided as soon as the next two characters are known not to be "\u", or after the following \uXXXX has been read (malformed hex there is reported as usual).
+- duplicate_key: at the opening quote of the second occurrence, raised as soon as that key string is complete.
+- too_deep: at the bracket that would make depth 65, raised on seeing it.
+- trailing_data: first non-whitespace character after the complete top-level value.
+
+Add unit tests.

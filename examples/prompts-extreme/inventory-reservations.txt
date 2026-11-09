@@ -1,0 +1,41 @@
+Add a new module shop/inventory.py with a stock ledger with time-limited reservations. Public API:
+
+  class ReservationResult: attributes ok (bool), code (str or None), shortfalls (dict sku -> int, empty unless
+      code == "insufficient"); two results compare equal (==) when all three fields are equal.
+  class Inventory(clock): clock is a zero-argument callable returning the current time as a float (seconds).
+      receive(sku, qty) -> None             adds qty to on_hand(sku)
+      reserve(order_id, lines, ttl, key=None) -> ReservationResult
+      confirm(order_id) -> ReservationResult
+      cancel(order_id) -> ReservationResult
+      available(sku) -> int, on_hand(sku) -> int, reserved(sku) -> int      (unknown sku: 0)
+
+Rules:
+1. Every qty (in receive and in lines) must be an int >= 1; bool is not accepted. Otherwise ValueError. lines is a
+   non-empty list of (sku, qty) pairs; an empty list raises ValueError. ttl must be an int or float (not bool) > 0,
+   else ValueError. In reserve these checks come first and change no state.
+2. Duplicate skus in lines are merged by summing their qty.
+3. A reservation is "held" from the moment reserve succeeds. It expires when clock() >= created + ttl (exactly at
+   the boundary it is already expired), where created is clock() at the reserve call. Expiry is lazy: every public
+   method first sweeps, using one clock() reading, and every held reservation that has expired stops holding stock
+   (its order becomes "expired").
+4. reserved(sku) is the total qty of held reservations; available(sku) = on_hand(sku) - reserved(sku).
+5. reserve is all-or-nothing. After the sweep, if any merged sku has qty > available(sku), nothing is reserved and
+   the result is ok=False, code "insufficient", shortfalls = {sku: qty - available(sku)} for every short sku (and
+   only those). Stock released by the sweep counts as available for that same call. Business failures are returned,
+   never raised. Success is ok=True, code None, shortfalls {}. receive never fulfils earlier failed reservations.
+6. Order of checks in reserve after validation and the sweep: (a) idempotency key, (b) duplicate order, (c) stock.
+7. Idempotency: if key is not None and was used before, compare the payload (order_id plus merged lines; order of
+   lines and ttl are irrelevant). Same payload: return a result equal to the original one, change nothing, even if
+   that reservation was since cancelled, expired or confirmed. Different payload: ok=False, code "key_conflict".
+   A key is remembered only for calls that ended ok or "insufficient" (not for "duplicate_order"/"key_conflict").
+8. If order_id is currently held or confirmed (and rule 7 did not return), return ok=False, code
+   "duplicate_order". An order that is expired or cancelled may be reserved again with a fresh reservation.
+9. confirm: unknown order_id (never successfully reserved) -> "unknown_order"; cancelled -> "cancelled"; expired
+   (including expiring at this very call) -> "expired", every time it is called; held -> permanently subtracts its
+   quantities from on_hand and stops holding them (the order becomes "confirmed"), ok. Confirming a confirmed order
+   is ok and changes nothing, even after the original ttl has passed.
+10. cancel: unknown -> "unknown_order"; confirmed -> "already_confirmed"; held -> released and the order becomes
+   "cancelled", ok; already cancelled -> ok, nothing changes; expired -> ok, nothing changes (it stays "expired").
+11. Failed results from confirm/cancel have shortfalls {} and never change state.
+
+Add unit tests.

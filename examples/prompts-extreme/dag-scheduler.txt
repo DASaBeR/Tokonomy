@@ -1,0 +1,13 @@
+Add shop/scheduler.py with schedule(tasks, workers) -> Schedule and class CycleError(ValueError) that carries a .cycle attribute (list of task names). tasks is a dict name -> (duration, deps): duration is an int >= 1 and deps is a list of names of tasks that must be completed first. Schedule has .makespan (int) and .assignments, a list of (task, worker_index, start, end) tuples sorted by (start, worker_index); worker indexes are 0..workers-1 and end = start + duration. Schedule must compare equal to another Schedule with the same contents (a dataclass is fine).
+
+Algorithm (fully deterministic list scheduling, integer time). Decision times are 0 and then every task completion time, in increasing order. At decision time t the READY set is every not-yet-started task whose dependencies have all ended at or before t. A worker whose task ends at t is idle at t and can start new work at t. Idle workers, lowest index first, take ready tasks in priority order, one task per worker, so the best ready task goes to the lowest idle worker; a worker is never left idle while a ready task exists. Priority: larger critical path length first, then larger duration, then name ascending (plain string comparison). The critical path length of a task is its duration plus the maximum critical path length among the tasks that depend on it (just its duration if nothing depends on it). Priorities are static, computed once from the whole graph. makespan is the maximum end time, or 0 for no tasks (then assignments is empty).
+
+Validation, checked in exactly this order:
+1. workers must be an int >= 1 (bool is not accepted), else ValueError.
+2. Every duration must be an int >= 1 (bool is not accepted), else ValueError; check task names in sorted order.
+3. A dependency that is not a key of tasks raises KeyError(name); check tasks in sorted name order and each task's deps in the given order, and raise for the first one found.
+4. Any cycle, including a task depending on itself, raises CycleError. The reported .cycle is canonical: take the smallest name n among all tasks that lie on some cycle; start the list with n; repeatedly move from the current task to one of its dependencies that has the fewest dependency steps remaining to get back to n (n itself counts as 0 steps), breaking ties by smaller name; stop when the next step would be n. n is not repeated at the end. Example: a depends on b, b depends on a gives ["a", "b"]; a self-dependent task x gives ["x"]. Tasks that merely depend on a cycle, or are depended on by it, are not part of it.
+
+Duplicate names inside one deps list are allowed and ignored. Do not mutate the input. Tasks and deps may be tuples or lists.
+
+Add unit tests.

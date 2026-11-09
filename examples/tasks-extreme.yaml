@@ -1,0 +1,153 @@
+# Extreme taskset: 6 self-contained algorithmic tasks on the shop-demo fixture, written so that a cheap model
+# plausibly fails some of them when working alone. Every rule a hidden test checks is stated in the prompt.
+# Success is judged ONLY by the hidden tests in acceptance/<task>/, copied over the result after the run.
+#
+#   python examples/verify_tasks.py                  # proves each task fails on the base and passes with the reference
+#   tokonomy bench examples/tasks-extreme.yaml --strategies 2 --repeat 1 --max-usd 1.00 --dry-run
+#
+# Difficulty has NOT been calibrated against any model yet. Keep reference solutions (examples/reference/) out of
+# the fixture: workers only ever see shop-demo.
+
+config: .tokonomy
+
+tasks:
+  - id: cron-next
+    repo: shop-demo
+    prompt: |
+      Add shop/cron.py with next_run(expr: str, after: datetime.datetime) -> datetime.datetime for a 5-field cron expression: minute 0-59, hour 0-23, day-of-month 1-31, month 1-12, day-of-week 0-7, separated by runs of whitespace (leading/trailing whitespace ignored). A field is a comma list of terms: N, A-B or *, where A-B and * may carry a /S step (S >= 1) and a bare A may too. Numbers are ASCII digits only (leading zeros fine, no sign). "*" is the full range (day-of-week 0-6); "A/S" means A through the field maximum (7 for day-of-week), so "5/15" in minutes is 5,20,35,50; "A-B/S" steps from A to B. A > B is invalid. Month accepts jan..dec and day-of-week sun..sat (sun=0, sat=6), case-insensitive, wherever a number is allowed in that field and nowhere else; day-of-week 7 is also Sunday. Naive datetimes are UTC. Seconds and microseconds of `after` are ignored; return the earliest matching minute strictly later than after's minute, naive, with second=0. A day matches if its month matches and: when both day-of-month and day-of-week are restricted, either one matching is enough; when only one is restricted, only it is checked; when neither is, every day matches. A field is unrestricted only if its text is exactly "*", so "*/2" and "*/1" are restricted. Only years up to after.year + 8 are searched; if nothing matches (e.g. "0 0 30 2 *") raise ValueError. ValueError is also raised for any malformed expression (field count, out-of-range value, step 0, empty list item or step, unknown name, name in the wrong field) and for a timezone-aware `after`. Add unit tests.
+    acceptance:
+      files: acceptance/cron-next
+      cmd: ["python", "-m", "unittest", "discover", "-s", "tests", "-t", "."]
+      timeout_seconds: 300
+
+  - id: unified-diff
+    repo: shop-demo
+    prompt: |
+      Add shop/difftool.py (pure Python standard library, no difflib) with three functions that work on lists of lines; a line is a str without a trailing newline.
+
+      edit_script(a, b) -> list[tuple[str, str]] returns a minimal edit script turning a into b: a list of ('=', line), ('-', line) and ('+', line) tuples. Minimal means the fewest '-' plus '+' entries (so the '=' lines form a longest common subsequence). Several minimal scripts can exist, so the result must be exactly this one. Let L[i][j] be the length of the longest common subsequence of a[i:] and b[j:]. Start at i=0, j=0 and repeat until both lists are consumed: if both lines remain and a[i] == b[j], emit ('=', a[i]) and advance both; otherwise, if a has lines left and either b is exhausted or L[i+1][j] >= L[i][j+1], emit ('-', a[i]) and advance i; otherwise emit ('+', b[j]) and advance j. A consequence is that inside a changed block all '-' entries come before all '+' entries, and that for a=['x','x'], b=['x'] the first x is kept: [('=','x'), ('-','x')]. Two inputs of 1500 lines with about 10% differences must be handled in under 5 seconds, so avoid naive recursion.
+
+      apply_script(a, script) -> list[str] replays a script on a and returns the resulting lines ('=' and '+' lines, in order). It must validate: every '=' and '-' entry must equal the next unconsumed line of a, the script must consume all of a, and an unknown operation is invalid. Any violation raises ValueError.
+
+      unified(a, b, context=3, name_a='a', name_b='b') -> str renders edit_script(a, b) as a unified diff. If a == b return ''. Otherwise the first two lines are '--- {name_a}' and '+++ {name_b}' (no timestamps). Each hunk starts with '@@ -S,C +S,C @@' (single spaces), then its lines: ' ' + line for '=', '-' + line, '+' + line. A hunk covers a block of changes plus up to `context` unchanged lines before the first and after the last change (fewer at the start or end of the file). Two consecutive changed blocks go into the same hunk when the number of unchanged lines between them is at most 2*context; otherwise they start separate hunks (so the lines between them are not printed twice, and context=0 gives one hunk per changed block). The first S/C pair describes a, the second b: C is the number of hunk lines that exist on that side ('=' and '-' lines for a, '=' and '+' lines for b), S is the 1-based number of the first such line. If C is 0 the side is empty in this hunk and S is instead the number of the line before the hunk's position (0 at the start of the file), for example '-0,0' when inserting into the top of a file and '+3,0' when everything after line 3 of b is deleted. When C is 1 the ',C' part is omitted, for example '@@ -3 +3,2 @@'. Every output line, including the last, ends with '\n'. There are no 'No newline' markers. context=0 is allowed.
+
+      Add unit tests.
+    acceptance:
+      files: acceptance/unified-diff
+      cmd: ["python", "-m", "unittest", "discover", "-s", "tests", "-t", "."]
+      timeout_seconds: 300
+
+  - id: dag-scheduler
+    repo: shop-demo
+    prompt: |
+      Add shop/scheduler.py with schedule(tasks, workers) -> Schedule and class CycleError(ValueError) that carries a .cycle attribute (list of task names). tasks is a dict name -> (duration, deps): duration is an int >= 1 and deps is a list of names of tasks that must be completed first. Schedule has .makespan (int) and .assignments, a list of (task, worker_index, start, end) tuples sorted by (start, worker_index); worker indexes are 0..workers-1 and end = start + duration. Schedule must compare equal to another Schedule with the same contents (a dataclass is fine).
+
+      Algorithm (fully deterministic list scheduling, integer time). Decision times are 0 and then every task completion time, in increasing order. At decision time t the READY set is every not-yet-started task whose dependencies have all ended at or before t. A worker whose task ends at t is idle at t and can start new work at t. Idle workers, lowest index first, take ready tasks in priority order, one task per worker, so the best ready task goes to the lowest idle worker; a worker is never left idle while a ready task exists. Priority: larger critical path length first, then larger duration, then name ascending (plain string comparison). The critical path length of a task is its duration plus the maximum critical path length among the tasks that depend on it (just its duration if nothing depends on it). Priorities are static, computed once from the whole graph. makespan is the maximum end time, or 0 for no tasks (then assignments is empty).
+
+      Validation, checked in exactly this order:
+      1. workers must be an int >= 1 (bool is not accepted), else ValueError.
+      2. Every duration must be an int >= 1 (bool is not accepted), else ValueError; check task names in sorted order.
+      3. A dependency that is not a key of tasks raises KeyError(name); check tasks in sorted name order and each task's deps in the given order, and raise for the first one found.
+      4. Any cycle, including a task depending on itself, raises CycleError. The reported .cycle is canonical: take the smallest name n among all tasks that lie on some cycle; start the list with n; repeatedly move from the current task to one of its dependencies that has the fewest dependency steps remaining to get back to n (n itself counts as 0 steps), breaking ties by smaller name; stop when the next step would be n. n is not repeated at the end. Example: a depends on b, b depends on a gives ["a", "b"]; a self-dependent task x gives ["x"]. Tasks that merely depend on a cycle, or are depended on by it, are not part of it.
+
+      Duplicate names inside one deps list are allowed and ignored. Do not mutate the input. Tasks and deps may be tuples or lists.
+
+      Add unit tests.
+    acceptance:
+      files: acceptance/dag-scheduler
+      cmd: ["python", "-m", "unittest", "discover", "-s", "tests", "-t", "."]
+      timeout_seconds: 300
+
+  - id: inventory-reservations
+    repo: shop-demo
+    prompt: |
+      Add a new module shop/inventory.py with a stock ledger with time-limited reservations. Public API:
+
+        class ReservationResult: attributes ok (bool), code (str or None), shortfalls (dict sku -> int, empty unless
+            code == "insufficient"); two results compare equal (==) when all three fields are equal.
+        class Inventory(clock): clock is a zero-argument callable returning the current time as a float (seconds).
+            receive(sku, qty) -> None             adds qty to on_hand(sku)
+            reserve(order_id, lines, ttl, key=None) -> ReservationResult
+            confirm(order_id) -> ReservationResult
+            cancel(order_id) -> ReservationResult
+            available(sku) -> int, on_hand(sku) -> int, reserved(sku) -> int      (unknown sku: 0)
+
+      Rules:
+      1. Every qty (in receive and in lines) must be an int >= 1; bool is not accepted. Otherwise ValueError. lines is a
+         non-empty list of (sku, qty) pairs; an empty list raises ValueError. ttl must be an int or float (not bool) > 0,
+         else ValueError. In reserve these checks come first and change no state.
+      2. Duplicate skus in lines are merged by summing their qty.
+      3. A reservation is "held" from the moment reserve succeeds. It expires when clock() >= created + ttl (exactly at
+         the boundary it is already expired), where created is clock() at the reserve call. Expiry is lazy: every public
+         method first sweeps, using one clock() reading, and every held reservation that has expired stops holding stock
+         (its order becomes "expired").
+      4. reserved(sku) is the total qty of held reservations; available(sku) = on_hand(sku) - reserved(sku).
+      5. reserve is all-or-nothing. After the sweep, if any merged sku has qty > available(sku), nothing is reserved and
+         the result is ok=False, code "insufficient", shortfalls = {sku: qty - available(sku)} for every short sku (and
+         only those). Stock released by the sweep counts as available for that same call. Business failures are returned,
+         never raised. Success is ok=True, code None, shortfalls {}. receive never fulfils earlier failed reservations.
+      6. Order of checks in reserve after validation and the sweep: (a) idempotency key, (b) duplicate order, (c) stock.
+      7. Idempotency: if key is not None and was used before, compare the payload (order_id plus merged lines; order of
+         lines and ttl are irrelevant). Same payload: return a result equal to the original one, change nothing, even if
+         that reservation was since cancelled, expired or confirmed. Different payload: ok=False, code "key_conflict".
+         A key is remembered only for calls that ended ok or "insufficient" (not for "duplicate_order"/"key_conflict").
+      8. If order_id is currently held or confirmed (and rule 7 did not return), return ok=False, code
+         "duplicate_order". An order that is expired or cancelled may be reserved again with a fresh reservation.
+      9. confirm: unknown order_id (never successfully reserved) -> "unknown_order"; cancelled -> "cancelled"; expired
+         (including expiring at this very call) -> "expired", every time it is called; held -> permanently subtracts its
+         quantities from on_hand and stops holding them (the order becomes "confirmed"), ok. Confirming a confirmed order
+         is ok and changes nothing, even after the original ttl has passed.
+      10. cancel: unknown -> "unknown_order"; confirmed -> "already_confirmed"; held -> released and the order becomes
+         "cancelled", ok; already cancelled -> ok, nothing changes; expired -> ok, nothing changes (it stays "expired").
+      11. Failed results from confirm/cancel have shortfalls {} and never change state.
+
+      Add unit tests.
+    acceptance:
+      files: acceptance/inventory-reservations
+      cmd: ["python", "-m", "unittest", "discover", "-s", "tests", "-t", "."]
+      timeout_seconds: 300
+
+  - id: strict-json
+    repo: shop-demo
+    prompt: |
+      Add a new module shop/strictjson.py: a hand-written strict JSON parser. Public API: loads(text: str) and class StrictJSONError(ValueError) with attributes .line (1-based), .column (1-based, counted in characters) and .code (a string). The json module must not be used (no "import json" / "from json" anywhere in the module). loads raises TypeError for non-str input.
+
+      Grammar is RFC 8259 and the top-level value may be any value. Results: object -> dict, array -> list, string -> str, true/false/null -> True/False/None, integer (no fraction/exponent) -> int of any size, number with fraction or exponent -> float. "-0" gives int 0, "-0.0" gives float -0.0. Whitespace is only space, \t, \n, \r. No trailing commas, comments, single quotes, "+1", ".5", "1.", NaN/Infinity. Numbers are tokenised by the grammar: "0" followed by a digit simply ends the number, so "01" is the number 0 followed by a stray "1". Literals true/false/null must match exactly.
+
+      Strings: raw characters below U+0020 are invalid. Valid escapes are \" \\ \/ \b \f \n \r \t and \uXXXX (hex case-insensitive); anything else after a backslash is invalid. A \uD800-\uDBFF escape must be immediately followed by a \uDC00-\uDFFF escape and the pair becomes one character. A lone low surrogate, or a high surrogate not followed by a low one, is invalid. Object keys must be strings and must be unique after escape decoding (per object; the same key in different objects is fine). Nesting depth is at most 64; the outermost array/object has depth 1.
+
+      Errors: scanning is strictly left to right and the first problem is reported at once. Positions: lines advance only on \n and the column resets to 1 after it (\r is an ordinary one-column character). "End position" means the position just after the last character. Codes:
+      - bom: text starts with U+FEFF; 1:1 (checked first; a U+FEFF anywhere else is just an unexpected character, or fine inside a string).
+      - empty: nothing but whitespace; end position.
+      - unexpected_end: the text ends while a value, string, escape, literal or number is incomplete or a "," ":" "]" "}" is still needed; end position.
+      - unexpected_char: a character that the grammar does not allow there, at that character. This includes a bad character after a backslash or inside the 4 hex digits of \u (at the character itself), and a bad character after "-", ".", "e/E" or an exponent sign.
+      - control_char: raw character below U+0020 inside a string, at that character.
+      - bad_surrogate: at the column of the backslash of the high escape (or of the lone low escape). It is decided as soon as the next two characters are known not to be "\u", or after the following \uXXXX has been read (malformed hex there is reported as usual).
+      - duplicate_key: at the opening quote of the second occurrence, raised as soon as that key string is complete.
+      - too_deep: at the bracket that would make depth 65, raised on seeing it.
+      - trailing_data: first non-whitespace character after the complete top-level value.
+
+      Add unit tests.
+    acceptance:
+      files: acceptance/strict-json
+      cmd: ["python", "-m", "unittest", "discover", "-s", "tests", "-t", "."]
+      timeout_seconds: 300
+
+  - id: expr-rules
+    repo: shop-demo
+    prompt: |
+      Add shop/rules.py: a small safe expression evaluator for discount rules (do not use eval, ast or any other shortcut that lets Python parse it). API: evaluate(expr: str, variables: dict | None = None) -> Decimal | bool, and class RulesError(ValueError) with attributes .column (1-based column of the offending token) and .code, one of "syntax", "unknown_variable", "division_by_zero", "type", "unknown_function", "arity".
+
+      Lexing: whitespace is only space, tab, CR, LF. Numbers are ASCII digits with an optional fraction, or a leading-dot fraction: 12, 12.5, .5 (so "1." is the number 1 followed by an unknown character "."; there is no exponent form). Literals are exact Decimals. Identifiers are [A-Za-z_][A-Za-z0-9_]* (ASCII only, case-sensitive); and, or, not, true, false are keywords. Strings use single quotes, '' inside means one quote. An identifier followed (after optional whitespace) by "(" is a function call, otherwise a variable. Variables map to int (converted to Decimal), Decimal, bool or str; any other value type is a "type" error at the identifier when it is evaluated. The variables dict is never mutated.
+
+      Precedence from lowest to highest: or; and; not; comparison == != < <= > >=; + -; * / %; unary - and +; **; parentheses. All binary operators are left associative except **, which is right associative; its right operand may carry a unary sign, and its left operand may not (-2 ** 2 is -4, 2 ** 3 ** 2 is 512, 2 ** -1 is 0.5). Comparisons do not chain: 1 < 2 < 3 is a syntax error at the second operator. "not" may only start an and/or operand or follow another not; "1 == not 2" is a syntax error at "not".
+
+      Arithmetic: each +, -, *, /, ** result is rounded to 28 significant digits (half even); / is exact Decimal division otherwise. % has the sign of the divisor (-7 % 3 is 2, 7 % -3 is -2). ** needs an integer-valued exponent of magnitude at most 1000, else "type"; 0 ** 0 is 1; 0 to a negative power is division_by_zero. and/or short-circuit: the left operand must be a bool, and the right one is neither evaluated nor type-checked when not needed. The result of a comparison or logic expression is bool, arithmetic yields Decimal. Arithmetic, unary operators, and < <= > >= accept only numbers; == and != accept two numbers, two bools or two strs (anything mixed is "type"); not/and/or accept only bools. A final result that is a str is a "type" error at the first token. Functions: min, max (1 or more numbers), abs(x), round(x, n=0) (half up, away from zero, exact; n an integer-valued number of magnitude at most 1000, may be negative), and if(cond, a, b), which is lazy: cond must be a bool and only the chosen branch is evaluated.
+
+      Errors. The whole expression is parsed before anything is evaluated; the leftmost offending token wins for syntax errors (bad character, unterminated string at its opening quote, unexpected token, unexpected end at column len(expr)+1), and a syntax error beats everything else. Next, unknown_function and arity errors (checked for every call, even in branches that would never run) are reported at the column of the function name, leftmost call first. Only then is the expression evaluated, left operand before right, and for non-lazy constructs all operands/arguments are evaluated before their types are checked. unknown_variable is at the identifier; division_by_zero at the / % or ** operator; type errors at the operator, the not/and/or keyword, or the function name involved (for if, the condition's type error is at "if").
+
+      Add unit tests.
+    acceptance:
+      files: acceptance/expr-rules
+      cmd: ["python", "-m", "unittest", "discover", "-s", "tests", "-t", "."]
+      timeout_seconds: 300

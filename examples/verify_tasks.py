@@ -22,7 +22,7 @@ ROOT = Path(__file__).resolve().parent
 FIXTURE = ROOT / "shop-demo"
 ACCEPTANCE = ROOT / "acceptance"
 REFERENCE = ROOT / "reference"
-TASKSET = ROOT / "tasks-hard.yaml"
+TASKSETS = [ROOT / "tasks-hard.yaml", ROOT / "tasks-extreme.yaml"]
 
 
 def run_tests(cwd: Path) -> tuple[bool, str]:
@@ -53,14 +53,14 @@ def main(argv: list[str]) -> int:
         tasks = argv
 
     failures = []
-    declared = set(re.findall(r"^\s*- id: (\S+)", TASKSET.read_text(encoding="utf-8"), re.M))
+    declared = {t for ts in TASKSETS for t in re.findall(r"^\s*- id: (\S+)", ts.read_text(encoding="utf-8"), re.M)}
     for task in tasks:
         if task not in declared:
-            failures.append(f"{task}: has a reference solution but is not declared in tasks-hard.yaml")
+            failures.append(f"{task}: has a reference solution but is not declared in any taskset")
         if not (ACCEPTANCE / task).is_dir():
             failures.append(f"{task}: missing acceptance directory")
     for task in sorted(declared - set(tasks) if not argv else []):
-        failures.append(f"{task}: declared in tasks-hard.yaml but has no reference solution")
+        failures.append(f"{task}: declared in a taskset but has no reference solution")
 
     with tempfile.TemporaryDirectory(prefix="tokonomy-verify-") as tmp_name:
         tmp = Path(tmp_name)
