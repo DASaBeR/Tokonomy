@@ -74,7 +74,7 @@ public static class TaskPlanning
         var estimated = false;
         foreach (var call in calls)
         {
-            estimated |= call.Usd is null;
+            estimated |= call.Usd is null || call.Estimated;
             total += call.Usd ?? 0;
             ledger.RecordLlmCall(new LlmCallRecord
             {
@@ -85,7 +85,7 @@ public static class TaskPlanning
                 OutputTokens = call.OutputTokens,
                 CachedTokens = call.CachedTokens,
                 Usd = call.Usd ?? 0,
-                Source = call.Usd is null ? CostSource.Estimated : CostSource.Metered,
+                Source = call.Usd is null || call.Estimated ? CostSource.Estimated : CostSource.Metered,
             });
         }
 

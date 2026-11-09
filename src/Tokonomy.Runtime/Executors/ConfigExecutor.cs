@@ -88,7 +88,7 @@ public sealed class ConfigExecutor(string name, ExecutorDefinition definition, E
                 TimedOut = outcome.TimedOut,
                 StdoutPath = stdout,
                 StderrPath = stderr,
-                Usage = ReadUsage(definition.UsageFormat, stdout),
+                Usage = ReadUsage(definition.UsageFormat, stdout, model),
             };
         }
         finally
@@ -107,14 +107,20 @@ public sealed class ConfigExecutor(string name, ExecutorDefinition definition, E
         }
     }
 
-    private static IReadOnlyList<WorkerUsage> ReadUsage(string? format, string stdoutPath)
+    private static IReadOnlyList<WorkerUsage> ReadUsage(string? format, string stdoutPath, string? model)
     {
-        if (!string.Equals(format, "claude-json", StringComparison.OrdinalIgnoreCase) || !File.Exists(stdoutPath))
+        if (string.IsNullOrWhiteSpace(format) || !File.Exists(stdoutPath))
         {
             return [];
         }
 
-        return ClaudeUsageParser.Parse(File.ReadAllText(stdoutPath));
+        var text = File.ReadAllText(stdoutPath);
+        return format.ToLowerInvariant() switch
+        {
+            "claude-json" => ClaudeUsageParser.Parse(text),
+            "agy-json" => AgyUsageParser.Parse(text, model),
+            _ => [],
+        };
     }
 
     internal static List<string> BuildArgs(ExecutorDefinition definition, IReadOnlyDictionary<string, string> vars, string? model)

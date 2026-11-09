@@ -139,6 +139,15 @@ Workers run with a **scrubbed environment**: an allowlist of OS and toolchain va
 
 When `proxy_routable: true`, Tokonomy starts a metering proxy on 127.0.0.1 for the run. The worker reaches the provider through it with the per-run token, and every call's tokens and cost are recorded. Executors that cannot be routed through the proxy are recorded as **estimated**.
 
+**Architect provider.** `architect_provider.kind` chooses how architect calls (planning, takeover) are made. `api` (default) uses the OpenAI-compatible `provider` with a key. `claude-cli` runs Claude Code headless on your own login, with `models.architect` passed to `claude --model` (for example `opus`): no API key, no tools, no MCP servers and no user settings are loaded, so each call carries about 1k tokens of overhead instead of about 35k. Its cost is Claude Code's own API-equivalent figure and is always recorded as **estimated**. Worker traffic still uses `provider`, so you can point it at another service (for example OpenRouter) while the architect runs on Claude Code.
+
+```yaml
+architect_provider:
+  kind: claude-cli      # command: claude (default)
+models:
+  architect: opus
+```
+
 **Unmetered executors that report usage.** Set `usage_format: claude-json` and Tokonomy reads tokens and cost from Claude Code's `--output-format json` result. The figure is the agent's own API-equivalent estimate, so it is always recorded as **estimated**. The scaffolded `claude-code-sub` adapter uses this for Claude Code on a subscription login (no API key, no proxy, no endpoint override). A subscription is not billed per token, so treat its numbers as a size indicator, and check your plan's terms before running automated batches.
 
 ## prices.yaml

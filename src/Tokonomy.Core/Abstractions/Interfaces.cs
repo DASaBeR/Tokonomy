@@ -32,7 +32,7 @@ public sealed class UnitState
     public bool AddedDependency { get; set; }
 }
 
-/// <summary>Chat access to the architect model. Implemented over an OpenAI-compatible endpoint.</summary>
+/// <summary>Chat access to the architect model. Implemented over an OpenAI-compatible endpoint or the Claude Code CLI.</summary>
 public interface IProvider
 {
     Task<ProviderResponse> CompleteAsync(ProviderRequest request, CancellationToken ct);
@@ -41,7 +41,8 @@ public interface IProvider
 public sealed record ProviderRequest(string Model, string System, string User, bool JsonOutput = false);
 
 /// <summary>A completed architect call. <see cref="Usd"/> is null when the model has no configured price.</summary>
-public sealed record ProviderResponse(string Text, string Model, long InputTokens, long OutputTokens, long CachedTokens, decimal? Usd);
+public sealed record ProviderResponse(
+    string Text, string Model, long InputTokens, long OutputTokens, long CachedTokens, decimal? Usd, bool Estimated = false);
 
 public interface IClock
 {

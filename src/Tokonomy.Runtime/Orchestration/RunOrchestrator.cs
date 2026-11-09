@@ -524,7 +524,7 @@ public sealed class RunOrchestrator(
             OutputTokens = response.OutputTokens,
             CachedTokens = response.CachedTokens,
             Usd = response.Usd ?? 0,
-            Source = response.Usd is null ? CostSource.Estimated : CostSource.Metered,
+            Source = response.Usd is null || response.Estimated ? CostSource.Estimated : CostSource.Metered,
         });
         budget.Add(response.Usd ?? 0);
     }

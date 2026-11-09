@@ -14,6 +14,9 @@ public sealed record ProcessSpec
 
     public TimeSpan? Timeout { get; init; }
 
+    /// <summary>Text written to the child's stdin (UTF-8) before it is closed. Null closes stdin immediately.</summary>
+    public string? StdinText { get; init; }
+
     /// <summary>If set, full stdout is also written here (capped at <see cref="MaxFileBytes"/>).</summary>
     public string? StdoutFile { get; init; }
 

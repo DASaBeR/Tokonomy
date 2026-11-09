@@ -81,9 +81,20 @@ public sealed partial class DoctorCommand(IAnsiConsole console, IProcessRunner r
             checks.Add(new("executor", "metering", Level.Warn, "worker cost will be recorded as estimated"));
         }
 
-        // Provider key: report presence only, never the value.
+        // Architect provider.
+        var cliArchitect = policy.ArchitectProvider.Kind == ArchitectProviderConfig.ClaudeCliKind;
+        if (cliArchitect)
+        {
+            var claude = ExecutableResolver.TryResolve(policy.ArchitectProvider.Command, repo);
+            checks.Add(new("architect", policy.ArchitectProvider.Command, claude is null ? Level.Fail : Level.Ok,
+                claude is null ? $"'{policy.ArchitectProvider.Command}' not on PATH" : "Claude Code CLI (cost recorded as estimated)"));
+        }
+
+        // Provider key: report presence only, never the value. Needed for an API architect or a metered worker.
         var keySet = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(policy.Provider.ApiKeyEnv));
-        checks.Add(new("provider", policy.Provider.ApiKeyEnv, keySet ? Level.Ok : Level.Fail, keySet ? "set" : "not set"));
+        var keyNeeded = !cliArchitect || exec.Capabilities.ProxyRoutable;
+        checks.Add(new("provider", policy.Provider.ApiKeyEnv, keySet || !keyNeeded ? Level.Ok : Level.Fail,
+            keySet ? "set" : keyNeeded ? "not set" : "not set (not needed: architect and worker use CLI logins)"));
 
         // Prices.
         var prices = PriceTable.Load(Path.Combine(config.ConfigDirectory, TokonomyConfig.PricesFile));

@@ -6,6 +6,7 @@ public sealed class Policy
     public ModelsConfig Models { get; set; } = new();
     public ExecutorSelection Executors { get; set; } = new();
     public ProviderConfig Provider { get; set; } = new();
+    public ArchitectProviderConfig ArchitectProvider { get; set; } = new();
     /// <summary>Commands run once per run before the baseline (dependency restore). Network is allowed.</summary>
     public List<GateConfig> Prepare { get; set; } = [];
 
@@ -42,6 +43,23 @@ public sealed class ProviderConfig
 
     /// <summary>Name of the environment variable holding the API key. The key itself never lives in config.</summary>
     public string ApiKeyEnv { get; set; } = "OPENROUTER_API_KEY";
+}
+
+/// <summary>How architect calls (planning, takeover) are made. Worker traffic always uses <see cref="ProviderConfig"/>.</summary>
+public sealed class ArchitectProviderConfig
+{
+    public const string ApiKind = "api";
+    public const string ClaudeCliKind = "claude-cli";
+
+    /// <summary>
+    /// <c>api</c> (default): an OpenAI-compatible endpoint with a key, see <c>provider</c>.
+    /// <c>claude-cli</c>: run Claude Code headless on your own login (no API key); <c>models.architect</c> is passed to
+    /// <c>claude --model</c> (for example <c>opus</c>). Its reported cost is an estimate.
+    /// </summary>
+    public string Kind { get; set; } = ApiKind;
+
+    /// <summary>Executable for <c>claude-cli</c>.</summary>
+    public string Command { get; set; } = "claude";
 }
 
 public sealed class GateConfig

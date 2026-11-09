@@ -133,6 +133,12 @@ public static class ConfigLoader
                 "provider.api_key_env looks like an API key. Put the *name* of an environment variable here, never the key.");
         }
 
+        if (policy.ArchitectProvider.Kind is not (ArchitectProviderConfig.ApiKind or ArchitectProviderConfig.ClaudeCliKind))
+        {
+            yield return new(Severity.Error, file, null,
+                $"architect_provider.kind '{policy.ArchitectProvider.Kind}' is not supported; use '{ArchitectProviderConfig.ApiKind}' or '{ArchitectProviderConfig.ClaudeCliKind}'.");
+        }
+
         for (var i = 0; i < policy.Gates.Count; i++)
         {
             var gate = policy.Gates[i];

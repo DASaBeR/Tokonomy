@@ -29,6 +29,18 @@ public sealed class ProcessRunner : IProcessRunner
 
         var stopwatch = Stopwatch.StartNew();
         process.Start();
+        if (spec.StdinText is not null)
+        {
+            try
+            {
+                await process.StandardInput.WriteAsync(spec.StdinText.AsMemory(), ct);
+            }
+            catch (IOException)
+            {
+                // The child exited before reading everything; its exit code and output tell the story.
+            }
+        }
+
         process.StandardInput.Close();
 
         var stdout = new StreamCapture(spec.MaxCaptureChars, spec.StdoutFile, spec.MaxFileBytes);
@@ -83,6 +95,7 @@ public sealed class ProcessRunner : IProcessRunner
             WorkingDirectory = spec.WorkingDirectory,
             UseShellExecute = false,
             RedirectStandardInput = true,
+            StandardInputEncoding = new UTF8Encoding(false),
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             CreateNoWindow = true,

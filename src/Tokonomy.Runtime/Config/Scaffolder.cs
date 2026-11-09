@@ -215,6 +215,28 @@ public static class Scaffolder
               reports_tokens: true
               permission_modes: true
               proxy_routable: false
+
+          antigravity:
+            # Antigravity CLI (`agy`) on your own Antigravity login: no API key, no proxy. Run `agy models` for ids such as
+            # gemini-3.8-flash-low. Tokens come from its JSON output; cost is unknown and recorded as estimated.
+            # Headless against agy 1.5.3 works (`-p`, `--model`, `--output-format json`), BUT headless mode cannot prompt and
+            # auto-denies shell commands, so a worker that must run one (even to read its brief) makes no changes. Allow the
+            # permission you are comfortable with (agy `permissions.allow` in settings.json, or --dangerously-skip-permissions,
+            # which gives the worker the same trust as OpenCode's bash=allow) before relying on this adapter.
+            cmd: ["agy", "-p", "{prompt}", "--output-format", "json", "--mode", "accept-edits"]
+            model_args: ["--model", "{model}"]
+            brief_file: AGENTS.md
+            version_cmd: ["agy", "--version"]
+            tested_version: "1.5.3"
+            usage_format: agy-json
+            capabilities:
+              headless: true
+              model_override: true
+              structured_output: true
+              session_resume: false
+              reports_tokens: true
+              permission_modes: true
+              proxy_routable: false
         """;
 
     internal const string PricesYaml = """
