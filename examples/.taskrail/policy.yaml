@@ -2,11 +2,11 @@
 # LLMs produce content; this file makes decisions.
 
 models:
-  architect: claude-sonnet-5-5    # strong: plans (and, in strategies 1/1b, does the work)
+  architect: gpt-6.1-sol          # strong: plans (and, in strategies 1/1b, does the work)
   worker: deepseek-v4.1-flash     # cheap: executes each unit via OpenCode
 
-# AvalAI (OpenAI-compatible). Entry-level rate limits are low: tier 1 allows claude-sonnet-5-5 only 2 requests/min,
-# which is fine for planning but too slow to use as the *worker* (strategies 1 and 1b). Raise your tier or pick another model.
+# AvalAI (OpenAI-compatible). Entry-level rate limits are low: at tier 1 claude-sonnet-5-5 allows only 2 requests/min,
+# fine for planning but too slow as the *worker* (strategies 1 and 1b), so the strong model here is gpt-6.1-sol (50/min).
 provider:
   base_url: https://api.avalai.ir/v1
   api_key_env: AVALAI_API_KEY   # the variable NAME; the key never goes in this file

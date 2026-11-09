@@ -34,6 +34,10 @@ public sealed class BenchSettings : CommonSettings
     [Description("Only run these task ids (repeatable).")]
     public string[]? Tasks { get; init; }
 
+    [CommandOption("--max-usd <USD>")]
+    [Description("Stop starting trials once this much has been spent in total. Each trial is also capped at what remains.")]
+    public decimal? MaxUsd { get; init; }
+
     [CommandOption("--dry-run")]
     [Description("Show the trial matrix and budget ceiling without running anything.")]
     public bool DryRun { get; init; }
@@ -62,6 +66,12 @@ public sealed class BenchCommand(IAnsiConsole console, IProcessRunner runner, Se
             return ExitCodes.Usage;
         }
 
+        if (settings.MaxUsd is <= 0)
+        {
+            Output.Error(console, "--max-usd must be positive.");
+            return ExitCodes.Usage;
+        }
+
         var configDir = settings.Config ?? taskset.ConfigDirectory;
         var config = ConfigLoader.Load(configDir);
         if (config.HasErrors)
@@ -80,9 +90,15 @@ public sealed class BenchCommand(IAnsiConsole console, IProcessRunner runner, Se
         var tasks = taskset.Tasks.Where(t => settings.Tasks is null || settings.Tasks.Contains(t.Id)).ToList();
         var trials = tasks.Count * strategies.Count * settings.Repeat;
         var ceiling = trials * config.Policy.Budget.MaxUsdPerTask;
+        if (settings.MaxUsd is { } totalCap)
+        {
+            ceiling = Math.Min(ceiling, totalCap);
+        }
+
         console.MarkupLine($"{tasks.Count} task(s) × {strategies.Count} strategies × {settings.Repeat} repeat(s) = [bold]{trials}[/] trials");
+        var totalCapText = settings.MaxUsd is { } c ? ", --max-usd $" + c.ToString("0.00", CultureInfo.InvariantCulture) + " in total" : "";
         console.MarkupLine(string.Create(CultureInfo.InvariantCulture,
-            $"Budget ceiling: ${ceiling:0.00} (max_usd_per_task ${config.Policy.Budget.MaxUsdPerTask:0.00} per trial)"));
+            $"Budget ceiling: ${ceiling:0.00} (max_usd_per_task ${config.Policy.Budget.MaxUsdPerTask:0.00} per trial{totalCapText})"));
         if (settings.DryRun)
         {
             foreach (var s in strategies)
@@ -104,6 +120,7 @@ public sealed class BenchCommand(IAnsiConsole console, IProcessRunner runner, Se
             Strategies = strategies,
             Repeat = settings.Repeat,
             TaskFilter = settings.Tasks,
+            MaxUsd = settings.MaxUsd,
         }, prices, key, new ConsoleBenchObserver(console), cancellationToken);
 
         var results = ledger.ListBenchResults(benchId);
@@ -129,6 +146,9 @@ internal sealed class ConsoleBenchObserver(IAnsiConsole console) : IBenchObserve
 {
     public void TrialStarted(BenchTask task, Strategy strategy, int repeat, int index, int total) =>
         console.MarkupLine($"[grey][[{index}/{total}]][/] {Markup.Escape(task.Id)}  strategy {strategy.Id}  repeat {repeat}");
+
+    public void Stopped(string reason, int skippedTrials) =>
+        console.MarkupLine($"[yellow]Stopped: {Markup.Escape(reason)}; {skippedTrials} trial(s) not run.[/]");
 
     public void TrialFinished(BenchResultRecord result) =>
         console.MarkupLine(string.Create(CultureInfo.InvariantCulture,

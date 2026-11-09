@@ -1,4 +1,5 @@
 using Taskrail.Core.Abstractions;
+using Taskrail.Core.Config;
 using Taskrail.Core.Model;
 using Taskrail.Runtime.Config;
 using Taskrail.Runtime.Executors;
@@ -15,12 +16,19 @@ public sealed record BenchOptions
     public required IReadOnlyList<Strategy> Strategies { get; init; }
     public int Repeat { get; init; } = 3;
     public IReadOnlyCollection<string>? TaskFilter { get; init; }
+
+    /// <summary>
+    /// Total spend cap across all trials. A trial may spend at most min(budget.max_usd_per_task, what remains), and the
+    /// benchmark stops starting trials once less than <see cref="BenchRunner.MinTrialBudgetUsd"/> remains.
+    /// </summary>
+    public decimal? MaxUsd { get; init; }
 }
 
 public interface IBenchObserver
 {
     void TrialStarted(BenchTask task, Strategy strategy, int repeat, int index, int total) { }
     void TrialFinished(BenchResultRecord result) { }
+    void Stopped(string reason, int skippedTrials) { }
 }
 
 /// <summary>
@@ -35,6 +43,9 @@ public sealed class BenchRunner(
     Func<ExecutorSession, IExecutor>? executorFactory = null,
     IClock? clock = null)
 {
+    /// <summary>Below this remaining budget a new trial is not started: it could not finish a plan and one attempt.</summary>
+    public const decimal MinTrialBudgetUsd = 0.01m;
+
     private readonly IClock _clock = clock ?? SystemClock.Instance;
     private readonly GitCli _git = new(runner);
 
@@ -49,27 +60,58 @@ public sealed class BenchRunner(
         var trials = (from task in tasks from strategy in options.Strategies from r in Enumerable.Range(1, options.Repeat) select (task, strategy, r)).ToList();
         var cacheRoot = Path.Combine(Path.GetTempPath(), "taskrail", "bench-cache");
 
+        decimal spent = 0;
         for (var i = 0; i < trials.Count; i++)
         {
             ct.ThrowIfCancellationRequested();
+            decimal? remaining = options.MaxUsd is { } cap ? cap - spent : null;
+            if (remaining < MinTrialBudgetUsd)
+            {
+                observer?.Stopped(
+                    string.Create(System.Globalization.CultureInfo.InvariantCulture,
+                        $"total budget ${options.MaxUsd:0.00} reached (${spent:0.0000} spent)"),
+                    trials.Count - i);
+                break;
+            }
+
             var (task, strategy, repeat) = trials[i];
+            var trialCap = remaining is { } r ? Math.Min(config.Policy.Budget.MaxUsdPerTask, r) : config.Policy.Budget.MaxUsdPerTask;
             observer?.TrialStarted(task, strategy, repeat, i + 1, trials.Count);
-            var result = await RunTrialAsync(benchId, taskset, task, strategy, repeat, config, prices, upstreamKey, cacheRoot, ct);
+            var result = await RunTrialAsync(benchId, taskset, task, strategy, repeat, config, trialCap, prices, upstreamKey, cacheRoot, ct);
             ledger.RecordBenchResult(result);
+            spent += result.Usd;
             observer?.TrialFinished(result);
         }
 
         return benchId;
     }
 
+    /// <summary>The policy with this trial's spend cap applied. Everything else is shared with the original.</summary>
+    internal static Policy WithTrialCap(Policy policy, decimal capUsd) => new()
+    {
+        Models = policy.Models,
+        Executors = policy.Executors,
+        Provider = policy.Provider,
+        Prepare = policy.Prepare,
+        Gates = policy.Gates,
+        Escalation = policy.Escalation,
+        Isolation = policy.Isolation,
+        Budget = new BudgetConfig
+        {
+            MaxUsdPerTask = capUsd,
+            MaxUsdPerRun = policy.Budget.MaxUsdPerRun,
+            MaxArchitectTokenShare = policy.Budget.MaxArchitectTokenShare,
+        },
+    };
+
     private async Task<BenchResultRecord> RunTrialAsync(
-        string benchId, Taskset taskset, BenchTask task, Strategy strategy, int repeat, TaskrailConfig config,
+        string benchId, Taskset taskset, BenchTask task, Strategy strategy, int repeat, TaskrailConfig config, decimal trialCap,
         PriceTable prices, string? upstreamKey, string cacheRoot, CancellationToken ct)
     {
         var started = _clock.UtcNow;
         var runId = RunArtifacts.NewRunId(started);
         var clone = Path.Combine(Path.GetTempPath(), "taskrail", "bench", runId);
-        var policy = config.Policy;
+        var policy = WithTrialCap(config.Policy, trialCap);
         var status = RunStatus.Error;
         string? note = null;
         var accepted = false;

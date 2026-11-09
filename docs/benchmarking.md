@@ -40,7 +40,7 @@ tasks:
 Rules that keep results honest:
 
 1. **Acceptance is hidden.** Workers never see `acceptance.files`. Gates may only use the repo's visible checks.
-2. **Check that each task is fair.** The hidden check must fail on the base commit and pass with a reference solution written from the prompt alone. The seed tasks in `examples/` were verified this way.
+2. **Check that each task is fair.** The hidden check must fail on the base commit and pass with a reference solution written from the prompt alone. `python examples/verify_tasks.py` does this for the `shop-demo` tasks in `examples/tasks-hard.yaml` (reference solutions live in `examples/reference/`, outside the fixture workers see). Also try near-miss implementations (off-by-one boundaries, a missing edge case) and confirm the hidden tests reject them; weak tests make every strategy look the same.
 3. **Repeat trials.** Model output is non-deterministic. Use `--repeat 3` or more and look at the ranges.
 4. **Scope your claims.** "On these N tasks in these repos", never in general.
 5. **Watch for estimates.** Costs marked *(est.)* include unmetered calls or unpriced models.
@@ -51,6 +51,8 @@ Rules that keep results honest:
 taskrail bench examples/tasks.yaml --strategies 1,1b,2,3,4 --repeat 3 --dry-run   # trial matrix + budget ceiling
 taskrail bench examples/tasks.yaml --strategies 1,1b,2 --repeat 3
 ```
+
+**Spending limit.** `--max-usd 3.00` caps the total across the whole run. Each trial may spend at most the smaller of `budget.max_usd_per_task` and what is left, and no new trial starts once less than $0.01 remains (the run reports how many trials were skipped). Use it whenever the budget is tight, and start with the cheapest strategy (`--strategies 2`) to find out which tasks the cheap model can already solve.
 
 Each trial runs in a fresh clone under the system temp directory. The report is printed and saved to `.taskrail/runs/bench-<id>.md`; every trial is a normal run in the ledger (`taskrail report <run-id>`).
 

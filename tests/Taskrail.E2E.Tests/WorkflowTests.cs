@@ -149,6 +149,28 @@ public sealed class WorkflowTests : IDisposable
     }
 
     [Fact]
+    public void Hard_taskset_is_valid_and_every_task_has_a_reference_solution()
+    {
+        var root = AppContext.BaseDirectory;
+        while (!File.Exists(Path.Combine(root, "Taskrail.slnx")))
+        {
+            root = Path.GetDirectoryName(root) ?? throw new InvalidOperationException("repo root not found");
+        }
+
+        var taskset = Taskset.Load(Path.Combine(root, "examples", "tasks-hard.yaml"));
+
+        Assert.Equal(8, taskset.Tasks.Count);
+        Assert.All(taskset.Tasks, t =>
+        {
+            Assert.Equal("shop-demo", t.Repo);
+            Assert.True(Directory.Exists(taskset.Resolve(t.Repo)), t.Repo);
+            Assert.True(Directory.Exists(taskset.Resolve(t.Acceptance.Files!)), t.Acceptance.Files);
+            Assert.True(Directory.Exists(Path.Combine(root, "examples", "reference", t.Id)), $"no reference solution for {t.Id}");
+            Assert.True(t.Prompt.Length > 200, $"{t.Id}: prompt should state the API precisely");
+        });
+    }
+
+    [Fact]
     public void Report_math_uses_accepted_trials_only()
     {
         BenchResultRecord R(string s, bool ok, decimal usd) => new()
