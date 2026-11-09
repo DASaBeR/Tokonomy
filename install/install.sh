@@ -1,6 +1,6 @@
 #!/bin/sh
 # Tokonomy installer for Linux and macOS.
-#   curl -fsSL https://github.com/tokonomy/tokonomy/releases/latest/download/install.sh | sh
+#   curl -fsSL https://github.com/DASaBeR/Tokonomy/releases/latest/download/install.sh | sh
 # Environment:
 #   TOKONOMY_VERSION      version to install (default: latest), e.g. 0.1.0
 #   TOKONOMY_INSTALL_DIR  target directory (default: $HOME/.local/bin)

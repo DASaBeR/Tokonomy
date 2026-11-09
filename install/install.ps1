@@ -1,5 +1,5 @@
 # Tokonomy installer for Windows.
-#   irm https://github.com/tokonomy/tokonomy/releases/latest/download/install.ps1 | iex
+#   irm https://github.com/DASaBeR/Tokonomy/releases/latest/download/install.ps1 | iex
 # Environment:
 #   TOKONOMY_VERSION      version to install (default: latest), e.g. 0.1.0
 #   TOKONOMY_INSTALL_DIR  target directory (default: %LOCALAPPDATA%\Programs\tokonomy)

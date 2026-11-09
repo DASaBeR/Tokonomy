@@ -86,12 +86,12 @@ Design principles:
 
 ```sh
 # Linux / macOS
-curl -fsSL https://github.com/tokonomy/tokonomy/releases/latest/download/install.sh | sh
+curl -fsSL https://github.com/DASaBeR/Tokonomy/releases/latest/download/install.sh | sh
 ```
 
 ```powershell
 # Windows
-irm https://github.com/tokonomy/tokonomy/releases/latest/download/install.ps1 | iex
+irm https://github.com/DASaBeR/Tokonomy/releases/latest/download/install.ps1 | iex
 ```
 
 Both installers verify SHA-256 checksums. Single-file binaries are published for Linux (x64/arm64, glibc and musl), macOS (x64/arm64) and Windows (x64/arm64).
