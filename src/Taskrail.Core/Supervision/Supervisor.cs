@@ -40,17 +40,17 @@ public sealed class Supervisor : ISupervisor
             .ToList();
         if (protectedHits.Count > 0)
         {
-            return new(DecisionKind.Takeover, $"diff touches protected path(s): {string.Join(", ", protectedHits.Take(5))}");
+            return new(DecisionKind.Takeover, $"diff touches protected path(s): {string.Join(", ", protectedHits.Take(5))}", TakeoverTrigger.ProtectedPath);
         }
 
         if (unit.AddedDependency && esc.ReviewOnNewDependency)
         {
-            return new(DecisionKind.Takeover, "a new dependency was added");
+            return new(DecisionKind.Takeover, "a new dependency was added", TakeoverTrigger.NewDependency);
         }
 
         if (run.TimedOut)
         {
-            return new(DecisionKind.Takeover, "worker timed out");
+            return new(DecisionKind.Takeover, "worker timed out", TakeoverTrigger.Timeout);
         }
 
         // unit.Attempts counts the attempt just evaluated.
@@ -59,7 +59,7 @@ public sealed class Supervisor : ISupervisor
         if (unit.ChangedPaths.Count == 0)
         {
             return limitReached
-                ? new(DecisionKind.Takeover, $"worker made no changes in {unit.Attempts} attempt(s)")
+                ? new(DecisionKind.Takeover, $"worker made no changes in {unit.Attempts} attempt(s)", TakeoverTrigger.NoChanges)
                 : new(DecisionKind.Retry, "worker made no changes");
         }
 
@@ -68,7 +68,7 @@ public sealed class Supervisor : ISupervisor
         {
             var reason = $"gate(s) failed: {string.Join(", ", failing)}";
             return limitReached
-                ? new(DecisionKind.Takeover, $"{reason} (failed {unit.Attempts} time(s))")
+                ? new(DecisionKind.Takeover, $"{reason} (failed {unit.Attempts} time(s))", TakeoverTrigger.GateFailures)
                 : new(DecisionKind.Retry, reason);
         }
 

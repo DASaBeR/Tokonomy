@@ -152,7 +152,7 @@ public sealed class BenchRunner(
                 Contract = planned.Contract,
             });
 
-            var orchestrator = new RunOrchestrator(runner, ledger, supervisor, executorFactory, _clock);
+            var orchestrator = new RunOrchestrator(runner, ledger, supervisor, executorFactory, _clock, strategy.AllowEscalation ? provider : null);
             var outcome = await orchestrator.RunAsync(new RunRequest
             {
                 RunId = runId,

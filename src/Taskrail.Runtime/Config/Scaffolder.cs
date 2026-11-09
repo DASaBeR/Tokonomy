@@ -96,6 +96,7 @@ public static class Scaffolder
         sb.AppendLine();
         sb.AppendLine("escalation:");
         sb.AppendLine("  max_retries_per_unit: 2    # failed attempts on a unit before escalation");
+        sb.AppendLine("  max_takeovers_per_unit: 1  # architect takeovers allowed per unit (0 disables takeover)");
         sb.AppendLine("  protected_paths: []        # e.g. [\"src/auth/**\", \"migrations/**\"]");
         sb.AppendLine("  max_diff_lines: 400        # larger diffs are rejected and the unit is split");
         sb.AppendLine("  review_on_new_dependency: true");

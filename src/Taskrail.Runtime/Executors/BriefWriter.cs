@@ -1,5 +1,6 @@
 using System.Text;
 using Taskrail.Core.Model;
+using Taskrail.Core.Takeover;
 
 namespace Taskrail.Runtime.Executors;
 
@@ -8,7 +9,9 @@ public static class BriefWriter
 {
     public const int MaxFeedbackChars = 12_000;
 
-    public static Brief Build(Contract contract, WorkUnit unit, int attempt, string briefFileName, string? feedback, IReadOnlyList<WorkUnit> completed)
+    public static Brief Build(
+        Contract contract, WorkUnit unit, int attempt, string briefFileName, string? feedback, IReadOnlyList<WorkUnit> completed,
+        IReadOnlyList<Handoff>? handoffs = null)
     {
         ArgumentNullException.ThrowIfNull(contract);
         ArgumentNullException.ThrowIfNull(unit);
@@ -69,6 +72,31 @@ public static class BriefWriter
             foreach (var u in completed)
             {
                 sb.AppendLine($"- {u.Id}: {u.Title}");
+            }
+        }
+
+        if (handoffs is { Count: > 0 })
+        {
+            sb.AppendLine();
+            sb.AppendLine("## Handoff from the architect");
+            sb.AppendLine("An earlier unit needed the architect to step in. Build on its fix and follow these notes:");
+            foreach (var handoff in handoffs)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"- {handoff.UnitId} ({handoff.UnitTitle}): {handoff.Summary}");
+                sb.AppendLine($"  What went wrong: {handoff.Why}");
+                foreach (var region in handoff.Locked)
+                {
+                    var text = region.Text.Trim('\n');
+                    sb.AppendLine($"  Locked in {region.Path} (an automated check fails if these lines change):");
+                    sb.AppendLine("  ```");
+                    foreach (var line in (text.Length <= 1200 ? text : text[..1200] + "\n...").Split('\n'))
+                    {
+                        sb.AppendLine("  " + line);
+                    }
+
+                    sb.AppendLine("  ```");
+                }
             }
         }
 

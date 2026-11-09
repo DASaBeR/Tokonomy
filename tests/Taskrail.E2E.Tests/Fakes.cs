@@ -28,6 +28,24 @@ internal sealed class FakeExecutor(params Action<Brief, string>[] script) : IExe
         (_, dir) => File.WriteAllText(Path.Combine(dir, file), content);
 }
 
+/// <summary>A scripted architect: replies in order, repeating the last one, and records every request.</summary>
+internal sealed class FakeArchitect(params string[] replies) : IProvider
+{
+    private int _next;
+
+    public List<ProviderRequest> Requests { get; } = [];
+
+    public Task<ProviderResponse> CompleteAsync(ProviderRequest request, CancellationToken ct)
+    {
+        Requests.Add(request);
+        var text = replies[Math.Min(_next++, replies.Length - 1)];
+        return Task.FromResult(new ProviderResponse(text, request.Model, 2000, 300, 0, 0.02m));
+    }
+
+    public static string Edit(string path, string search, string replace, string summary = "Fixed it", string why = "The worker got it wrong") =>
+        $"<<<<<<< SEARCH {path}\n{search}\n=======\n{replace}\n>>>>>>> REPLACE\nSUMMARY: {summary}\nWHY: {why}\n";
+}
+
 internal sealed class TestRepo : IDisposable
 {
     public TestRepo(params (string Path, string Content)[] files)

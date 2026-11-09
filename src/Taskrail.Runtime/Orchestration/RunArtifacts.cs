@@ -50,6 +50,14 @@ public sealed class RunArtifacts
     public static PlanFile LoadPlan(string path) =>
         JsonSerializer.Deserialize<PlanFile>(File.ReadAllText(path), JsonOptions) ?? throw new InvalidDataException($"Empty plan: {path}");
 
+    /// <summary>Writes a (redacted) file directly under the run directory.</summary>
+    public string WriteFile(string name, string content)
+    {
+        var path = Path.Combine(Directory, name);
+        WriteText(path, content);
+        return path;
+    }
+
     public string WriteLog(string name, string content)
     {
         var path = Path.Combine(LogsDirectory, name);

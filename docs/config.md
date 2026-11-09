@@ -36,6 +36,7 @@ gates:                         # argument arrays, never shell strings
 
 escalation:
   max_retries_per_unit: 2      # failed attempts on a unit before escalation (attempt 1 fails → retry; attempt 2 fails → escalate)
+  max_takeovers_per_unit: 1    # architect takeovers per unit; 0 disables takeover
   protected_paths: ["src/auth/**", "migrations/**"]   # .taskrail/** is always protected
   max_diff_lines: 400          # larger diffs are rejected and the unit is split
   review_on_new_dependency: true
@@ -65,7 +66,21 @@ Checked in order after every attempt; the first match decides.
 | 6 | A gate has new failures | Retry with gate output as feedback, or Takeover at the limit |
 | 7 | Otherwise | Accept: the unit is committed on `taskrail/<run-id>` |
 
-The worker's exit code and self-report are ignored; only the git diff and gates count. Takeover and Split land in M2; until then they fail the unit.
+The worker's exit code and self-report are ignored; only the git diff and gates count.
+
+### Architect takeover (strategy 4)
+
+When a unit keeps failing its gates (rule 6), the worker makes no changes, or it times out, the strong model steps in once per unit (`escalation.max_takeovers_per_unit`, 0 turns it off):
+
+1. It is **not** an agent. It receives the contract and rules, the unit spec, the worker's diff, the failure output and the current text of the touched files, and answers with **search/replace edits** for the failing section only. (Search/replace applied cleanly 5/5 times on real failures; unified diffs 4/5.)
+2. The edits are applied all-or-nothing: each SEARCH must match exactly once (a second try ignores trailing whitespace and line endings), paths cannot leave the worktree or touch `.git` / `.taskrail`. If an edit cannot be applied the architect is asked once more with the error.
+3. The **full gate suite re-runs**. If it passes, the unit is committed (`[architect takeover]`); if not, the unit fails and the worktree is reset.
+4. What the architect wrote becomes a **locked region**: later units fail the `locked_regions` check if those lines change, and the worker gets the lock in its retry feedback.
+5. `handoff.yaml` is written to `.taskrail/runs/<run-id>/` (the architect's summary, why the worker failed, the locks, the next unit) and the next workers' briefs include it. Every worker starts a fresh session.
+
+Takeover cost is counted in the ledger as architect spend and against the budget caps.
+
+**Not handled by takeover:** a diff that touches a protected path or adds a dependency is a human decision, so the unit fails with a message saying so. An oversized diff (rule 1) also fails: splitting such a unit is not implemented yet.
 
 ### Gates
 

@@ -164,6 +164,11 @@ public static class ConfigLoader
             yield return new(Severity.Error, file, null, "escalation.max_retries_per_unit must be >= 0.");
         }
 
+        if (e.MaxTakeoversPerUnit < 0)
+        {
+            yield return new(Severity.Error, file, null, "escalation.max_takeovers_per_unit must be >= 0.");
+        }
+
         if (e.MaxDiffLines <= 0)
         {
             yield return new(Severity.Error, file, null, "escalation.max_diff_lines must be positive.");

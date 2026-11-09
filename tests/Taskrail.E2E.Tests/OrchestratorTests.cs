@@ -100,7 +100,7 @@ public sealed class OrchestratorTests : IDisposable
 
         Assert.Equal(RunStatus.Fail, outcome.Status);
         Assert.Equal(2, executor.Calls.Count);
-        Assert.Contains("lands in M2", outcome.Error, StringComparison.Ordinal);
+        Assert.Contains("takeover unavailable (no architect provider)", outcome.Error, StringComparison.Ordinal);
         Assert.Equal(_repo.Head, outcome.HeadSha);
     }
 

@@ -4,7 +4,7 @@
 
 Taskrail is an open-source CLI that coordinates coding agents, routes work across models, enforces deterministic quality gates, and measures the real **cost per successful task**.
 
-> **Status: pre-alpha (M1).** Planning, supervised runs with gates and retries, the metering proxy, the cost ledger and the benchmark harness work. Not yet available: architect takeover and handoff (M2) and a second executor adapter (M3). The OpenCode adapter is verified against OpenCode 1.19.5 using a fake LLM server; it has not yet been run against a real provider. "Taskrail" is a working name.
+> **Status: pre-alpha (M2).** Planning, supervised runs with gates and retries, architect takeover with handoff and locked regions, the metering proxy, the cost ledger and the benchmark harness work. The OpenCode adapter is verified against OpenCode 1.19.5 and a real provider (AvalAI, OpenAI-compatible). Not yet available: a second executor adapter (M3) and splitting oversized units. Early benchmark numbers are in [docs/benchmarking.md](docs/benchmarking.md); they are small and not conclusive. "Taskrail" is a working name.
 
 ## The hypothesis
 
@@ -56,9 +56,9 @@ taskrail bench examples/tasks.yaml --strategies 1,1b,2,3,4 --repeat 3
 | `init` | ✅ |
 | `doctor` | ✅ basic checks |
 | `plan "<task>"` | ✅ |
-| `run` | ✅ (takeover lands in M2; until then an escalation fails the unit) |
+| `run` | ✅ takeover on gate failures, no changes and timeouts; oversized units and protected-path changes still fail for a human |
 | `report` | ✅ |
-| `bench <taskset>` | ✅ all five strategies; strategy 4 without takeover until M2 |
+| `bench <taskset>` | ✅ all five strategies, `--max-usd` spending cap |
 
 ## Security
 
@@ -83,4 +83,4 @@ Requires the .NET 10 SDK.
 
 ## License
 
-Apache-2.0
+MIT

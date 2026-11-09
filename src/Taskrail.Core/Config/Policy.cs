@@ -71,6 +71,9 @@ public sealed class GateConfig
 public sealed class EscalationConfig
 {
     public int MaxRetriesPerUnit { get; set; } = 2;
+
+    /// <summary>Architect takeovers allowed per unit. 0 disables takeover (escalations fail the unit).</summary>
+    public int MaxTakeoversPerUnit { get; set; } = 1;
     public List<string> ProtectedPaths { get; set; } = [];
     public int MaxDiffLines { get; set; } = 400;
     public bool ReviewOnNewDependency { get; set; } = true;

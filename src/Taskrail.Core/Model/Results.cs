@@ -51,4 +51,29 @@ public enum DecisionKind
     Fail,
 }
 
-public sealed record Decision(DecisionKind Kind, string Reason);
+/// <summary>Why the supervisor asked for an escalation. Only some triggers can be resolved by an architect edit.</summary>
+public enum TakeoverTrigger
+{
+    None,
+
+    /// <summary>A gate kept failing on the same unit.</summary>
+    GateFailures,
+
+    /// <summary>The worker finished without changing anything.</summary>
+    NoChanges,
+
+    /// <summary>The worker timed out, possibly leaving partial work.</summary>
+    Timeout,
+
+    /// <summary>The diff touches a protected path: a human decision, not something an edit resolves.</summary>
+    ProtectedPath,
+
+    /// <summary>The diff adds a dependency: a human decision.</summary>
+    NewDependency,
+}
+
+public sealed record Decision(DecisionKind Kind, string Reason, TakeoverTrigger Trigger = TakeoverTrigger.None)
+{
+    /// <summary>True when an architect edit can fix the problem (as opposed to needing a human).</summary>
+    public bool CanTakeOver => Kind == DecisionKind.Takeover && Trigger is TakeoverTrigger.GateFailures or TakeoverTrigger.NoChanges or TakeoverTrigger.Timeout;
+}

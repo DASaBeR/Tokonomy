@@ -2,6 +2,8 @@ using Taskrail.Core.Abstractions;
 using Taskrail.Core.Config;
 using Taskrail.Core.Model;
 using Taskrail.Core.Planning;
+using Taskrail.Core.Takeover;
+using Taskrail.Llm.Architect;
 using Taskrail.Llm.Providers;
 using Taskrail.Llm.Proxy;
 using Taskrail.Runtime.Executors;
@@ -9,6 +11,7 @@ using Taskrail.Runtime.Gates;
 using Taskrail.Runtime.Git;
 using Taskrail.Runtime.Ledger;
 using Taskrail.Runtime.Process;
+using Taskrail.Runtime.Takeover;
 
 namespace Taskrail.Runtime.Orchestration;
 
@@ -24,10 +27,13 @@ public sealed record RunRequest
     public required RunArtifacts Artifacts { get; init; }
     public string? WorkerModel { get; init; }
 
+    /// <summary>Model for takeovers. Defaults to <c>models.architect</c>.</summary>
+    public string? ArchitectModel { get; init; }
+
     /// <summary>Gates in the loop (strategies 1b, 4). Without gates every finished attempt with changes is accepted.</summary>
     public bool UseGates { get; init; } = true;
 
-    /// <summary>Architect escalation available (takeover lands in M2; until then Takeover/Split fail the unit).</summary>
+    /// <summary>Architect escalation available (strategy 4): gate failures, no changes and timeouts trigger a takeover.</summary>
     public bool AllowEscalation { get; init; } = true;
 
     /// <summary>Cap on attempts per unit regardless of policy (1 for single-shot strategies).</summary>
@@ -64,6 +70,7 @@ public interface IRunObserver
     void UnitStarted(WorkUnit unit) { }
     void AttemptFinished(WorkUnit unit, int attempt, RunResult run, UnitDiff diff, IReadOnlyList<GateResult> gates, Decision decision) { }
     void Warning(string message) { }
+    void TakeoverFinished(WorkUnit unit, bool success, string note) { }
 }
 
 /// <summary>PLAN is done by the caller. This runs PREPARE → (EXECUTE → GATE → DECIDE)* per unit → LEDGER.</summary>
@@ -72,7 +79,8 @@ public sealed class RunOrchestrator(
     ILedger ledger,
     ISupervisor supervisor,
     Func<ExecutorSession, IExecutor>? executorFactory = null,
-    IClock? clock = null)
+    IClock? clock = null,
+    IProvider? architect = null)
 {
     private readonly IClock _clock = clock ?? SystemClock.Instance;
     private readonly GitCli _git = new(runner);
@@ -139,9 +147,11 @@ public sealed class RunOrchestrator(
             }
 
             var completed = new List<WorkUnit>();
+            var locks = new List<LockedRegion>();
+            var handoffs = new List<Handoff>();
             foreach (var unit in ContractValidator.Order(request.Contract))
             {
-                var outcome = await RunUnitAsync(request, unit, workspace, executor, gates, baseline, completed, budget, observer, ct);
+                var outcome = await RunUnitAsync(request, unit, workspace, executor, gates, baseline, completed, locks, handoffs, budget, observer, ct);
                 units.Add(outcome);
                 if (outcome.Status != "accepted")
                 {
@@ -207,9 +217,11 @@ public sealed class RunOrchestrator(
 
     private async Task<UnitOutcome> RunUnitAsync(
         RunRequest request, WorkUnit unit, RunWorkspace workspace, IExecutor executor, List<CommandGate> gates,
-        Dictionary<string, GateRun> baseline, List<WorkUnit> completed, BudgetGuard budget, IRunObserver observer, CancellationToken ct)
+        Dictionary<string, GateRun> baseline, List<WorkUnit> completed, List<LockedRegion> locks, List<Handoff> handoffs,
+        BudgetGuard budget, IRunObserver observer, CancellationToken ct)
     {
         var policy = request.Policy;
+        var artifacts = request.Artifacts;
         var state = new UnitState { Unit = unit };
         var unitStart = await workspace.HeadAsync(ct);
         var maxAttempts = request.MaxAttempts ?? int.MaxValue;
@@ -222,8 +234,8 @@ public sealed class RunOrchestrator(
         while (true)
         {
             state.Attempts++;
-            var brief = BriefWriter.Build(request.Contract, unit, state.Attempts, request.Executor.BriefFile, feedback, completed);
-            artifacts(request).WriteLog($"{brief.Label}.brief.md", brief.Body);
+            var brief = BriefWriter.Build(request.Contract, unit, state.Attempts, request.Executor.BriefFile, feedback, completed, handoffs);
+            artifacts.WriteLog($"{brief.Label}.brief.md", brief.Body);
 
             var run = await executor.RunAsync(brief, workspace.Path, request.WorkerModel,
                 TimeSpan.FromSeconds(policy.Escalation.WorkerTimeoutSeconds), linked.Token);
@@ -234,26 +246,20 @@ public sealed class RunOrchestrator(
             state.AddedDependency = diff.AddedDependency;
             if (diff.Patch.Length > 0)
             {
-                artifacts(request).WriteLog($"{brief.Label}.diff", diff.Patch);
+                artifacts.WriteLog($"{brief.Label}.diff", diff.Patch);
             }
 
-            var gateResults = new List<GateResult>();
-            var gateLogs = new List<string>();
-            if (diff.ChangedPaths.Count > 0)
-            {
-                foreach (var (gate, i) in gates.Select((g, i) => (g, i)))
-                {
-                    var log = Path.Combine(artifacts(request).LogsDirectory, $"{brief.Label}.gate{i}.log");
-                    var gateRun = await gate.ExecuteAsync(workspace.Path, log, linked.Token);
-                    gateResults.Add(CommandGate.Evaluate(gateRun, baseline.GetValueOrDefault(gate.Name)));
-                    gateLogs.Add(log);
-                }
-            }
+            var (gateResults, gateLogs) = await RunGatesAsync(request, brief.Label, workspace.Path, diff, gates, baseline, locks, linked.Token);
 
             var decision = supervisor.Decide(state, run, gateResults, policy);
-            decision = Constrain(decision, request, state, maxAttempts);
-            observer.AttemptFinished(unit, state.Attempts, run, diff, gateResults, decision);
+            var takeover = decision.CanTakeOver && request.AllowEscalation && architect is not null &&
+                           state.Takeovers < policy.Escalation.MaxTakeoversPerUnit;
+            if (!takeover)
+            {
+                decision = Constrain(decision, request, state, maxAttempts, architect is not null);
+            }
 
+            observer.AttemptFinished(unit, state.Attempts, run, diff, gateResults, decision);
             var attemptId = ledger.RecordAttempt(new AttemptRecord
             {
                 RunId = request.RunId,
@@ -272,7 +278,7 @@ public sealed class RunOrchestrator(
                 ledger.RecordGateResult(attemptId, gateResults[i], gateLogs[i]);
             }
 
-            artifacts(request).Append("attempt", new
+            artifacts.Append("attempt", new
             {
                 unit = unit.Id,
                 attempt = state.Attempts,
@@ -284,6 +290,21 @@ public sealed class RunOrchestrator(
                 decision = decision.Kind,
                 decision.Reason,
             });
+
+            if (takeover)
+            {
+                var result = await TakeOverAsync(request, unit, workspace, unitStart, state, decision, diff, gateResults, gates, baseline, locks, handoffs, budget, observer, ct);
+                observer.TakeoverFinished(unit, result.Success, result.Note);
+                if (result.Success)
+                {
+                    ledger.UpsertUnit(request.RunId, unit.Id, unit.Title, "accepted", state.Attempts, state.Takeovers);
+                    return new UnitOutcome(unit.Id, "accepted", state.Attempts, $"architect takeover: {result.Note}");
+                }
+
+                await workspace.ResetAsync(unitStart, CancellationToken.None);
+                ledger.UpsertUnit(request.RunId, unit.Id, unit.Title, "failed", state.Attempts, state.Takeovers);
+                return new UnitOutcome(unit.Id, "failed", state.Attempts, $"{decision.Reason}; takeover failed: {result.Note}");
+            }
 
             switch (decision.Kind)
             {
@@ -302,18 +323,212 @@ public sealed class RunOrchestrator(
                     return new UnitOutcome(unit.Id, "failed", state.Attempts, decision.Reason);
             }
         }
-
-        static RunArtifacts artifacts(RunRequest r) => r.Artifacts;
     }
 
-    /// <summary>Applies strategy limits on top of the supervisor's policy decision.</summary>
-    internal static Decision Constrain(Decision decision, RunRequest request, UnitState state, int maxAttempts)
+    /// <summary>Runs every command gate, then the locked-region check once an earlier takeover created locks.</summary>
+    private static async Task<(List<GateResult> Results, List<string?> Logs)> RunGatesAsync(
+        RunRequest request, string label, string workdir, UnitDiff diff, List<CommandGate> gates,
+        Dictionary<string, GateRun> baseline, List<LockedRegion> locks, CancellationToken ct)
+    {
+        var results = new List<GateResult>();
+        var logs = new List<string?>();
+        if (diff.ChangedPaths.Count == 0)
+        {
+            return (results, logs);
+        }
+
+        foreach (var (gate, i) in gates.Select((g, i) => (g, i)))
+        {
+            var log = Path.Combine(request.Artifacts.LogsDirectory, $"{label}.gate{i}.log");
+            var gateRun = await gate.ExecuteAsync(workdir, log, ct);
+            results.Add(CommandGate.Evaluate(gateRun, baseline.GetValueOrDefault(gate.Name)));
+            logs.Add(log);
+        }
+
+        if (request.UseGates && locks.Count > 0)
+        {
+            results.Add(LockedRegionGate.Evaluate(workdir, locks));
+            logs.Add(null);
+        }
+
+        return (results, logs);
+    }
+
+    private sealed record TakeoverResult(bool Success, string Note);
+
+    /// <summary>
+    /// The architect fixes the failing unit with search/replace edits (the worker's changes stay in place), the full gate
+    /// suite re-runs, and on success the edit is locked, a handoff is written and the unit is committed.
+    /// </summary>
+    private async Task<TakeoverResult> TakeOverAsync(
+        RunRequest request, WorkUnit unit, RunWorkspace workspace, string unitStart, UnitState state, Decision decision,
+        UnitDiff diff, List<GateResult> gateResults, List<CommandGate> gates, Dictionary<string, GateRun> baseline,
+        List<LockedRegion> locks, List<Handoff> handoffs, BudgetGuard budget, IRunObserver observer, CancellationToken ct)
+    {
+        var policy = request.Policy;
+        var artifacts = request.Artifacts;
+        var model = request.ArchitectModel ?? policy.Models.Architect;
+        state.Takeovers++;
+        ledger.UpsertUnit(request.RunId, unit.Id, unit.Title, "takeover", state.Attempts, state.Takeovers);
+        observer.Stage($"Takeover: the architect ({model}) steps in on {unit.Id} ({decision.Reason})");
+
+        var files = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var path in diff.ChangedPaths.Concat(unit.Files).Distinct(StringComparer.Ordinal))
+        {
+            var full = Path.Combine(workspace.Path, path);
+            if (File.Exists(full) && new FileInfo(full).Length <= 200_000)
+            {
+                files[path] = await File.ReadAllTextAsync(full, ct);
+            }
+        }
+
+        var repoFiles = (await _git.RunAsync(workspace.Path, ["ls-files", "--cached", "--others", "--exclude-standard"], ct))
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var failure = BriefWriter.Feedback(decision.Reason, gateResults);
+
+        string? problem = null;
+        TakeoverReply? reply = null;
+        ApplyResult? applied = null;
+        for (var ask = 1; ask <= 2; ask++)
+        {
+            var prompt = TakeoverPrompt.Build(request.Contract, unit, state.Attempts, decision.Reason, diff.Patch, failure, files, repoFiles, locks, problem);
+            ProviderResponse response;
+            try
+            {
+                response = await architect!.CompleteAsync(new ProviderRequest(model, TakeoverPrompt.System, prompt), ct);
+            }
+            catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or System.ClientModel.ClientResultException)
+            {
+                return new TakeoverResult(false, $"the architect call failed: {ex.Message}");
+            }
+
+            RecordArchitectCall(request.RunId, unit.Id, response, budget);
+            artifacts.WriteLog($"{unit.Id}-takeover{ask}.reply.md", response.Text);
+            if (budget.Exhausted)
+            {
+                return new TakeoverResult(false, "budget exhausted");
+            }
+
+            reply = TakeoverPrompt.Parse(response.Text);
+            applied = EditApplier.Apply(workspace.Path, reply.Edits);
+            if (applied.Ok)
+            {
+                break;
+            }
+
+            problem = string.Join("\n", applied.Errors);
+        }
+
+        if (applied is not { Ok: true } || reply is null)
+        {
+            return new TakeoverResult(false, $"the architect's edits could not be applied: {problem}");
+        }
+
+        var newDiff = await workspace.DiffAsync(unitStart, ct);
+        if (newDiff.Patch.Length > 0)
+        {
+            artifacts.WriteLog($"{unit.Id}-takeover.diff", newDiff.Patch);
+        }
+
+        var (after, afterLogs) = await RunGatesAsync(request, $"{unit.Id}-takeover", workspace.Path, newDiff, gates, baseline, locks, ct);
+        var blocking = after.Where(g => g.Blocking).Select(g => g.Gate).ToList();
+        var attemptId = ledger.RecordAttempt(new AttemptRecord
+        {
+            RunId = request.RunId,
+            UnitId = unit.Id,
+            Number = state.Attempts + 1,
+            Executor = "architect",
+            Model = model,
+            ExitCode = 0,
+            Duration = TimeSpan.Zero,
+            DiffLines = newDiff.TotalLines,
+            Decision = blocking.Count == 0 ? DecisionKind.Accept : DecisionKind.Fail,
+            Reason = blocking.Count == 0 ? "takeover: gates pass" : $"takeover: gate(s) still failing: {string.Join(", ", blocking)}",
+        });
+        for (var i = 0; i < after.Count; i++)
+        {
+            ledger.RecordGateResult(attemptId, after[i], afterLogs[i]);
+        }
+
+        artifacts.Append("takeover", new
+        {
+            unit = unit.Id,
+            trigger = decision.Trigger,
+            files = applied.Files,
+            gates = after.Select(g => new { g.Gate, g.Status }),
+            ok = blocking.Count == 0,
+        });
+        if (blocking.Count > 0)
+        {
+            return new TakeoverResult(false, $"gate(s) still failing after the architect's edit: {string.Join(", ", blocking)}");
+        }
+
+        var newLocks = reply.Edits
+            .Where(e => !string.IsNullOrWhiteSpace(e.Replace))
+            .Select(e => new LockedRegion(e.Path.Replace('\\', '/').TrimStart('/'), e.Replace))
+            .ToList();
+        locks.AddRange(newLocks);
+
+        var handoff = new Handoff
+        {
+            UnitId = unit.Id,
+            UnitTitle = unit.Title,
+            Files = applied.Files,
+            Summary = reply.Summary ?? "the architect corrected this unit",
+            Why = reply.Why ?? decision.Reason,
+            Locked = newLocks,
+            MustFollow = request.Contract.Rules.Select(r => $"{r.Id}: {r.Text}").ToList(),
+        };
+        handoffs.Add(handoff);
+        var order = ContractValidator.Order(request.Contract).ToList();
+        var next = order.SkipWhile(u => u.Id != unit.Id).Skip(1).FirstOrDefault();
+        var yaml = HandoffWriter.ToYaml(handoff, next is null ? null : $"{next.Id}: {next.Title}");
+        artifacts.WriteFile("handoff.yaml", yaml);
+        artifacts.WriteFile($"handoff-{unit.Id}.yaml", yaml);
+
+        await workspace.CommitAsync($"taskrail({unit.Id}): {unit.Title} [architect takeover]", ct);
+        return new TakeoverResult(true, handoff.Summary);
+    }
+
+    private void RecordArchitectCall(string runId, string unitId, ProviderResponse response, BudgetGuard budget)
+    {
+        ledger.RecordLlmCall(new LlmCallRecord
+        {
+            RunId = runId,
+            UnitId = unitId,
+            Role = LlmRole.Architect,
+            Model = response.Model,
+            InputTokens = response.InputTokens,
+            OutputTokens = response.OutputTokens,
+            CachedTokens = response.CachedTokens,
+            Usd = response.Usd ?? 0,
+            Source = response.Usd is null ? CostSource.Estimated : CostSource.Metered,
+        });
+        budget.Add(response.Usd ?? 0);
+    }
+
+    /// <summary>Applies strategy limits on top of the supervisor's policy decision, for escalations that are not taken.</summary>
+    internal static Decision Constrain(Decision decision, RunRequest request, UnitState state, int maxAttempts, bool architectAvailable)
     {
         if (decision.Kind is DecisionKind.Takeover or DecisionKind.Split)
         {
-            return request.AllowEscalation
-                ? new Decision(DecisionKind.Fail, $"{decision.Reason}; {decision.Kind.ToString().ToLowerInvariant()} lands in M2")
-                : new Decision(DecisionKind.Fail, $"{decision.Reason}; no architect escalation in this strategy");
+            if (!request.AllowEscalation)
+            {
+                return new Decision(DecisionKind.Fail, $"{decision.Reason}; no architect escalation in this strategy");
+            }
+
+            if (decision.Kind == DecisionKind.Split)
+            {
+                return new Decision(DecisionKind.Fail, $"{decision.Reason}; splitting an oversized unit is not implemented yet");
+            }
+
+            if (!decision.CanTakeOver)
+            {
+                return new Decision(DecisionKind.Fail, $"{decision.Reason}; this needs a human decision, not an architect edit");
+            }
+
+            var why = !architectAvailable ? "no architect provider" : "takeover limit reached for this unit";
+            return new Decision(DecisionKind.Fail, $"{decision.Reason}; takeover unavailable ({why})");
         }
 
         if (decision.Kind == DecisionKind.Retry && state.Attempts >= maxAttempts)

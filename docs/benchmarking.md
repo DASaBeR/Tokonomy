@@ -18,7 +18,7 @@ A cheap run that fails is not a saving: its cost is still in the numerator.
 | 3 | Architect plan + cheap worker, no gates | Does the split help by itself? |
 | 4 | Architect plan + cheap worker + gates + supervision | Does the full approach earn its complexity? |
 
-The decision after M3 compares **4 vs 1b** (the architect/worker split's own value) and **4 vs 1** (overall). Until takeover lands in M2, strategy 4 fails a unit wherever it would escalate.
+The decision after M3 compares **4 vs 1b** (the architect/worker split's own value) and **4 vs 1** (overall). Strategy 4 includes architect takeover (see [config.md](config.md#architect-takeover-strategy-4)); results recorded before takeover existed are not comparable with later ones.
 
 ## Writing a taskset
 

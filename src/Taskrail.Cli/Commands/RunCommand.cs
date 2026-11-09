@@ -3,8 +3,10 @@ using System.Globalization;
 using Spectre.Console;
 using Spectre.Console.Cli;
 using Taskrail.Cli.Infrastructure;
+using Taskrail.Core.Abstractions;
 using Taskrail.Core.Model;
 using Taskrail.Core.Supervision;
+using Taskrail.Llm.Providers;
 using Taskrail.Runtime.Git;
 using Taskrail.Runtime.Ledger;
 using Taskrail.Runtime.Orchestration;
@@ -68,7 +70,20 @@ public sealed class RunCommand(IAnsiConsole console, IProcessRunner runner, Serv
         var executor = config.Executors.Executors[executorName];
 
         console.MarkupLine($"Run [bold]{runId}[/]  strategy {strategy.Id} ({Markup.Escape(strategy.Description)})  executor {Markup.Escape(executorName)}");
-        var orchestrator = new RunOrchestrator(runner, ledger, new Supervisor(), services.ExecutorFactory);
+        IProvider? architect = null;
+        if (strategy.AllowEscalation)
+        {
+            try
+            {
+                architect = services.ProviderFactory(config, Services.LoadPrices(config));
+            }
+            catch (MissingApiKeyException ex)
+            {
+                Output.Warn(console, $"{ex.Message} Takeover is disabled for this run.");
+            }
+        }
+
+        var orchestrator = new RunOrchestrator(runner, ledger, new Supervisor(), services.ExecutorFactory, architect: architect);
         RunOutcome outcome;
         try
         {
@@ -151,4 +166,9 @@ internal sealed class ConsoleObserver(IAnsiConsole console) : IRunObserver
     }
 
     public void Warning(string message) => Output.Warn(console, message);
+
+    public void TakeoverFinished(WorkUnit unit, bool success, string note) =>
+        console.MarkupLine(success
+            ? $"  [green]architect takeover succeeded[/] [grey]{Markup.Escape(note)}[/]"
+            : $"  [red]architect takeover failed[/] [grey]{Markup.Escape(note)}[/]");
 }
