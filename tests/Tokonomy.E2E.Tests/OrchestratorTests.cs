@@ -65,6 +65,27 @@ public sealed class OrchestratorTests : IDisposable
     }
 
     [Fact]
+    public async Task Usage_reported_by_the_executor_is_recorded_as_estimated_worker_cost()
+    {
+        var executor = new FakeExecutor(FakeExecutor.Write("app.txt", "feature v2\n"))
+        {
+            Usage = [new WorkerUsage("claude-haiku-5-5", 1000, 200, 500, 0.01m)],
+        };
+        var contract = new Contract
+        {
+            Task = "Add the feature",
+            Units = [new WorkUnit { Id = "U1", Title = "Feature", Spec = "Add 'feature' to app.txt" }],
+        };
+
+        var outcome = await Run(contract, PolicyWithGate(), executor, Strategy.Supervised);
+
+        Assert.Equal(RunStatus.Pass, outcome.Status);
+        var run = _ledger.GetRun("run-1")!;
+        Assert.Equal(CostSource.Estimated, run.CostSource);
+        Assert.Equal(0.01m, run.TotalUsd);
+    }
+
+    [Fact]
     public async Task Supervised_run_retries_with_gate_feedback_then_commits_each_unit()
     {
         var executor = new FakeExecutor(

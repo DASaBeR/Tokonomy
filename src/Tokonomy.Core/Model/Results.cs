@@ -20,7 +20,13 @@ public sealed record RunResult
     public bool TimedOut { get; init; }
     public string StdoutPath { get; init; } = "";
     public string StderrPath { get; init; } = "";
+
+    /// <summary>LLM usage the executor itself reported (see <c>usage_format</c>); empty when it reports none.</summary>
+    public IReadOnlyList<WorkerUsage> Usage { get; init; } = [];
 }
+
+/// <summary>Tokens and cost an executor reported for one model during an attempt. <c>Usd</c> is null when unknown.</summary>
+public sealed record WorkerUsage(string Model, long InputTokens, long OutputTokens, long CachedTokens, decimal? Usd);
 
 public enum GateStatus
 {

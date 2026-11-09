@@ -196,6 +196,25 @@ public static class Scaffolder
               reports_tokens: true
               permission_modes: true
               proxy_routable: true
+
+          claude-code-sub:
+            # Claude Code on a subscription login (no API key). No proxy and no endpoint override, so the login keeps
+            # working; usage and cost come from Claude Code's own JSON output and are recorded as estimated.
+            # Check your plan's terms before running automated batches. Smoke-tested against Claude Code 2.1.316.
+            cmd: ["claude", "-p", "{prompt}", "--output-format", "json", "--permission-mode", "acceptEdits", "--no-session-persistence"]
+            model_args: ["--model", "{model}"]
+            brief_file: CLAUDE.md
+            version_cmd: ["claude", "--version"]
+            tested_version: "2.1.316"
+            usage_format: claude-json
+            capabilities:
+              headless: true
+              model_override: true
+              structured_output: true
+              session_resume: false
+              reports_tokens: true
+              permission_modes: true
+              proxy_routable: false
         """;
 
     internal const string PricesYaml = """

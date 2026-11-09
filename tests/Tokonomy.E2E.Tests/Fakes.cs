@@ -16,12 +16,15 @@ internal sealed class FakeExecutor(params Action<Brief, string>[] script) : IExe
 
     public List<(Brief Brief, string? Model)> Calls { get; } = [];
 
+    /// <summary>Usage the fake reports on every attempt, like an executor with a usage_format.</summary>
+    public IReadOnlyList<WorkerUsage> Usage { get; init; } = [];
+
     public Task<RunResult> RunAsync(Brief brief, string workdir, string? model, TimeSpan timeout, CancellationToken ct)
     {
         Calls.Add((brief, model));
         var action = script[Math.Min(_calls++, script.Length - 1)];
         action(brief, workdir);
-        return Task.FromResult(new RunResult { ExitCode = 0, Duration = TimeSpan.FromMilliseconds(5) });
+        return Task.FromResult(new RunResult { ExitCode = 0, Duration = TimeSpan.FromMilliseconds(5), Usage = Usage });
     }
 
     public static Action<Brief, string> Write(string file, string content) =>

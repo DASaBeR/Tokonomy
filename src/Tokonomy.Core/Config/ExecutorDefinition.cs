@@ -36,6 +36,13 @@ public sealed class ExecutorDefinition
     /// </summary>
     public Dictionary<string, string> Files { get; set; } = [];
 
+    /// <summary>
+    /// How to read usage from the agent's stdout when its traffic is not metered by the proxy. Supported:
+    /// <c>claude-json</c> (Claude Code <c>--output-format json</c>). Reported cost is recorded as estimated,
+    /// because it is the agent's own API-equivalent figure (a subscription login is not billed per token).
+    /// </summary>
+    public string? UsageFormat { get; set; }
+
     public ExecutorCapabilities Capabilities { get; set; } = new();
 }
 

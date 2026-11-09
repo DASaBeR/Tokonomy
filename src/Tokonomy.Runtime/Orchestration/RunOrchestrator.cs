@@ -239,6 +239,7 @@ public sealed class RunOrchestrator(
 
             var run = await executor.RunAsync(brief, workspace.Path, request.WorkerModel,
                 TimeSpan.FromSeconds(policy.Escalation.WorkerTimeoutSeconds), linked.Token);
+            RecordReportedUsage(request.RunId, unit.Id, run, budget);
 
             var diff = await workspace.DiffAsync(unitStart, ct);
             state.ChangedPaths = diff.ChangedPaths;
@@ -488,6 +489,27 @@ public sealed class RunOrchestrator(
 
         await workspace.CommitAsync($"tokonomy({unit.Id}): {unit.Title} [architect takeover]", ct);
         return new TakeoverResult(true, handoff.Summary);
+    }
+
+    /// <summary>Records usage the executor reported itself (not metered by the proxy); always marked estimated.</summary>
+    private void RecordReportedUsage(string runId, string unitId, RunResult run, BudgetGuard budget)
+    {
+        foreach (var usage in run.Usage)
+        {
+            ledger.RecordLlmCall(new LlmCallRecord
+            {
+                RunId = runId,
+                UnitId = unitId,
+                Role = LlmRole.Worker,
+                Model = usage.Model,
+                InputTokens = usage.InputTokens,
+                OutputTokens = usage.OutputTokens,
+                CachedTokens = usage.CachedTokens,
+                Usd = usage.Usd ?? 0,
+                Source = CostSource.Estimated,
+            });
+            budget.Add(usage.Usd ?? 0);
+        }
     }
 
     private void RecordArchitectCall(string runId, string unitId, ProviderResponse response, BudgetGuard budget)
