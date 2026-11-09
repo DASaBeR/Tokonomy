@@ -34,6 +34,14 @@ public sealed class BenchSettings : CommonSettings
     [Description("Only run these task ids (repeatable).")]
     public string[]? Tasks { get; init; }
 
+    [CommandOption("--worker <MODEL>")]
+    [Description("Override models.worker for this run (needs a price in prices.yaml).")]
+    public string? Worker { get; init; }
+
+    [CommandOption("--strong <MODEL>")]
+    [Description("Override models.architect, the strong model, for this run (needs a price in prices.yaml).")]
+    public string? Strong { get; init; }
+
     [CommandOption("--max-usd <USD>")]
     [Description("Stop starting trials once this much has been spent in total. Each trial is also capped at what remains.")]
     public decimal? MaxUsd { get; init; }
@@ -81,9 +89,41 @@ public sealed class BenchCommand(IAnsiConsole console, IProcessRunner runner, Se
         }
 
         var models = config.Policy.Models;
+        if (!string.IsNullOrWhiteSpace(settings.Worker))
+        {
+            models.Worker = settings.Worker;
+        }
+
+        if (!string.IsNullOrWhiteSpace(settings.Strong))
+        {
+            models.Architect = settings.Strong;
+        }
+
         if (string.IsNullOrWhiteSpace(models.Architect) || (strategies.Any(s => !s.WorkerIsStrong) && string.IsNullOrWhiteSpace(models.Worker)))
         {
             Output.Error(console, $"Set models.architect and models.worker in {Path.Combine(config.ConfigDirectory, TaskrailConfig.PolicyFile)}.");
+            return ExitCodes.ConfigError;
+        }
+
+        var prices = Services.LoadPrices(config);
+
+        // A model without a price makes every call cost $0 in the ledger, which silently disables the spending caps.
+        var used = new List<string>();
+        if (strategies.Any(s => s.UsesArchitectPlan || s.WorkerIsStrong))
+        {
+            used.Add(models.Architect);
+        }
+
+        if (strategies.Any(s => !s.WorkerIsStrong))
+        {
+            used.Add(models.Worker);
+        }
+
+        var unpriced = used.Distinct(StringComparer.OrdinalIgnoreCase).Where(m => !prices.Has(m)).ToList();
+        if (unpriced.Count > 0)
+        {
+            Output.Error(console, $"No price in prices.yaml for: {string.Join(", ", unpriced)}. " +
+                                  "Without a price the spending caps cannot be enforced; add an entry (USD per million tokens).");
             return ExitCodes.ConfigError;
         }
 
@@ -109,7 +149,6 @@ public sealed class BenchCommand(IAnsiConsole console, IProcessRunner runner, Se
             return ExitCodes.Ok;
         }
 
-        var prices = Services.LoadPrices(config);
         var key = services.GetEnvironmentVariable(config.Policy.Provider.ApiKeyEnv);
         IProvider? provider = strategies.Any(s => s.UsesArchitectPlan) ? services.ProviderFactory(config, prices) : null;
 

@@ -43,6 +43,11 @@ public sealed class WorkflowTests : IDisposable
             gates:
               - {"{"} name: has-feature, cmd: {Shell.YamlArray(Shell.FileContains("app.txt", "feature"))} {"}"}
             """);
+        File.WriteAllText(Path.Combine(ConfigDir, "prices.yaml"), """
+            models:
+              strong-model: { input: 2, output: 10 }
+              cheap-model: { input: 0.1, output: 0.5 }
+            """);
         File.WriteAllText(Path.Combine(ConfigDir, "executors.yaml"), """
             executors:
               fake:
@@ -125,6 +130,37 @@ public sealed class WorkflowTests : IDisposable
         {
             Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
             Directory.Delete(benchDir, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("--worker", "unpriced-model")]
+    [InlineData("--strong", "unpriced-model")]
+    public async Task Bench_refuses_models_without_a_price_because_the_spending_cap_would_not_work(string flag, string model)
+    {
+        WriteConfig();
+        var tasksFile = Path.Combine(_repo.Path, "..", Path.GetFileName(_repo.Path) + "-tasks.yaml");
+        File.WriteAllText(tasksFile, $"""
+            config: {System.Text.Json.JsonSerializer.Serialize(ConfigDir)}
+            tasks:
+              - id: t1
+                repo: {System.Text.Json.JsonSerializer.Serialize(_repo.Path)}
+                prompt: change app.txt
+                acceptance:
+                  cmd: {Shell.YamlArray(Shell.FileContains("app.txt", "feature"))}
+            """);
+        try
+        {
+            // Strategy 1b uses the strong model as worker; strategy 2 uses the cheap one: cover both overrides.
+            var strategy = flag == "--strong" ? "1b" : "2";
+            var (exit, output) = await Cli(new Services(), "bench", tasksFile, "--strategies", strategy, "--repeat", "1", flag, model, "--max-usd", "1");
+
+            Assert.Equal(3, exit);
+            Assert.Contains("No price in prices.yaml for: unpriced-model", output.ReplaceLineEndings(" ").Replace("  ", " "), StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(tasksFile);
         }
     }
 

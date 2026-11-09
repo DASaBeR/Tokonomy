@@ -24,6 +24,12 @@ models:
       cache_write: 5
       output: 15
 
+  # A weaker, cheaper worker for probing where the cheap tier starts to fail.
+  gpt-5-nano:
+    input: 0.05
+    cached_input: 0.005
+    output: 0.4
+
   claude-haiku-5-5:
     input: 0.1
     cached_input: 0.01
