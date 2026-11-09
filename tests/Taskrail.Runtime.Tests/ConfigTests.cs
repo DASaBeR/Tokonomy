@@ -84,6 +84,25 @@ public class ConfigLoaderTests
     }
 
     [Fact]
+    public void Opencode_adapter_uses_the_v1_config_shape_it_was_verified_with()
+    {
+        // OpenCode 1.19.5 (npm `opencode-ai`) rejects the V2 shape (`providers`/`permissions`) outright.
+        using var tmp = new TempDir();
+        var config = ConfigLoader.Load(Scaffolder.Init(tmp.Path, force: false).ConfigDirectory);
+
+        var opencode = config.Executors.Executors["opencode"];
+        var json = opencode.Files["opencode.json"];
+
+        Assert.Equal("1.19.5", opencode.TestedVersion);
+        Assert.Contains("\"provider\":", json, StringComparison.Ordinal);
+        Assert.Contains("\"permission\":", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"providers\"", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"permissions\"", json, StringComparison.Ordinal);
+        Assert.Contains("{proxy_url}", json, StringComparison.Ordinal);
+        Assert.Equal(["--model", "taskrail/{model}"], opencode.ModelArgs);
+    }
+
+    [Fact]
     public void Init_keeps_existing_files_unless_forced()
     {
         using var tmp = new TempDir();

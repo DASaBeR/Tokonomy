@@ -23,6 +23,17 @@ internal sealed class FakeUpstream(Func<HttpRequestMessage, string, HttpResponse
     public static HttpResponseMessage Json(string json) =>
         new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
 
+    public static HttpResponseMessage Status(HttpStatusCode status, string body = "{\"error\":{\"message\":\"nope\"}}", TimeSpan? retryAfter = null)
+    {
+        var response = new HttpResponseMessage(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+        if (retryAfter is { } delay)
+        {
+            response.Headers.RetryAfter = new RetryConditionHeaderValue(delay);
+        }
+
+        return response;
+    }
+
     public static HttpResponseMessage Sse(string events)
     {
         var content = new StringContent(events, Encoding.UTF8);
@@ -39,12 +50,19 @@ public class MeteringProxyTests
     });
 
     private static async Task<(MeteringProxy Proxy, List<UsageEvent> Usage, FakeUpstream Upstream)> Start(
-        Func<HttpRequestMessage, string, HttpResponseMessage> respond, Func<bool>? blocked = null)
+        Func<HttpRequestMessage, string, HttpResponseMessage> respond, Func<bool>? blocked = null, int maxRetries = 4)
     {
         var usage = new List<UsageEvent>();
         var upstream = new FakeUpstream(respond);
         var proxy = await MeteringProxy.StartAsync(
-            new ProxyOptions { Upstream = new Uri("https://upstream.example/api/v1"), UpstreamKey = "sk-real-key", Handler = upstream },
+            new ProxyOptions
+            {
+                Upstream = new Uri("https://upstream.example/api/v1"),
+                UpstreamKey = "sk-real-key",
+                Handler = upstream,
+                MaxRetries = maxRetries,
+                RetryBaseDelay = TimeSpan.Zero,
+            },
             Prices,
             e => { lock (usage) { usage.Add(e); } },
             blocked);
@@ -157,6 +175,106 @@ public class MeteringProxyTests
     }
 
     [Fact]
+    public async Task Retries_throttled_requests_resends_the_body_and_meters_only_the_success()
+    {
+        var calls = 0;
+        var (proxy, usage, upstream) = await Start((_, _) => ++calls <= 2
+            ? FakeUpstream.Status(HttpStatusCode.TooManyRequests, retryAfter: TimeSpan.Zero)
+            : FakeUpstream.Json("""{"model":"cheap","usage":{"prompt_tokens":10,"completion_tokens":5}}"""));
+        await using (proxy)
+        {
+            using var http = new HttpClient();
+            var response = await http.SendAsync(Post(proxy, "/v1/chat/completions", """{"model":"cheap","messages":[{"role":"user","content":"hi"}]}""", proxy.Token));
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal(3, upstream.Requests.Count);
+            Assert.Single(upstream.Requests.Select(r => r.Body).Distinct());
+            Assert.Contains("\"hi\"", upstream.Requests[2].Body, StringComparison.Ordinal);
+            Assert.Equal((10L, 5L), (Assert.Single(usage).InputTokens, usage[0].OutputTokens));
+        }
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.ServiceUnavailable)]
+    [InlineData((HttpStatusCode)529)]
+    public async Task Retries_overload_responses_too(HttpStatusCode status)
+    {
+        var calls = 0;
+        var (proxy, _, upstream) = await Start((_, _) => ++calls == 1 ? FakeUpstream.Status(status) : FakeUpstream.Json("{}"));
+        await using (proxy)
+        {
+            using var http = new HttpClient();
+            var response = await http.SendAsync(Post(proxy, "/v1/chat/completions", "{}", proxy.Token));
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal(2, upstream.Requests.Count);
+        }
+    }
+
+    [Fact]
+    public async Task Gives_up_after_max_retries_passes_the_error_through_and_does_not_meter()
+    {
+        var (proxy, usage, upstream) = await Start(
+            (_, _) => FakeUpstream.Status(HttpStatusCode.TooManyRequests, """{"error":{"message":"slow down"}}""", TimeSpan.Zero), maxRetries: 2);
+        await using (proxy)
+        {
+            using var http = new HttpClient();
+            var response = await http.SendAsync(Post(proxy, "/v1/chat/completions", """{"model":"cheap"}""", proxy.Token));
+
+            Assert.Equal(HttpStatusCode.TooManyRequests, response.StatusCode);
+            Assert.Contains("slow down", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+            Assert.Equal(3, upstream.Requests.Count);
+            Assert.Empty(usage);
+        }
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    [InlineData(HttpStatusCode.BadRequest)]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    public async Task Failed_calls_are_not_retried_or_metered(HttpStatusCode status)
+    {
+        var (proxy, usage, upstream) = await Start((_, _) => FakeUpstream.Status(status));
+        await using (proxy)
+        {
+            using var http = new HttpClient();
+            var response = await http.SendAsync(Post(proxy, "/v1/chat/completions", """{"model":"cheap"}""", proxy.Token));
+
+            Assert.Equal(status, response.StatusCode);
+            Assert.Single(upstream.Requests);
+            Assert.Empty(usage);
+        }
+    }
+
+    [Fact]
+    public async Task Prices_cache_writes_and_long_context_requests()
+    {
+        var prices = new PriceTable(new Dictionary<string, ModelPrice>
+        {
+            ["claude"] = new()
+            {
+                Input = 0.10m, CachedInput = 0.01m, CacheWrite = 0.20m, Output = 0.50m,
+                AboveInputTokens = 100_000,
+                Above = new ModelPriceTier { Input = 0.50m, CachedInput = 0.05m, CacheWrite = 1.00m, Output = 2.50m },
+            },
+        });
+        var usage = new List<UsageEvent>();
+        var upstream = new FakeUpstream((_, _) => FakeUpstream.Json(
+            """{"model":"claude","usage":{"input_tokens":50000,"cache_read_input_tokens":40000,"cache_creation_input_tokens":20000,"output_tokens":1000}}"""));
+        await using var proxy = await MeteringProxy.StartAsync(
+            new ProxyOptions { Upstream = new Uri("https://upstream.example/v1"), UpstreamKey = "k", Handler = upstream }, prices, usage.Add);
+
+        using var http = new HttpClient();
+        await http.SendAsync(Post(proxy, "/v1/messages", """{"model":"claude"}""", proxy.Token));
+
+        var e = Assert.Single(usage);
+        // 110k total input is above the 100k threshold, so the "above" rates apply to everything:
+        // 50k uncached*0.5 + 40k cached*0.05 + 20k write*1.0 + 1k out*2.5 = 25,000 + 2,000 + 20,000 + 2,500 per million
+        Assert.Equal((110_000L, 40_000L, 20_000L), (e.InputTokens, e.CachedTokens, e.CacheWriteTokens));
+        Assert.Equal(0.0495m, e.Usd);
+    }
+
+    [Fact]
     public async Task Unpriced_model_reports_tokens_without_cost()
     {
         var (proxy, usage, _) = await Start((_, _) => FakeUpstream.Json("""{"usage":{"prompt_tokens":1,"completion_tokens":1}}"""));
@@ -167,6 +285,38 @@ public class MeteringProxyTests
 
             Assert.Null(Assert.Single(usage).Usd);
         }
+    }
+}
+
+public class UsageAccumulatorTests
+{
+    [Fact]
+    public void Reads_anthropic_cache_writes_and_counts_them_in_input()
+    {
+        var usage = new UsageAccumulator();
+        usage.AddJson("""{"usage":{"input_tokens":10,"cache_read_input_tokens":20,"cache_creation_input_tokens":30,"output_tokens":4}}""");
+
+        Assert.Equal((60L, 20L, 30L, 4L), (usage.InputTokens, usage.CachedTokens, usage.CacheWriteTokens, usage.OutputTokens));
+    }
+
+    [Theory]
+    [InlineData("""{"usage":{"prompt_tokens":100,"completion_tokens":1,"prompt_tokens_details":{"cached_tokens":10,"cache_write_tokens":30}}}""")]
+    [InlineData("""{"usage":{"prompt_tokens":100,"completion_tokens":1,"prompt_tokens_details":{"cached_tokens":10},"cache_creation_input_tokens":30}}""")]
+    public void Reads_openai_style_cache_writes_under_either_name(string json)
+    {
+        var usage = new UsageAccumulator();
+        usage.AddJson(json);
+
+        Assert.Equal((100L, 10L, 30L), (usage.InputTokens, usage.CachedTokens, usage.CacheWriteTokens));
+    }
+
+    [Fact]
+    public void No_usage_object_means_nothing_seen()
+    {
+        var usage = new UsageAccumulator();
+        usage.AddJson("""{"choices":[]}""");
+
+        Assert.False(usage.Seen);
     }
 }
 

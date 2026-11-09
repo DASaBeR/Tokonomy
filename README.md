@@ -4,7 +4,7 @@
 
 Taskrail is an open-source CLI that coordinates coding agents, routes work across models, enforces deterministic quality gates, and measures the real **cost per successful task**.
 
-> **Status: pre-alpha (M1).** Planning, supervised runs with gates and retries, the metering proxy, the cost ledger and the benchmark harness work. Not yet available: architect takeover and handoff (M2) and a second executor adapter (M3). The OpenCode adapter's flags have not yet been verified against a real install. "Taskrail" is a working name.
+> **Status: pre-alpha (M1).** Planning, supervised runs with gates and retries, the metering proxy, the cost ledger and the benchmark harness work. Not yet available: architect takeover and handoff (M2) and a second executor adapter (M3). The OpenCode adapter is verified against OpenCode 1.19.5 using a fake LLM server; it has not yet been run against a real provider. "Taskrail" is a working name.
 
 ## The hypothesis
 

@@ -13,6 +13,10 @@ public sealed class UsageAccumulator
     public long InputTokens { get; private set; }
     public long OutputTokens { get; private set; }
     public long CachedTokens { get; private set; }
+
+    /// <summary>Tokens written to the prompt cache (billed at a different rate by some providers). Part of <see cref="InputTokens"/>.</summary>
+    public long CacheWriteTokens { get; private set; }
+
     public string? Model { get; private set; }
     public bool Seen { get; private set; }
 
@@ -70,7 +74,12 @@ public sealed class UsageAccumulator
             // OpenAI: prompt_tokens includes cached tokens.
             InputTokens = Math.Max(InputTokens, prompt);
             OutputTokens = Math.Max(OutputTokens, Num(usage, "completion_tokens") ?? 0);
-            CachedTokens = Math.Max(CachedTokens, Num(usage["prompt_tokens_details"] as JsonObject, "cached_tokens") ?? 0);
+            var details = usage["prompt_tokens_details"] as JsonObject;
+            CachedTokens = Math.Max(CachedTokens, Num(details, "cached_tokens") ?? 0);
+
+            // Gateways that front Anthropic models report cache writes under varying names; take whichever is present.
+            var written = Num(details, "cache_write_tokens") ?? Num(details, "cache_creation_tokens") ?? Num(usage, "cache_creation_input_tokens") ?? 0;
+            CacheWriteTokens = Math.Max(CacheWriteTokens, written);
             return;
         }
 
@@ -82,6 +91,7 @@ public sealed class UsageAccumulator
         {
             InputTokens = Math.Max(InputTokens, input.Value + cacheRead + cacheWrite);
             CachedTokens = Math.Max(CachedTokens, cacheRead);
+            CacheWriteTokens = Math.Max(CacheWriteTokens, cacheWrite);
         }
 
         OutputTokens = Math.Max(OutputTokens, Num(usage, "output_tokens") ?? 0);

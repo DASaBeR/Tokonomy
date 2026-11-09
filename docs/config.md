@@ -94,7 +94,7 @@ executors:
       TASKRAIL_PROXY_TOKEN: "{proxy_token}"
     files:                                 # written for one attempt, then restored; never committed
       opencode.json: |
-        { "providers": { "taskrail": { "settings": { "baseURL": "{proxy_url}" } } } }
+        { "provider": { "taskrail": { "options": { "baseURL": "{proxy_url}" } } } }
     capabilities:
       headless: true
       model_override: true

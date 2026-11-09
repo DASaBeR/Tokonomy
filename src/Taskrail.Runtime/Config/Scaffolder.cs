@@ -143,33 +143,30 @@ public static class Scaffolder
         executors:
           opencode:
             # Per opencode.ai/docs (V2): prompt is positional; project config in opencode.json supports {env:VAR}.
-            # UNVERIFIED: `run` flags are not documented. Check `opencode run --help` for the model flag and
-            # confirm the provider/permissions shape below, then set tested_version.
+            # Verified against OpenCode 1.19.5 (the `opencode-ai` npm package, "V1"): `run -m provider/model`,
+            # V1 config shape (`provider`/`permission`). The V2 docs shape is rejected by this version.
             cmd: ["opencode", "run", "{prompt}"]
             model_args: ["--model", "taskrail/{model}"]
             brief_file: AGENTS.md
             version_cmd: ["opencode", "--version"]
-            tested_version: null
+            tested_version: "1.19.5"
             env:
               TASKRAIL_PROXY_TOKEN: "{proxy_token}"
             files:
               opencode.json: |
                 {
                   "$schema": "https://opencode.ai/config.json",
-                  "providers": {
+                  "autoupdate": false,
+                  "share": "disabled",
+                  "provider": {
                     "taskrail": {
+                      "npm": "@ai-sdk/openai-compatible",
                       "name": "Taskrail metering proxy",
-                      "env": ["TASKRAIL_PROXY_TOKEN"],
-                      "package": "@opencode/ai/providers/openai-compatible",
-                      "settings": { "baseURL": "{proxy_url}", "apiKey": "{env:TASKRAIL_PROXY_TOKEN}" },
+                      "options": { "baseURL": "{proxy_url}", "apiKey": "{env:TASKRAIL_PROXY_TOKEN}" },
                       "models": { "{model}": { "name": "{model}" } }
                     }
                   },
-                  "permissions": [
-                    { "action": "edit", "resource": "*", "effect": "allow" },
-                    { "action": "shell", "resource": "*", "effect": "allow" },
-                    { "action": "external_directory", "resource": "*", "effect": "deny" }
-                  ]
+                  "permission": { "edit": "allow", "bash": "allow", "webfetch": "deny", "external_directory": "deny" }
                 }
             capabilities:
               headless: true

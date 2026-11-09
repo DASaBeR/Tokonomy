@@ -13,8 +13,12 @@ using Taskrail.Llm.Providers;
 
 namespace Taskrail.Llm.Proxy;
 
-/// <summary>One metered upstream call.</summary>
-public sealed record UsageEvent(string Model, long InputTokens, long OutputTokens, long CachedTokens, decimal? Usd, bool Reported, int Status);
+/// <summary>
+/// One metered upstream call that succeeded. Failed calls (4xx/5xx) are not recorded: providers do not bill them.
+/// <see cref="InputTokens"/> is the total prompt size and includes cached and cache-write tokens.
+/// </summary>
+public sealed record UsageEvent(
+    string Model, long InputTokens, long OutputTokens, long CachedTokens, decimal? Usd, bool Reported, int Status, long CacheWriteTokens = 0);
 
 public sealed record ProxyOptions
 {
@@ -23,6 +27,15 @@ public sealed record ProxyOptions
 
     /// <summary>The real provider key. Lives only in this process.</summary>
     public required string UpstreamKey { get; init; }
+
+    /// <summary>Retries after HTTP 429, 503 or 529 from the upstream (rate limits are low on entry-level plans).</summary>
+    public int MaxRetries { get; init; } = 4;
+
+    /// <summary>First backoff delay when the upstream sends no Retry-After; doubles each attempt, with jitter.</summary>
+    public TimeSpan RetryBaseDelay { get; init; } = TimeSpan.FromSeconds(1);
+
+    /// <summary>Upper bound for any single wait, including a Retry-After hint.</summary>
+    public TimeSpan MaxRetryDelay { get; init; } = TimeSpan.FromSeconds(30);
 
     /// <summary>Test hook.</summary>
     public HttpMessageHandler? Handler { get; init; }
@@ -130,40 +143,51 @@ public sealed class MeteringProxy : IAsyncDisposable
         }
 
         var target = new Uri(_options.Upstream.AbsoluteUri.TrimEnd('/') + path + ctx.Request.QueryString.Value);
-        using var request = new HttpRequestMessage(new HttpMethod(ctx.Request.Method), target);
 
         string? requestModel = null;
+        byte[]? requestBody = null;
         if (ctx.Request.ContentLength is > 0 || ctx.Request.Headers.TransferEncoding.Count > 0)
         {
             using var ms = new MemoryStream();
             await ctx.Request.Body.CopyToAsync(ms, ctx.RequestAborted);
-            var body = ms.ToArray();
-            (body, requestModel) = PrepareBody(body, path);
-            request.Content = new ByteArrayContent(body);
-            if (ctx.Request.ContentType is { } ct)
-            {
-                request.Content.Headers.TryAddWithoutValidation("Content-Type", ct);
-            }
+            (requestBody, requestModel) = PrepareBody(ms.ToArray(), path);
         }
 
-        foreach (var header in ctx.Request.Headers)
+        var forwarded = ctx.Request.Headers.Where(h => !SkippedRequestHeaders.Contains(h.Key)).ToList();
+        var contentType = ctx.Request.ContentType;
+        var method = new HttpMethod(ctx.Request.Method);
+
+        // The body is buffered, so the request can be rebuilt and resent when the upstream throttles us.
+        HttpRequestMessage Build()
         {
-            if (!SkippedRequestHeaders.Contains(header.Key))
+            var request = new HttpRequestMessage(method, target);
+            if (requestBody is not null)
+            {
+                request.Content = new ByteArrayContent(requestBody);
+                if (contentType is not null)
+                {
+                    request.Content.Headers.TryAddWithoutValidation("Content-Type", contentType);
+                }
+            }
+
+            foreach (var header in forwarded)
             {
                 request.Headers.TryAddWithoutValidation(header.Key, (IEnumerable<string>)header.Value!);
             }
-        }
 
-        request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + _options.UpstreamKey);
-        if (path.EndsWith("/messages", StringComparison.Ordinal))
-        {
-            request.Headers.TryAddWithoutValidation("x-api-key", _options.UpstreamKey);
+            request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + _options.UpstreamKey);
+            if (path.EndsWith("/messages", StringComparison.Ordinal))
+            {
+                request.Headers.TryAddWithoutValidation("x-api-key", _options.UpstreamKey);
+            }
+
+            return request;
         }
 
         HttpResponseMessage response;
         try
         {
-            response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ctx.RequestAborted);
+            response = await SendWithRetryAsync(Build, ctx.RequestAborted);
         }
         catch (HttpRequestException ex)
         {
@@ -187,13 +211,50 @@ public sealed class MeteringProxy : IAsyncDisposable
             await using var upstream = await response.Content.ReadAsStreamAsync(ctx.RequestAborted);
             await Relay(upstream, ctx.Response, usage, isSse, ctx.RequestAborted);
 
-            if (IsMeteredCall(ctx.Request.Method, path))
+            if (response.IsSuccessStatusCode && IsMeteredCall(ctx.Request.Method, path))
             {
                 var model = requestModel ?? usage.Model ?? "unknown";
-                var usd = usage.Seen ? _prices.Cost(model, usage.InputTokens, usage.OutputTokens, usage.CachedTokens) : null;
-                _onUsage(new UsageEvent(model, usage.InputTokens, usage.OutputTokens, usage.CachedTokens, usd, usage.Seen, (int)response.StatusCode));
+                var usd = usage.Seen
+                    ? _prices.Cost(model, usage.InputTokens, usage.OutputTokens, usage.CachedTokens, usage.CacheWriteTokens)
+                    : null;
+                _onUsage(new UsageEvent(
+                    model, usage.InputTokens, usage.OutputTokens, usage.CachedTokens, usd, usage.Seen, (int)response.StatusCode, usage.CacheWriteTokens));
             }
         }
+    }
+
+    private async Task<HttpResponseMessage> SendWithRetryAsync(Func<HttpRequestMessage> build, CancellationToken ct)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            using var request = build();
+            var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+            if (!IsRetryable(response.StatusCode) || attempt >= _options.MaxRetries)
+            {
+                return response;
+            }
+
+            var delay = RetryDelay(response, attempt);
+            response.Dispose();
+            await Task.Delay(delay, ct);
+        }
+    }
+
+    private static bool IsRetryable(HttpStatusCode status) =>
+        status is HttpStatusCode.TooManyRequests or HttpStatusCode.ServiceUnavailable or (HttpStatusCode)529;
+
+    private TimeSpan RetryDelay(HttpResponseMessage response, int attempt)
+    {
+        var max = _options.MaxRetryDelay;
+        if (response.Headers.RetryAfter?.Delta is { } hinted)
+        {
+            return hinted > max ? max : hinted;
+        }
+
+        var backoff = TimeSpan.FromTicks(_options.RetryBaseDelay.Ticks << Math.Min(attempt, 10));
+        var jitter = TimeSpan.FromTicks((long)(backoff.Ticks * (RandomNumberGenerator.GetInt32(0, 1000) / 1000.0) * 0.25));
+        var total = backoff + jitter;
+        return total > max ? max : total;
     }
 
     private static bool IsMeteredCall(string method, string path) =>

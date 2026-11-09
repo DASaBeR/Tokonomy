@@ -2,12 +2,14 @@
 # LLMs produce content; this file makes decisions.
 
 models:
-  architect: ""   # strong model, e.g. an OpenRouter model id
-  worker: ""      # cheap model passed to the executor as a model override
+  architect: claude-sonnet-5-5    # strong: plans (and, in strategies 1/1b, does the work)
+  worker: deepseek-v4.1-flash     # cheap: executes each unit via OpenCode
 
+# AvalAI (OpenAI-compatible). Entry-level rate limits are low: tier 1 allows claude-sonnet-5-5 only 2 requests/min,
+# which is fine for planning but too slow to use as the *worker* (strategies 1 and 1b). Raise your tier or pick another model.
 provider:
-  base_url: https://openrouter.ai/api/v1
-  api_key_env: OPENROUTER_API_KEY   # the variable NAME; the key never goes in this file
+  base_url: https://api.avalai.ir/v1
+  api_key_env: AVALAI_API_KEY   # the variable NAME; the key never goes in this file
 
 executors:
   default: opencode
@@ -30,7 +32,7 @@ escalation:
   worker_timeout_seconds: 1200
 
 budget:
-  max_usd_per_task: 1.00     # hard abort; these tasks are small
+  max_usd_per_task: 0.50     # hard abort; these tasks are small
   max_architect_token_share: 0.30
 
 isolation:

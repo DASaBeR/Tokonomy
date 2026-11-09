@@ -1,11 +1,29 @@
-# Model prices in USD per million tokens, used to cost architect calls and metered worker calls.
-# Taskrail ships no built-in prices: they change often. Fill in the models you use from your
-# provider's pricing page. Calls to models missing here are recorded with cost "estimated".
+# AvalAI prices in USD per million tokens, copied from each model's details page (standard rates).
+# Check them before a real benchmark: providers change prices and run promotions.
 #
-# models:
-#   "provider/model-id":
-#     input: 0.00
-#     output: 0.00
-#     cached_input: 0.00
+# above_input_tokens + above: when a request's total input exceeds the threshold, the whole request is billed at
+# the `above` rates. cache_write is the price of writing tokens to the prompt cache (defaults to input).
 
-models: {}
+models:
+  claude-sonnet-5-5:
+    input: 2
+    cached_input: 0.2
+    cache_write: 4
+    output: 10
+
+  claude-haiku-5-5:
+    input: 0.1
+    cached_input: 0.01
+    cache_write: 0.2
+    output: 0.5
+    above_input_tokens: 100000
+    above:
+      input: 0.5
+      cached_input: 0.05
+      cache_write: 1
+      output: 2.5
+
+  deepseek-v4.1-flash:
+    input: 0.15
+    cached_input: 0.003
+    output: 0.6

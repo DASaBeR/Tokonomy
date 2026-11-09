@@ -106,6 +106,59 @@ public class PriceTableTests
     public void Cached_price_defaults_to_input_price() =>
         Assert.Equal(0.2m + 0.8m, Table.Cost("vendor/cheap", 1_000_000, 1_000_000, 500_000));
 
+    // claude-haiku-5-5 on AvalAI, as published (USD per million tokens).
+    private const string HaikuYaml = """
+        models:
+          claude-haiku-5-5:
+            input: 0.1
+            cached_input: 0.01
+            cache_write: 0.2
+            output: 0.5
+            above_input_tokens: 100000
+            above:
+              input: 0.5
+              cached_input: 0.05
+              cache_write: 1
+              output: 2.5
+        """;
+
+    [Fact]
+    public void Long_context_requests_use_the_above_rates_for_the_whole_request()
+    {
+        using var tmp = new TempDir();
+        var table = PriceTable.Load(tmp.File("prices.yaml", HaikuYaml));
+
+        // At the threshold: base rates. 100k * 0.1 + 1k * 0.5 = 10.5 per million → 0.0105
+        Assert.Equal(0.0105m, table.Cost("claude-haiku-5-5", 100_000, 1_000, 0));
+        // One token over: every token is repriced. 100,001 * 0.5 + 1k * 2.5, per million.
+        Assert.Equal((100_001m * 0.5m + 1_000m * 2.5m) / 1_000_000m, table.Cost("claude-haiku-5-5", 100_001, 1_000, 0));
+    }
+
+    [Fact]
+    public void Cache_writes_have_their_own_rate_and_default_to_input()
+    {
+        using var tmp = new TempDir();
+        var table = PriceTable.Load(tmp.File("prices.yaml", HaikuYaml));
+
+        // 50k uncached * 0.1 + 30k cached * 0.01 + 20k write * 0.2 + 1k out * 0.5 = 5000 + 300 + 4000 + 500 per million
+        Assert.Equal(0.0098m, table.Cost("claude-haiku-5-5", 100_000, 1_000, 30_000, 20_000));
+        // A model with no cache_write rate bills writes like normal input.
+        Assert.Equal(0.2m + 0.8m, Table.Cost("vendor/cheap", 1_000_000, 1_000_000, 0, cacheWriteTokens: 500_000));
+    }
+
+    [Theory]
+    [InlineData("above_input_tokens: 1000")]
+    [InlineData("above: { input: 1, output: 1 }")]
+    [InlineData("above_input_tokens: 0\n    above: { input: 1, output: 1 }")]
+    [InlineData("cache_write: -1")]
+    public void Invalid_tier_or_negative_prices_are_rejected(string extra)
+    {
+        using var tmp = new TempDir();
+        var path = tmp.File("prices.yaml", $"models:\n  m:\n    input: 1\n    output: 1\n    {extra}\n");
+
+        Assert.Throws<InvalidDataException>(() => PriceTable.Load(path));
+    }
+
     [Fact]
     public void Unknown_model_has_no_cost() => Assert.Null(Table.Cost("vendor/unknown", 10, 10, 0));
 
