@@ -6,7 +6,7 @@
 #   TOKONOMY_INSTALL_DIR  target directory (default: $HOME/.local/bin)
 set -eu
 
-REPO="${TOKONOMY_REPO:-tokonomy/tokonomy}"
+REPO="${TOKONOMY_REPO:-DASaBeR/Tokonomy}"
 INSTALL_DIR="${TOKONOMY_INSTALL_DIR:-$HOME/.local/bin}"
 
 err() { echo "tokonomy-install: $*" >&2; exit 1; }

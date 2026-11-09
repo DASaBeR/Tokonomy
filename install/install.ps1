@@ -6,7 +6,7 @@
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
-$repo = if ($env:TOKONOMY_REPO) { $env:TOKONOMY_REPO } else { 'tokonomy/tokonomy' }
+$repo = if ($env:TOKONOMY_REPO) { $env:TOKONOMY_REPO } else { 'DASaBeR/Tokonomy' }
 $installDir = if ($env:TOKONOMY_INSTALL_DIR) { $env:TOKONOMY_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'Programs\tokonomy' }
 
 $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
