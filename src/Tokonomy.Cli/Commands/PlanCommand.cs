@@ -24,6 +24,10 @@ public sealed class PlanSettings : CommonSettings
     [Description("1, 1b, 2, 3 or 4 (default). Strategies 1, 1b and 2 skip the architect and use the task as a single unit.")]
     [DefaultValue("4")]
     public string Strategy { get; init; } = "4";
+
+    [CommandOption("--no-questions")]
+    [Description("Never let the architect ask clarifying questions; it plans with its own assumptions.")]
+    public bool NoQuestions { get; init; }
 }
 
 public sealed partial class PlanCommand(IAnsiConsole console, IProcessRunner runner, Services services) : AsyncCommand<PlanSettings>
@@ -114,10 +118,21 @@ public sealed partial class PlanCommand(IAnsiConsole console, IProcessRunner run
         try
         {
             var provider = strategy.UsesArchitectPlan ? services.ProviderFactory(config, prices) : null;
-            planned = strategy.UsesArchitectPlan && !settings.Json
-                ? await Ui.SpinAsync(console, $"{models.Architect} is planning (usually 30-90 seconds)", () =>
-                    TaskPlanning.PlanAsync(strategy, settings.Task, config.RepoRoot, baseSha, runId, provider, models.Architect, ledger, git, cancellationToken, config.Policy.Acceptance))
-                : await TaskPlanning.PlanAsync(strategy, settings.Task, config.RepoRoot, baseSha, runId, provider, models.Architect, ledger, git, cancellationToken, config.Policy.Acceptance);
+            var canAsk = strategy.UsesArchitectPlan && !settings.Json && !settings.NoQuestions && Ui.IsInteractive(console);
+            if (canAsk)
+            {
+                // Questions are prompts, which cannot run inside a spinner, so each architect call spins on its own.
+                var spinning = new SpinningProvider(provider!, console, $"{models.Architect} is planning (usually 30-90 seconds)");
+                planned = await TaskPlanning.PlanAsync(strategy, settings.Task, config.RepoRoot, baseSha, runId, spinning, models.Architect, ledger, git, cancellationToken,
+                    config.Policy.Acceptance, ClarifyPrompt.For(console));
+            }
+            else
+            {
+                planned = strategy.UsesArchitectPlan && !settings.Json
+                    ? await Ui.SpinAsync(console, $"{models.Architect} is planning (usually 30-90 seconds)", () =>
+                        TaskPlanning.PlanAsync(strategy, settings.Task, config.RepoRoot, baseSha, runId, provider, models.Architect, ledger, git, cancellationToken, config.Policy.Acceptance))
+                    : await TaskPlanning.PlanAsync(strategy, settings.Task, config.RepoRoot, baseSha, runId, provider, models.Architect, ledger, git, cancellationToken, config.Policy.Acceptance);
+            }
         }
         catch (Exception ex) when (ex is PlanningException or MissingApiKeyException or HttpRequestException or InvalidOperationException)
         {

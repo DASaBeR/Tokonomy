@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using Tokonomy.Core.Abstractions;
+using Tokonomy.Core.Planning;
 using Tokonomy.Llm.Architect;
 using Tokonomy.Llm.Providers;
 using Tokonomy.Llm.Proxy;
@@ -335,8 +336,7 @@ internal sealed class ScriptedProvider(params string[] answers) : IProvider
 }
 
 public class PlannerTests
-{
-    private const string Good = """
+{    private const string Good = """
         ```json
         {"units":[{"id":"U1","title":"Limiter","spec":"Add RateLimiter","depends_on":[]},
                   {"id":"U2","title":"Wire","spec":"Use it in /login","depends_on":["U1"]}],
@@ -368,6 +368,92 @@ public class PlannerTests
 
         Assert.Equal(2, result.Calls.Count);
         Assert.Contains("cycle", provider.Requests[1].User, StringComparison.Ordinal);
+    }
+
+    private const string Questions = """{"questions":[{"id":"Q1","question":"Which database?","options":["SQLite","Postgres"]}]}""";
+
+    [Fact]
+    public async Task Asks_questions_then_plans_with_the_answers()
+    {
+        var provider = new ScriptedProvider(Questions, Good);
+        IReadOnlyList<ClarifyingQuestion>? asked = null;
+
+        var result = await new Planner(provider, "strong").PlanAsync("task", "", default, clarifier: (qs, _) =>
+        {
+            asked = qs;
+            return Task.FromResult<IReadOnlyList<ClarifyingAnswer>?>([new ClarifyingAnswer("Q1", "Which database?", "SQLite")]);
+        });
+
+        Assert.Equal(["SQLite", "Postgres"], asked!.Single().Options);
+        Assert.Equal(2, result.Calls.Count);
+        Assert.Contains("Which database? -> SQLite", provider.Requests[1].User, StringComparison.Ordinal);
+        Assert.Contains("clarifying questions", provider.Requests[0].System, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Every_question_gets_a_recommended_option_and_up_to_six_are_kept()
+    {
+        var qs = string.Join(",", Enumerable.Range(1, 8).Select(i =>
+            i switch
+            {
+                1 => """{"question":"a","options":["x","y"],"recommended":"y"}""",
+                2 => """{"question":"b","options":["x","y"],"recommended":"not an option"}""",
+                3 => """{"question":"c","options":["x","y"]}""",
+                _ => $$"""{"question":"q{{i}}","options":["x","y"],"recommended":"x"}""",
+            }));
+
+        var parsed = Planner.TryParseQuestions($$"""{"questions":[{{qs}}]}""")!;
+
+        Assert.Equal(6, parsed.Count);
+        Assert.Equal(["y"], parsed[0].Recommended);
+        Assert.Equal(["x"], parsed[1].Recommended); // invalid pick falls back to the first option
+        Assert.Equal(["x"], parsed[2].Recommended); // missing pick falls back too
+        Assert.All(parsed, q => Assert.All(q.Recommended, r => Assert.Contains(r, q.Options)));
+    }
+
+    [Fact]
+    public void Checklist_questions_keep_several_options_and_several_recommendations()
+    {
+        var parsed = Planner.TryParseQuestions("""
+            {"questions":[
+              {"question":"Which features first?","multi":true,"options":["A","B","C","D","E"],"recommended":["a","C","nope"]},
+              {"question":"One only","options":["x","y"],"recommended":["y","x"]},
+              {"question":"Checklist, no picks","multi":true,"options":["A","B"]}
+            ]}
+            """)!;
+
+        Assert.True(parsed[0].Multi);
+        Assert.Equal(["A", "B", "C", "D", "E"], parsed[0].Options);
+        Assert.Equal(["A", "C"], parsed[0].Recommended);
+        Assert.False(parsed[1].Multi);
+        Assert.Equal(["x"], parsed[1].Recommended); // single-choice keeps exactly one
+        Assert.Equal(["A"], parsed[2].Recommended); // falls back to the first option
+    }
+
+    [Fact]
+    public async Task Without_a_clarifier_questions_are_not_offered_or_accepted()
+    {
+        var provider = new ScriptedProvider(Questions, Questions);
+
+        await Assert.ThrowsAsync<PlanningException>(() => new Planner(provider, "strong").PlanAsync("task", "", default));
+
+        Assert.DoesNotContain("clarifying questions", provider.Requests[0].System, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Asks_only_one_round_even_if_the_model_keeps_asking()
+    {
+        var provider = new ScriptedProvider(Questions, Questions, Good);
+        var rounds = 0;
+
+        var result = await new Planner(provider, "strong").PlanAsync("task", "", default, clarifier: (_, _) =>
+        {
+            rounds++;
+            return Task.FromResult<IReadOnlyList<ClarifyingAnswer>?>(null);
+        });
+
+        Assert.Equal(1, rounds);
+        Assert.Equal(2, result.Contract.Units.Count);
     }
 
     [Fact]

@@ -70,11 +70,39 @@ public sealed partial class Planner(IProvider provider, string model)
         AllowTrailingCommas = true,
     };
 
-    public async Task<PlanResult> PlanAsync(string task, string repoContext, CancellationToken ct, AcceptanceConfig? acceptance = null)
+    internal const int MaxQuestions = 6;
+    internal const int MaxQuestionRounds = 1;
+
+    internal const string ClarifyPrompt = """
+
+
+        Clarifying questions (optional):
+        - If the task is vague or leaves a decision open that would change the plan (stack, scope, behavior, where it
+          goes), you may ask the user instead of guessing. Do this only when the answer matters; never ask what the
+          repository already tells you, and never ask about trivia.
+        - To ask, respond with ONLY this JSON object instead of a contract (at most 6 questions, 2-4 short options each;
+          the user can always type their own answer):
+          {"questions": [{"id": "Q1", "question": "...", "options": ["...", "..."], "recommended": "..."}]}
+        - Every question MUST have a "recommended" value: the option you would pick yourself, copied exactly from its
+          "options". Order questions by importance, most important first.
+        - When the user should choose SEVERAL items from a list (for example which features to build first), add
+          "multi": true, give up to 8 options, and make "recommended" an array of the options you would tick:
+          {"id": "Q2", "question": "Which features first?", "options": ["A", "B", "C"], "multi": true, "recommended": ["A", "B"]}
+        - You get one round of questions. Once you have the answers, respond with the contract.
+        """;
+
+    public async Task<PlanResult> PlanAsync(
+        string task, string repoContext, CancellationToken ct, AcceptanceConfig? acceptance = null, Clarifier? clarifier = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(task);
         var acceptanceOn = acceptance is { Enabled: true };
         var system = acceptanceOn ? SystemPrompt + AcceptancePrompt(acceptance!) : SystemPrompt;
+        var mayAsk = clarifier is not null;
+        if (mayAsk)
+        {
+            system += ClarifyPrompt;
+        }
+
         var calls = new List<ProviderResponse>();
         var user = $"""
             # Task
@@ -84,10 +112,34 @@ public sealed partial class Planner(IProvider provider, string model)
             {repoContext}
             """;
 
+        var rounds = 0;
         for (var attempt = 1; attempt <= 2; attempt++)
         {
             var response = await provider.CompleteAsync(new ProviderRequest(model, system, user, JsonOutput: true), ct);
             calls.Add(response);
+
+            if (mayAsk && rounds < MaxQuestionRounds && TryParseQuestions(response.Text) is { Count: > 0 } questions)
+            {
+                rounds++;
+                attempt--; // asking is not a failed attempt
+                var answers = await clarifier!(questions, ct);
+                user += answers is { Count: > 0 }
+                    ? $"""
+
+
+                        # Answers to your questions
+                        {string.Join("\n", answers.Select(a => $"- {a.Question} -> {a.Answer}"))}
+
+                        Now return the contract JSON.
+                        """
+                    : """
+
+
+                        # The user skipped your questions
+                        Make reasonable assumptions, state them in the unit specs, and return the contract JSON.
+                        """;
+                continue;
+            }
 
             var (contract, errors) = Parse(task, response.Text, acceptanceOn ? acceptance!.Dir : null);
             if (contract is not null && errors.Count == 0)
@@ -165,6 +217,65 @@ public sealed partial class Planner(IProvider provider, string model)
         return (contract, problems);
     }
 
+    /// <summary>Returns the architect's questions when the answer is a questions object (and not a contract), else null.</summary>
+    internal static IReadOnlyList<ClarifyingQuestion>? TryParseQuestions(string text)
+    {
+        var json = ExtractJson(text);
+        if (json is null)
+        {
+            return null;
+        }
+
+        QuestionsDto? dto;
+        try
+        {
+            dto = JsonSerializer.Deserialize<QuestionsDto>(json, JsonOptions);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+
+        if (dto?.Questions is not { Count: > 0 } || dto.Units is { Count: > 0 })
+        {
+            return null;
+        }
+
+        var list = new List<ClarifyingQuestion>();
+        foreach (var q in dto.Questions.Take(MaxQuestions))
+        {
+            if (string.IsNullOrWhiteSpace(q.Question))
+            {
+                continue;
+            }
+
+            var multi = q.Multi == true;
+            var options = (q.Options ?? []).Where(o => !string.IsNullOrWhiteSpace(o)).Select(o => o.Trim()).Distinct().Take(multi ? 8 : 5).ToList();
+            multi &= options.Count >= 2;
+
+            // Always end up with a recommendation: the model's picks that name real options, else the first option.
+            var named = RecommendedNames(q.Recommended);
+            var picks = options.Where(o => named.Contains(o, StringComparer.OrdinalIgnoreCase)).ToList();
+            if (picks.Count == 0 && options.Count > 0)
+            {
+                picks.Add(options[0]);
+            }
+
+            list.Add(new ClarifyingQuestion(string.IsNullOrWhiteSpace(q.Id) ? $"Q{list.Count + 1}" : q.Id.Trim(), q.Question.Trim(), options,
+                multi ? picks : picks.Take(1).ToList(), multi));
+        }
+
+        return list;
+    }
+
+    /// <summary>"recommended" may be one string or an array of strings.</summary>
+    private static List<string> RecommendedNames(JsonElement? value) => value switch
+    {
+        { ValueKind: JsonValueKind.String } v => [v.GetString()!.Trim()],
+        { ValueKind: JsonValueKind.Array } v => v.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!.Trim()).ToList(),
+        _ => [],
+    };
+
     internal static string? ExtractJson(string text)
     {
         var fenced = FencedJson().Match(text);
@@ -184,6 +295,21 @@ public sealed partial class Planner(IProvider provider, string model)
         public List<UnitDto>? Units { get; set; }
         public List<RuleDto>? Rules { get; set; }
         public List<string>? Dont { get; set; }
+    }
+
+    private sealed class QuestionsDto
+    {
+        public List<QuestionDto>? Questions { get; set; }
+        public List<UnitDto>? Units { get; set; }
+    }
+
+    private sealed class QuestionDto
+    {
+        public string? Id { get; set; }
+        public string? Question { get; set; }
+        public List<string>? Options { get; set; }
+        public JsonElement? Recommended { get; set; }
+        public bool? Multi { get; set; }
     }
 
     private sealed class UnitDto

@@ -81,7 +81,7 @@ public sealed class BuildCommand(IAnsiConsole console, IProcessRunner runner, Se
 
         // 2. Plan.
         var planner = new PlanCommand(console, runner, services);
-        var (planExit, runId, planned) = await planner.PlanCoreAsync(config, new PlanSettings { Task = task, Strategy = "4", Config = config.ConfigDirectory }, cancellationToken);
+        var (planExit, runId, planned) = await planner.PlanCoreAsync(config, new PlanSettings { Task = task, Strategy = "4", Config = config.ConfigDirectory, NoQuestions = settings.Yes }, cancellationToken);
         if (planned is null || runId is null)
         {
             return planExit;
