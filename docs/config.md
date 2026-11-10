@@ -91,6 +91,8 @@ Takeover cost is counted in the ledger as architect spend and against the budget
 
 ### Gates
 
+A **gate** is an automatic pass/fail check that runs on the worker's output before a unit is accepted: a build, a linter, a type check, your test suite. It is a command (an argument array, never a shell string), so the model's own report of success never decides anything. A unit is accepted only when every gate passes; a failing gate sends the worker back with the gate's output (retry), and repeated failure escalates to the architect (takeover). `tokonomy init` proposes gates for the stack it detects; add your own under `gates:`. Projects without tests can let the architect write them: see [Acceptance tests](#acceptance-tests-written-by-the-architect). Gates run in an isolated environment, see [Gate execution](#gate-execution). Other terms: [glossary](glossary.md).
+
 | Key | Default | Meaning |
 |---|---|---|
 | `type` | `command` | `command` or `locked_regions` |
