@@ -139,6 +139,7 @@ public sealed class ArchitectProviderConfig
     public const string ApiKind = "api";
     public const string ClaudeCliKind = "claude-cli";
     public const string AgyCliKind = "agy-cli";
+    public const string CodexCliKind = "codex-cli";
 
     /// <summary>
     /// <c>api</c> (default): an OpenAI-compatible endpoint with a key (this section's <c>base_url</c> and <c>api_key_env</c>
@@ -146,10 +147,11 @@ public sealed class ArchitectProviderConfig
     /// <c>claude-cli</c>: run Claude Code headless on your own login (no API key); <c>models.architect</c> is passed to
     /// <c>claude --model</c> (for example <c>opus</c>). Its reported cost is an estimate.
     /// <c>agy-cli</c>: run the Antigravity CLI headless on your own login, with <c>models.architect</c> as its model.
+    /// <c>codex-cli</c>: run the OpenAI Codex CLI headless on its own login (ChatGPT or an API key given to <c>codex login</c>), with <c>models.architect</c> as its model.
     /// </summary>
     public string Kind { get; set; } = ApiKind;
 
-    /// <summary>Executable for <c>claude-cli</c> or <c>agy-cli</c>. Default: <c>claude</c> / <c>agy</c>.</summary>
+    /// <summary>Executable for <c>claude-cli</c>, <c>agy-cli</c> or <c>codex-cli</c>. Default: <c>claude</c> / <c>agy</c> / <c>codex</c>.</summary>
     public string Command { get; set; } = "";
 
     /// <summary>For <c>api</c>: the endpoint of the strong model when it differs from the worker's <c>provider</c>.</summary>
@@ -158,7 +160,7 @@ public sealed class ArchitectProviderConfig
     /// <summary>For <c>api</c>: the NAME of the environment variable with the strong model's key (never the key).</summary>
     public string? ApiKeyEnv { get; set; }
 
-    public string CommandOrDefault => !string.IsNullOrWhiteSpace(Command) ? Command : Kind == AgyCliKind ? "agy" : "claude";
+    public string CommandOrDefault => !string.IsNullOrWhiteSpace(Command) ? Command : Kind == AgyCliKind ? "agy" : Kind == CodexCliKind ? "codex" : "claude";
 
     /// <summary>The OpenAI-compatible endpoint architect calls use: this section's overrides on top of <paramref name="worker"/>.</summary>
     public ProviderConfig EffectiveProvider(ProviderConfig worker) => new()

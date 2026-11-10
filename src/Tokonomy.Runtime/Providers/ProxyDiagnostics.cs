@@ -20,13 +20,15 @@ public static class ProxyDiagnostics
 {
     private static ProxyTarget Claude { get; } = new("claude", "Claude Code subscription", "https://api.anthropic.com", ConnectionKind.ClaudeCode);
 
+    private static ProxyTarget Codex { get; } = new("codex", "Codex CLI (ChatGPT / OpenAI)", "https://chatgpt.com", ConnectionKind.Codex);
+
     private static ProxyTarget Antigravity { get; } = new("antigravity", "Antigravity subscription", "https://cloudcode-pa.googleapis.com", ConnectionKind.Antigravity);
 
     public static ProxyTarget Api(ApiService s) => new(s.Id, $"{s.Title} API", s.BaseUrl, ConnectionKind.Api, s);
 
     public static IReadOnlyList<ProxyTarget> AllTargets { get; } =
     [
-        Claude, Antigravity, .. Sources.ApiServices.Select(Api),
+        Claude, Antigravity, Codex, .. Sources.ApiServices.Select(Api),
     ];
 
     /// <summary>The connections this user actually set up (from the last setup), or everything when there is none.</summary>
@@ -39,6 +41,11 @@ public static class ProxyDiagnostics
 
         var used = AllTargets.Where(t => t.Id.Equals(defaults.Strong, StringComparison.OrdinalIgnoreCase)
                                          || t.Id.Equals(defaults.Cheap, StringComparison.OrdinalIgnoreCase)).ToList();
+        foreach (var custom in new[] { defaults.StrongCustom, defaults.CheapCustom }.OfType<CustomApi>().DistinctBy(c => c.BaseUrl, StringComparer.OrdinalIgnoreCase))
+        {
+            used.Add(Api(Sources.Custom(custom.Name, custom.BaseUrl, custom.KeyVariable)));
+        }
+
         return used.Count == 0 ? AllTargets : used;
     }
 
@@ -75,7 +82,8 @@ public static class ProxyDiagnostics
     {
         getEnv ??= Environment.GetEnvironmentVariable;
         var watch = Stopwatch.StartNew();
-        var route = proxy.IsActive ? "via proxy" : "direct";
+        var inScope = proxy.IsActive && proxy.AppliesTo(ScopeId(target));
+        var route = inScope ? "via proxy" : proxy.IsActive ? "direct (not in the proxy's scope)" : "direct";
         try
         {
             using var handler = CreateHandler(target, proxy);
@@ -102,9 +110,17 @@ public static class ProxyDiagnostics
         }
     }
 
+    /// <summary>The id the proxy scope uses for this target (API services and the CLI logins have their own).</summary>
+    private static string ScopeId(ProxyTarget target) => target.Id;
+
     private static SocketsHttpHandler CreateHandler(ProxyTarget target, ProxySettings proxy)
     {
-        if (target.Kind == ConnectionKind.Api || !proxy.IsActive)
+        if (!proxy.IsActive || !proxy.AppliesTo(ScopeId(target)))
+        {
+            return new SocketsHttpHandler();
+        }
+
+        if (target.Kind == ConnectionKind.Api)
         {
             return proxy.CreateHandler();
         }

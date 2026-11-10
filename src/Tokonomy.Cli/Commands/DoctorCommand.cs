@@ -130,12 +130,12 @@ public sealed partial class DoctorCommand(IAnsiConsole console, IProcessRunner r
 
         // Architect (the strong model): a CLI login or an API key.
         var architectKind = policy.ArchitectProvider.Kind;
-        var cliArchitect = architectKind is ArchitectProviderConfig.ClaudeCliKind or ArchitectProviderConfig.AgyCliKind;
+        var cliArchitect = architectKind is ArchitectProviderConfig.ClaudeCliKind or ArchitectProviderConfig.AgyCliKind or ArchitectProviderConfig.CodexCliKind;
         if (cliArchitect)
         {
             var cmd = policy.ArchitectProvider.CommandOrDefault;
             var found = ExecutableResolver.TryResolve(cmd, repo);
-            var what = architectKind == ArchitectProviderConfig.AgyCliKind ? "Antigravity CLI" : "Claude Code CLI";
+            var what = architectKind == ArchitectProviderConfig.AgyCliKind ? "Antigravity CLI" : architectKind == ArchitectProviderConfig.CodexCliKind ? "Codex CLI" : "Claude Code CLI";
             checks.Add(new("architect", cmd, found is null ? Level.Fail : Level.Ok,
                 found is null ? $"'{cmd}' not found ({what} is not installed or not on PATH)" : $"{what} (cost recorded as estimated)"));
         }

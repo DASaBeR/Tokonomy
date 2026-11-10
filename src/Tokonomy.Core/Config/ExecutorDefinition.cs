@@ -38,7 +38,7 @@ public sealed class ExecutorDefinition
 
     /// <summary>
     /// How to read usage from the agent's stdout when its traffic is not metered by the proxy. Supported:
-    /// <c>claude-json</c> (Claude Code <c>--output-format json</c>) and <c>agy-json</c> (Antigravity CLI <c>--output-format
+    /// <c>claude-json</c> (Claude Code <c>--output-format json</c>) <c>codex-json</c> (Codex CLI <c>exec --json</c>: tokens), and <c>agy-json</c> (Antigravity CLI <c>--output-format
     /// stream-json</c> or <c>json</c>: tokens, selected model, shell commands run and auto-denied tool calls).
     /// Reported cost is recorded as estimated,
     /// because it is the agent's own API-equivalent figure (a subscription login is not billed per token).

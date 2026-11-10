@@ -19,6 +19,9 @@ public enum ConnectionKind
 
     /// <summary>An OpenAI-compatible API with a key in an environment variable.</summary>
     Api,
+
+    /// <summary>The OpenAI Codex CLI, on its own login (a ChatGPT plan, or an API key given to <c>codex login</c>).</summary>
+    Codex,
 }
 
 /// <summary>How one role (strong or cheap) reaches its model.</summary>
@@ -26,12 +29,14 @@ public sealed record Connection(ConnectionKind Kind, ApiService? Api = null)
 {
     public static Connection Claude { get; } = new(ConnectionKind.ClaudeCode);
     public static Connection Antigravity { get; } = new(ConnectionKind.Antigravity);
+    public static Connection Codex { get; } = new(ConnectionKind.Codex);
     public static Connection For(ApiService service) => new(ConnectionKind.Api, service);
 
     public string Title => Kind switch
     {
         ConnectionKind.ClaudeCode => "Claude Code subscription",
         ConnectionKind.Antigravity => "Antigravity subscription",
+        ConnectionKind.Codex => "Codex CLI (ChatGPT plan or API key)",
         _ => $"{Api!.Title} API key",
     };
 
@@ -77,6 +82,12 @@ public static class Sources
 
     public static IReadOnlyList<ApiService> ApiServices { get; } = [OpenRouter, Anthropic, Gemini, OpenAi, DeepSeek];
 
+    /// <summary>Id of a provider the user typed in (AvalAI, a gateway, a local server): any OpenAI-compatible endpoint.</summary>
+    public const string CustomId = "custom";
+
+    public static ApiService Custom(string name, string baseUrl, string keyVariable) =>
+        new(CustomId, name, baseUrl.TrimEnd('/'), keyVariable, "", Verified: false);
+
     /// <summary>Claude Code cannot list the models of a plan, so these are the ones it is known to accept; each choice is tested with a tiny call.</summary>
     public static IReadOnlyList<(string Id, string Note)> ClaudeModels { get; } =
     [
@@ -91,6 +102,7 @@ public static class Sources
     {
         ConnectionKind.ClaudeCode => "claude-code-sub",
         ConnectionKind.Antigravity => "antigravity",
+        ConnectionKind.Codex => "codex",
         _ => "opencode",
     };
 
@@ -99,19 +111,37 @@ public static class Sources
     {
         ConnectionKind.ClaudeCode => ["claude"],
         ConnectionKind.Antigravity => ["agy"],
+        ConnectionKind.Codex => ["codex"],
         _ => strongRole ? [] : ["opencode"],
     };
 
-    public static string DefaultStrong(Connection connection) => connection.Kind == ConnectionKind.ClaudeCode ? "claude-opus-5-5" : "";
+    /// <summary>
+    /// Codex cannot list the models of a plan. These are common ids; which ones work depends on your plan, so each choice is
+    /// tested with a tiny call and any other id can be typed.
+    /// </summary>
+    public static IReadOnlyList<(string Id, string Note)> CodexModels { get; } =
+    [
+        ("gpt-5-codex", "tuned for coding"),
+        ("gpt-5", "general, strongest reasoning"),
+        ("gpt-5-mini", "faster and cheaper"),
+    ];
+
+    public static string DefaultStrong(Connection connection) => connection.Kind switch
+    {
+        ConnectionKind.ClaudeCode => "claude-opus-5-5",
+        ConnectionKind.Codex => "gpt-5-codex",
+        _ => "",
+    };
 
     public static string DefaultCheap(Connection connection) => connection.Kind switch
     {
         ConnectionKind.ClaudeCode => "claude-haiku-5-5",
         ConnectionKind.Antigravity => "gemini-3.8-flash-medium",
+        ConnectionKind.Codex => "gpt-5-mini",
         _ => "",
     };
 
-    /// <summary>Flag values: <c>claude</c>, <c>antigravity</c>, <c>openrouter</c>, <c>anthropic</c>, <c>gemini</c>, <c>openai</c>, <c>deepseek</c>.</summary>
+    /// <summary>Flag values: <c>claude</c>, <c>antigravity</c>, <c>codex</c>, <c>openrouter</c>, <c>anthropic</c>, <c>gemini</c>, <c>openai</c>, <c>deepseek</c>.</summary>
     public static bool TryParse(string? text, out Connection connection)
     {
         connection = Connection.Claude;
@@ -121,6 +151,9 @@ public static class Sources
                 return true;
             case "antigravity" or "agy":
                 connection = Connection.Antigravity;
+                return true;
+            case "codex" or "chatgpt" or "gpt":
+                connection = Connection.Codex;
                 return true;
             case { } id when ApiServices.FirstOrDefault(s => s.Id == id || (id == "api" && s.Id == "openrouter")) is { } service:
                 connection = Connection.For(service);

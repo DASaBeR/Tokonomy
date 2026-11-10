@@ -14,6 +14,12 @@ public sealed record ProcessSpec
 
     public TimeSpan? Timeout { get; init; }
 
+    /// <summary>
+    /// The proxy settings for this process (already narrowed to its connection, see <c>ProxySettings.ForProvider</c>).
+    /// Unset: the user's proxy as it applies to "other" tools such as git and the gates.
+    /// </summary>
+    public Tokonomy.Core.Net.ProxySettings? Proxy { get; init; }
+
     /// <summary>Text written to the child's stdin (UTF-8) before it is closed. Null closes stdin immediately.</summary>
     public string? StdinText { get; init; }
 

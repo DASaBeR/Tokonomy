@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text;
+using Tokonomy.Core.Net;
 
 namespace Tokonomy.Runtime.Process;
 
@@ -87,7 +88,7 @@ public sealed class ProcessRunner : IProcessRunner
         };
     }
 
-    internal static ProcessStartInfo BuildStartInfo(ProcessSpec spec)
+    internal static ProcessStartInfo BuildStartInfo(ProcessSpec spec, ProxySettings? proxy = null)
     {
         var resolved = ExecutableResolver.Resolve(spec.Args[0], spec.WorkingDirectory, spec.Environment);
         var psi = new ProcessStartInfo
@@ -125,6 +126,18 @@ public sealed class ProcessRunner : IProcessRunner
         if (spec.Environment is not null)
         {
             foreach (var (key, value) in spec.Environment)
+            {
+                psi.Environment[key] = value;
+            }
+        }
+
+        // The user's proxy applies to every process Tokonomy starts, even one whose environment was not built by
+        // EnvironmentBuilder (version checks, sign-in status, anything added later). Variables the spec sets itself win.
+        var comparer = System.OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        var effective = spec.Proxy ?? (proxy ?? ProxySettings.Current).ForProvider(ProxySettings.OtherId);
+        foreach (var (key, value) in effective.ChildEnvironment())
+        {
+            if (spec.Environment is null || !spec.Environment.Keys.Contains(key, comparer))
             {
                 psi.Environment[key] = value;
             }

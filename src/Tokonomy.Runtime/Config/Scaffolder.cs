@@ -68,6 +68,10 @@ public static class Scaffolder
                     sb.AppendLine("# The strong model runs on your Antigravity login: no API key.");
                     sb.AppendLine("architect_provider: { kind: agy-cli }");
                     break;
+                case ConnectionKind.Codex:
+                    sb.AppendLine("# The strong model runs through the Codex CLI on its own login (ChatGPT plan or an API key given to `codex login`).");
+                    sb.AppendLine("architect_provider: { kind: codex-cli }");
+                    break;
                 default:
                     sb.AppendLine($"# The strong model is called over the {choices.Strong.Api!.Title} API.");
                     sb.AppendLine($"architect_provider: {{ kind: api, base_url: {Quote(choices.Strong.Api.BaseUrl)}, api_key_env: {choices.Strong.Api.KeyVariable} }}");
@@ -269,6 +273,26 @@ public static class Scaffolder
             version_cmd: ["claude", "--version"]
             tested_version: "2.1.316"
             usage_format: claude-json
+            capabilities:
+              headless: true
+              model_override: true
+              structured_output: true
+              session_resume: false
+              reports_tokens: true
+              permission_modes: true
+              proxy_routable: false
+
+          codex:
+            # OpenAI Codex CLI (`codex exec`) on its own login: a ChatGPT plan, or an API key given to `codex login`.
+            # No proxy and no endpoint override. Tokens come from the --json event stream; cost is unknown and recorded as
+            # estimated. Codex's own sandbox (workspace-write) limits what it can touch. Not yet verified against a live run
+            # on a signed-in account: `tokonomy init` tests the connection with a tiny call.
+            cmd: ["codex", "exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "workspace-write", "--json", "--color", "never", "{prompt}"]
+            model_args: ["--model", "{model}"]
+            brief_file: AGENTS.md
+            version_cmd: ["codex", "--version"]
+            tested_version: null
+            usage_format: codex-json
             capabilities:
               headless: true
               model_override: true

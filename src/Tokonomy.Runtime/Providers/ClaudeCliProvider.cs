@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Tokonomy.Core.Net;
 using Tokonomy.Core.Abstractions;
 using Tokonomy.Core.Model;
 using Tokonomy.Runtime.Executors;
@@ -41,7 +42,8 @@ public sealed class ClaudeCliProvider(IProcessRunner runner, string command = "c
                 args.AddRange(["--model", request.Model]);
             }
 
-            var env = EnvironmentBuilder.ForGate(StrippedVariables);
+            var proxy = ProxySettings.Current.ForProvider("claude");
+            var env = EnvironmentBuilder.ForGate(StrippedVariables, null, proxy);
             var outcome = await runner.RunAsync(new ProcessSpec
             {
                 Args = args,
@@ -49,6 +51,7 @@ public sealed class ClaudeCliProvider(IProcessRunner runner, string command = "c
                 Environment = env,
                 ReplaceEnvironment = true,
                 Timeout = _timeout,
+                Proxy = proxy,
                 StdinText = request.User,
             }, ct);
 

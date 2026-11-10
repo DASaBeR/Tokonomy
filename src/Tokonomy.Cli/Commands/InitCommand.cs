@@ -27,12 +27,24 @@ public sealed class InitSettings : CommonSettings
     public string? Preset { get; init; }
 
     [CommandOption("--strong <SOURCE>")]
-    [Description("Where the strong model comes from: claude (Claude Code subscription), antigravity (Antigravity subscription), or an API: openrouter, anthropic, gemini, openai, deepseek.")]
+    [Description("Where the strong model comes from: claude (Claude Code subscription), antigravity (Antigravity subscription), codex (Codex CLI: ChatGPT plan or API key), custom (see --custom-url), or an API: openrouter, anthropic, gemini, openai, deepseek.")]
     public string? Strong { get; init; }
 
     [CommandOption("--cheap <SOURCE>")]
     [Description("Where the cheap model comes from: same values as --strong.")]
     public string? Cheap { get; init; }
+
+    [CommandOption("--custom-url <URL>")]
+    [Description("With --strong/--cheap custom: the provider's OpenAI-compatible base URL, e.g. https://api.avalai.ir/v1.")]
+    public string? CustomUrl { get; init; }
+
+    [CommandOption("--custom-key-env <NAME>")]
+    [Description("With --strong/--cheap custom: the NAME of the environment variable that holds its API key.")]
+    public string? CustomKeyEnv { get; init; }
+
+    [CommandOption("--custom-name <NAME>")]
+    [Description("With --strong/--cheap custom: what to call the provider (default: its host name).")]
+    public string? CustomName { get; init; }
 
     [CommandOption("--architect <MODEL>")]
     [Description("Strong model id, e.g. claude-opus-5-5 or anthropic/claude-sonnet-5-5.")]
@@ -73,6 +85,9 @@ public sealed class InitCommand(IAnsiConsole console, IProcessRunner runner, Ser
             Preset = settings.Preset,
             Strong = settings.Strong,
             Cheap = settings.Cheap,
+            CustomUrl = settings.CustomUrl,
+            CustomKeyEnv = settings.CustomKeyEnv,
+            CustomName = settings.CustomName,
             Architect = settings.Architect,
             Worker = settings.Worker,
             Isolation = settings.Isolation,

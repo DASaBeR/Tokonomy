@@ -23,6 +23,7 @@ public sealed class Services
         {
             ArchitectProviderConfig.ClaudeCliKind => new ClaudeCliProvider(new ProcessRunner(), config.Policy.ArchitectProvider.CommandOrDefault),
             ArchitectProviderConfig.AgyCliKind => new AgyCliProvider(new ProcessRunner(), config.Policy.ArchitectProvider.CommandOrDefault),
+            ArchitectProviderConfig.CodexCliKind => new CodexCliProvider(new ProcessRunner(), config.Policy.ArchitectProvider.CommandOrDefault),
             _ => new OpenAiCompatibleProvider(config.Policy.ArchitectProvider.EffectiveProvider(config.Policy.Provider), prices),
         };
 

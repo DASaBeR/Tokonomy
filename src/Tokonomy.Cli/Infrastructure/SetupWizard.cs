@@ -1,4 +1,5 @@
 using Spectre.Console;
+using Tokonomy.Core.Net;
 using Tokonomy.Core.Abstractions;
 using Tokonomy.Runtime.Config;
 using Tokonomy.Runtime.Process;
@@ -14,6 +15,12 @@ public sealed record SetupOptions
 
     public string? Strong { get; init; }
     public string? Cheap { get; init; }
+
+    /// <summary>For <c>--strong custom</c> / <c>--cheap custom</c>: the provider's name, base URL and key variable name.</summary>
+    public string? CustomName { get; init; }
+
+    public string? CustomUrl { get; init; }
+    public string? CustomKeyEnv { get; init; }
     public string? Architect { get; init; }
     public string? Worker { get; init; }
     public bool? Acceptance { get; init; }
@@ -39,6 +46,10 @@ internal sealed class SetupWizard(IAnsiConsole console, IProcessRunner runner, F
     private HttpClient? _http;
     private HttpClient Http => _http ??= httpFactory?.Invoke() ?? new HttpClient(Tokonomy.Core.Net.ProxySettings.Current.CreateHandler(), disposeHandler: true) { Timeout = TimeSpan.FromSeconds(20) };
 
+    // What the machine scan found. A sign-in during the setup updates it, so later steps see the new state.
+    private MachineReport _report = null!;
+    private string _root = "";
+
     private IReadOnlyList<CatalogModel> _openRouterMenu = [];
     private IReadOnlyList<CatalogModel> _openRouterAll = [];
     private bool _openRouterTried;
@@ -60,12 +71,16 @@ internal sealed class SetupWizard(IAnsiConsole console, IProcessRunner runner, F
             return null;
         }
 
+        _report = report;
+        _root = root;
         ShowMachine(report);
 
         if (!ChooseConnections(report, options, interactive, out var strong, out var cheap))
         {
             return null;
         }
+
+        report = _report;
 
         var architect = options.Architect ?? await PickModelAsync(strong, strongRole: true, report, interactive, ct);
         var worker = options.Worker ?? await PickModelAsync(cheap, strongRole: false, report, interactive, ct);
@@ -113,6 +128,7 @@ internal sealed class SetupWizard(IAnsiConsole console, IProcessRunner runner, F
         console.MarkupLine("[bold]What I found on this machine[/]");
         Line(report.Claude, "Claude Code");
         Line(report.Antigravity, "Antigravity (agy)");
+        Line(report.Codex, "Codex (OpenAI)");
         Line(report.OpenCode, "OpenCode");
         var tests = report.Python.Installed ? "Python" : report.Node.Installed ? "Node.js" : null;
         console.MarkupLine(tests is null
@@ -128,7 +144,7 @@ internal sealed class SetupWizard(IAnsiConsole console, IProcessRunner runner, F
         if (!report.HasCodingAgent)
         {
             console.WriteLine();
-            console.MarkupLine("[yellow]No coding agent is installed.[/] The cheap model writes files through one of: Claude Code, Antigravity or OpenCode.");
+            console.MarkupLine("[yellow]No coding agent is installed.[/] The cheap model writes files through one of: Claude Code, Antigravity, Codex or OpenCode.");
             Ui.Note(console, "Easiest to add: OpenCode (works with any API key, including free OpenRouter models): " + report.OpenCode.InstallHint);
             Ui.Note(console, "You can still go through the setup and install one afterwards.");
         }
@@ -173,9 +189,9 @@ internal sealed class SetupWizard(IAnsiConsole console, IProcessRunner runner, F
         var cheapGiven = options.Preset is not null;
         if (options.Strong is not null)
         {
-            if (!Sources.TryParse(options.Strong, out strong))
+            if (!TryFlag(options.Strong, options, out strong))
             {
-                Output.Error(console, $"Unknown --strong '{options.Strong}'. Use claude, antigravity, openrouter, anthropic, gemini, openai or deepseek.");
+                Output.Error(console, FlagProblem("--strong", options.Strong, options));
                 return false;
             }
 
@@ -184,9 +200,9 @@ internal sealed class SetupWizard(IAnsiConsole console, IProcessRunner runner, F
 
         if (options.Cheap is not null)
         {
-            if (!Sources.TryParse(options.Cheap, out cheap))
+            if (!TryFlag(options.Cheap, options, out cheap))
             {
-                Output.Error(console, $"Unknown --cheap '{options.Cheap}'. Use claude, antigravity, openrouter, anthropic, gemini, openai or deepseek.");
+                Output.Error(console, FlagProblem("--cheap", options.Cheap, options));
                 return false;
             }
 
@@ -244,9 +260,11 @@ internal sealed class SetupWizard(IAnsiConsole console, IProcessRunner runner, F
     {
         var strong = report.Claude.Ready ? Connection.Claude
             : report.Antigravity.Ready ? Connection.Antigravity
+            : report.Codex.Ready ? Connection.Codex
             : Connection.For(Sources.OpenRouter);
         Connection? cheap = report.Antigravity.Ready ? Connection.Antigravity
             : report.Claude.Ready ? Connection.Claude
+            : report.Codex.Ready ? Connection.Codex
             : report.OpenCode.Installed ? Connection.For(Sources.OpenRouter)
             : null;
         return (strong, cheap);
@@ -255,7 +273,7 @@ internal sealed class SetupWizard(IAnsiConsole console, IProcessRunner runner, F
     private static bool TryRestore(UserDefaults last, out Connection strong, out Connection cheap)
     {
         strong = cheap = Connection.Claude;
-        return Sources.TryParse(last.Strong, out strong) && Sources.TryParse(last.Cheap, out cheap);
+        return UserDefaults.TryConnection(last.Strong, last.StrongCustom, out strong) && UserDefaults.TryConnection(last.Cheap, last.CheapCustom, out cheap);
     }
 
     private bool AskReuse(UserDefaults last, Connection strong, Connection cheap)
@@ -278,9 +296,11 @@ internal sealed class SetupWizard(IAnsiConsole console, IProcessRunner runner, F
     private enum Vendor
     {
         Claude,
+        Gpt,
         Gemini,
         OpenRouter,
-        Other,
+        DeepSeek,
+        Custom,
     }
 
     /// <summary>Pick a vendor, then how to reach it (subscription or key), then make sure that works; offer another choice when it does not.</summary>
@@ -288,28 +308,98 @@ internal sealed class SetupWizard(IAnsiConsole console, IProcessRunner runner, F
     {
         while (true)
         {
-            var connection = AskVendor(report, strongRole, recommended);
-            var problems = Problems(report, connection, strongRole);
-            if (problems.Count == 0)
+            var connection = AskVendor(_report, strongRole, recommended);
+            while (true)
             {
-                return connection;
-            }
+                var problems = Problems(_report, connection, strongRole);
+                if (problems.Count == 0)
+                {
+                    return connection;
+                }
 
-            console.WriteLine();
-            foreach (var (problem, hint) in problems)
-            {
-                console.MarkupLine($"[yellow]![/] {Markup.Escape(connection.Title)}: {Markup.Escape(problem)}");
-                Ui.Note(console, hint);
-            }
+                console.WriteLine();
+                foreach (var (problem, hint) in problems)
+                {
+                    console.MarkupLine($"[yellow]![/] {Markup.Escape(connection.Title)}: {Markup.Escape(problem)}");
+                    Ui.Note(console, hint);
+                }
 
-            var again = console.Prompt(new SelectionPrompt<string>()
-                .Title("What now?")
-                .AddChoices("Pick a different connection", "Keep this one and finish installing it later")
-                .UseConverter(Markup.Escape));
-            if (again.StartsWith("Keep", StringComparison.Ordinal))
-            {
-                return connection;
+                const string signInNow = "Sign in now";
+                const string deviceCode = "Sign in with a device code instead (no browser on this machine)";
+                const string different = "Pick a different connection";
+                const string later = "Keep this one and finish installing it later";
+                var choices = new List<string>();
+                if (CanSignInNow(connection))
+                {
+                    choices.Add(signInNow);
+                    if (connection.Kind == ConnectionKind.Codex)
+                    {
+                        choices.Add(deviceCode);
+                    }
+                }
+
+                choices.Add(different);
+                choices.Add(later);
+                var again = console.Prompt(new SelectionPrompt<string>().Title("What now?").AddChoices(choices).UseConverter(Markup.Escape));
+                if (again == later)
+                {
+                    return connection;
+                }
+
+                if (again == different)
+                {
+                    break;
+                }
+
+                SignIn(connection, deviceCode: again == deviceCode);
             }
+        }
+    }
+
+    /// <summary>The CLI is installed but not signed in: its own login can be started right here.</summary>
+    private bool CanSignInNow(Connection connection) =>
+        ToolLogin.PlanFor(connection.Kind) is not null && _report.For(connection, strongRole: true) is { Installed: true, SignedIn: false };
+
+    /// <summary>Runs the tool's login with the terminal handed over, then looks again and remembers what it found.</summary>
+    private void SignIn(Connection connection, bool deviceCode)
+    {
+        var plan = ToolLogin.PlanFor(connection.Kind, deviceCode)!;
+        console.WriteLine();
+        console.MarkupLine($"[bold]{Markup.Escape(plan.Title)}[/]");
+        Ui.Note(console, plan.Before);
+        if (ProxySettings.Current.IsActive)
+        {
+            Ui.Note(console, $"It goes through your proxy ({ProxySettings.Current.Display}).");
+        }
+
+        console.WriteLine();
+        try
+        {
+            ToolLogin.RunAsync(plan, _root, CancellationToken.None).GetAwaiter().GetResult();
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or ExecutableNotFoundException or System.ComponentModel.Win32Exception)
+        {
+            Ui.Problem(console, $"Could not start the sign-in: {Ui.Shorten(ex.Message, 160)}");
+            return;
+        }
+
+        console.WriteLine();
+        Ui.Note(console, plan.After);
+        var (state, models) = Ui.SpinAsync(console, "Checking the sign-in", () => MachineScan.CheckToolAsync(connection.Kind, runner, _root, CancellationToken.None))
+            .GetAwaiter().GetResult();
+        _report = connection.Kind switch
+        {
+            ConnectionKind.ClaudeCode => _report with { Claude = state },
+            ConnectionKind.Codex => _report with { Codex = state },
+            _ => _report with { Antigravity = state, AntigravityModels = models },
+        };
+        if (state is { Installed: true, SignedIn: not false })
+        {
+            Ui.Done(console, $"{Markup.Escape(connection.Title)}: {Markup.Escape(state.Detail)}.");
+        }
+        else
+        {
+            Ui.Problem(console, $"Still not signed in ({Markup.Escape(state.Detail)}).");
         }
     }
 
@@ -329,6 +419,12 @@ internal sealed class SetupWizard(IAnsiConsole console, IProcessRunner runner, F
                 break;
             case ConnectionKind.Antigravity when report.Antigravity.SignedIn == false:
                 problems.Add(("Antigravity is not signed in", report.Antigravity.InstallHint));
+                break;
+            case ConnectionKind.Codex when !report.Codex.Installed:
+                problems.Add(("the Codex CLI is not installed", report.Codex.InstallHint));
+                break;
+            case ConnectionKind.Codex when report.Codex.SignedIn == false:
+                problems.Add(("Codex is not signed in", report.Codex.InstallHint));
                 break;
         }
 
@@ -353,7 +449,16 @@ internal sealed class SetupWizard(IAnsiConsole console, IProcessRunner runner, F
         {
             ConnectionKind.ClaudeCode => Vendor.Claude,
             ConnectionKind.Antigravity => Vendor.Gemini,
-            _ => recommended.Api!.Id switch { "anthropic" => Vendor.Claude, "gemini" => Vendor.Gemini, "openrouter" => Vendor.OpenRouter, _ => Vendor.Other },
+            ConnectionKind.Codex => Vendor.Gpt,
+            _ => recommended.Api!.Id switch
+            {
+                "anthropic" => Vendor.Claude,
+                "gemini" => Vendor.Gemini,
+                "openai" => Vendor.Gpt,
+                "openrouter" => Vendor.OpenRouter,
+                "deepseek" => Vendor.DeepSeek,
+                _ => Vendor.Custom,
+            },
         };
 
         string Label(Vendor vendor)
@@ -361,9 +466,11 @@ internal sealed class SetupWizard(IAnsiConsole console, IProcessRunner runner, F
             var text = vendor switch
             {
                 Vendor.Claude => $"Claude (Anthropic)  [grey]· Claude Code subscription: {CliState(report.Claude)}  · or an Anthropic API key[/]",
+                Vendor.Gpt => $"GPT (OpenAI)  [grey]· Codex CLI (ChatGPT plan or API key): {CliState(report.Codex)}  · or an OpenAI API key[/]",
                 Vendor.Gemini => $"Gemini (Google)  [grey]· Antigravity subscription: {CliState(report.Antigravity)}  · or a Gemini API key[/]",
                 Vendor.OpenRouter => $"OpenRouter  [grey]· any model, API key: {KeyState(Sources.OpenRouter)}[/]",
-                _ => "Another API  [grey]· OpenAI, DeepSeek, or any OpenAI-compatible endpoint[/]",
+                Vendor.DeepSeek => $"DeepSeek  [grey]· API key: {KeyState(Sources.DeepSeek)}{Sources.DeepSeek.Tested}[/]",
+                _ => "Custom provider  [grey]· any OpenAI-compatible API (AvalAI, a company gateway, a local server): you give the address, key and model[/]",
             };
             return text + (vendor == recommendedVendor ? "  [blue]recommended[/]" : "");
         }
@@ -380,6 +487,17 @@ internal sealed class SetupWizard(IAnsiConsole console, IProcessRunner runner, F
         {
             case Vendor.OpenRouter:
                 return Connection.For(Sources.OpenRouter);
+            case Vendor.DeepSeek:
+                return Connection.For(Sources.DeepSeek);
+            case Vendor.Gpt:
+                return console.Prompt(new SelectionPrompt<Connection>()
+                    .Title("How do you use GPT?")
+                    .AddChoices(Connection.Codex, Connection.For(Sources.OpenAi))
+                    .UseConverter(c => c.Kind == ConnectionKind.Codex
+                        ? $"Through the Codex CLI  [grey]· signed in with ChatGPT or an API key (`codex login`): {CliState(report.Codex)}[/]"
+                        : $"I have an OpenAI API key  [grey]· {KeyState(Sources.OpenAi)}{Sources.OpenAi.Tested}[/]"));
+            case Vendor.Custom:
+                return Connection.For(AskCustomApi());
             case Vendor.Claude:
                 return console.Prompt(new SelectionPrompt<Connection>()
                     .Title("How do you use Claude?")
@@ -395,35 +513,96 @@ internal sealed class SetupWizard(IAnsiConsole console, IProcessRunner runner, F
                         ? $"I have an Antigravity subscription  [grey]· through the agy CLI: {CliState(report.Antigravity)} (Antigravity has no API-key mode)[/]"
                         : $"I have a Gemini API key  [grey]· Google AI Studio, {KeyState(Sources.Gemini)}{Sources.Gemini.Tested}[/]"));
             default:
-                var service = console.Prompt(new SelectionPrompt<string>()
-                    .Title("Which API?")
-                    .AddChoices("openai", "deepseek", "custom")
-                    .UseConverter(id => id switch
-                    {
-                        "openai" => $"OpenAI  [grey]· {KeyState(Sources.OpenAi)}{Sources.OpenAi.Tested}[/]",
-                        "deepseek" => $"DeepSeek  [grey]· {KeyState(Sources.DeepSeek)}{Sources.DeepSeek.Tested}[/]",
-                        _ => "Another OpenAI-compatible endpoint  [grey]· you give the address and key variable[/]",
-                    }));
-                return service switch
-                {
-                    "openai" => Connection.For(Sources.OpenAi),
-                    "deepseek" => Connection.For(Sources.DeepSeek),
-                    _ => Connection.For(AskCustomApi()),
-                };
+                throw new InvalidOperationException("unreachable vendor");
         }
     }
 
+    // --- a provider the user types in ------------------------------------------------------------------------------
+
+    private readonly Dictionary<string, (decimal Input, decimal Output)> _customPrices = new(StringComparer.OrdinalIgnoreCase);
+
     private ApiService AskCustomApi()
     {
-        var url = console.Prompt(new TextPrompt<string>("Base URL of the API [grey](ends in /v1, e.g. http://localhost:11434/v1)[/]:")
+        console.WriteLine();
+        console.MarkupLine("[bold]Custom provider.[/] Anything that speaks the OpenAI chat API works: AvalAI, a company gateway, LM Studio, Ollama, vLLM...");
+        var url = console.Prompt(new TextPrompt<string>("Base URL of the API [grey](usually ends in /v1, e.g. https://api.avalai.ir/v1)[/]:")
             .Validate(u => Uri.TryCreate(u, UriKind.Absolute, out var uri) && (uri.Scheme is "http" or "https")
                 ? ValidationResult.Success() : ValidationResult.Error("[red]Enter a full http(s) address[/]")));
-        var variable = console.Prompt(new TextPrompt<string>("Name of the environment variable that holds its key:")
-            .DefaultValue("CUSTOM_API_KEY")
+        url = url.Trim().TrimEnd('/');
+        if (url.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase))
+        {
+            url = url[..^"/chat/completions".Length];
+            Ui.Note(console, $"Using {url} (Tokonomy adds /chat/completions itself).");
+        }
+
+        var host = new Uri(url).Host;
+        var name = console.Prompt(new TextPrompt<string>("What do you call it?").DefaultValue(host));
+        var variable = console.Prompt(new TextPrompt<string>("Name of the environment variable that holds its API key [grey](the key itself is asked next)[/]:")
+            .DefaultValue(DefaultKeyVariable(name))
             .Validate(v => System.Text.RegularExpressions.Regex.IsMatch(v, "^[A-Za-z_][A-Za-z0-9_]{0,63}$")
                 ? ValidationResult.Success() : ValidationResult.Error("[red]That should be a variable name, not the key itself[/]")));
-        return new ApiService("custom", new Uri(url).Host, url.TrimEnd('/'), variable, "", Verified: false);
+        Ui.Note(console, "It is called with the key as a Bearer token, like OpenAI. Next: the key, then the list of its models (if it offers one).");
+        return Sources.Custom(name, url, variable);
     }
+
+    private static string DefaultKeyVariable(string name)
+    {
+        var cleaned = new string(name.ToUpperInvariant().Select(c => char.IsAsciiLetterOrDigit(c) ? c : '_').ToArray()).Trim('_');
+        return (cleaned.Length == 0 || char.IsAsciiDigit(cleaned[0]) ? "CUSTOM" : cleaned) + "_API_KEY";
+    }
+
+    /// <summary>Optional: what the model costs, so the ledger and spending caps measure it instead of showing $0.</summary>
+    private void AskCustomPrice(Connection connection, string model, bool interactive)
+    {
+        if (!interactive || connection.Api is not { Id: Sources.CustomId } || model.Length == 0 || _customPrices.ContainsKey(model))
+        {
+            return;
+        }
+
+        console.WriteLine();
+        console.MarkupLine($"[grey]Tokonomy cannot know what {Markup.Escape(model)} costs. Give its price per million tokens so spending is measured; press Enter to skip (costs then show as estimated).[/]");
+        var input = AskPrice("Price per 1M [bold]input[/] tokens in USD");
+        if (input is null)
+        {
+            return;
+        }
+
+        var output = AskPrice("Price per 1M [bold]output[/] tokens in USD");
+        if (output is not null)
+        {
+            _customPrices[model] = (input.Value, output.Value);
+        }
+    }
+
+    private decimal? AskPrice(string title)
+    {
+        var text = console.Prompt(new TextPrompt<string>(title + ":").AllowEmpty()
+            .Validate(t => t.Length == 0 || (decimal.TryParse(t, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var d) && d >= 0)
+                ? ValidationResult.Success() : ValidationResult.Error("[red]A number like 0.5, or Enter to skip[/]")));
+        return text.Length == 0 ? null : decimal.Parse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static bool TryFlag(string? text, SetupOptions options, out Connection connection)
+    {
+        if (text?.Trim().Equals(Sources.CustomId, StringComparison.OrdinalIgnoreCase) == true)
+        {
+            connection = Connection.Claude;
+            if (!Uri.TryCreate(options.CustomUrl, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https") || string.IsNullOrWhiteSpace(options.CustomKeyEnv))
+            {
+                return false;
+            }
+
+            connection = Connection.For(Sources.Custom(options.CustomName ?? uri.Host, options.CustomUrl!, options.CustomKeyEnv!.Trim()));
+            return true;
+        }
+
+        return Sources.TryParse(text, out connection);
+    }
+
+    private static string FlagProblem(string flag, string? text, SetupOptions options) =>
+        text?.Trim().Equals(Sources.CustomId, StringComparison.OrdinalIgnoreCase) == true
+            ? $"{flag} custom needs --custom-url (an http(s) address such as https://api.avalai.ir/v1) and --custom-key-env (the NAME of the variable holding the key)."
+            : $"Unknown {flag} '{text}'. Use claude, antigravity, codex, openrouter, anthropic, gemini, openai, deepseek or custom.";
 
     // --- keys -----------------------------------------------------------------------------------------------------
 
@@ -550,8 +729,29 @@ internal sealed class SetupWizard(IAnsiConsole console, IProcessRunner runner, F
                 return Menu($"Which Antigravity model for the [bold]{role}[/] role?", offered.Select(m => new Pick(m, Markup.Escape(m))).ToList(), pick);
             }
 
+            case ConnectionKind.Codex:
+            {
+                var fallback = strongRole ? Sources.DefaultStrong(connection) : Sources.DefaultCheap(connection);
+                if (!interactive)
+                {
+                    return fallback;
+                }
+
+                console.WriteLine();
+                console.MarkupLine("[grey]Codex cannot list the models of your plan, so these are common ids; which ones work depends on your plan. Your choice is tested below.[/]");
+                var models = strongRole ? Sources.CodexModels : Sources.CodexModels.Reverse().ToList();
+                var picks = models.Select(m => new Pick(m.Id, $"{m.Id}  [grey]{m.Note}[/]")).ToList();
+                picks.Add(new Pick("", "[grey]Other: type a model id…[/]"));
+                var chosen = Menu($"Which GPT model for the [bold]{role}[/] role?", picks, fallback);
+                return chosen.Length > 0 ? chosen : console.Prompt(new TextPrompt<string>("Model id:").AllowEmpty());
+            }
+
             default:
-                return await PickApiModelAsync(connection.Api!, strongRole, interactive, ct);
+            {
+                var model = await PickApiModelAsync(connection.Api!, strongRole, interactive, ct);
+                AskCustomPrice(connection, model, interactive);
+                return model;
+            }
         }
     }
 
@@ -663,6 +863,10 @@ internal sealed class SetupWizard(IAnsiConsole console, IProcessRunner runner, F
             {
                 prices[found.Id] = (found.InputPerM, found.OutputPerM);
             }
+            else if (connection.Api?.Id == Sources.CustomId && _customPrices.TryGetValue(model, out var typed))
+            {
+                prices[model] = typed;
+            }
         }
 
         return prices;
@@ -715,32 +919,43 @@ internal sealed class SetupWizard(IAnsiConsole console, IProcessRunner runner, F
 
     private async Task CheckConnectionsAsync(SetupChoices choices, bool interactive, CancellationToken ct)
     {
-        var claudeModels = new[] { (choices.Strong, choices.ArchitectModel), (choices.Cheap, choices.WorkerModel) }
-            .Where(p => p.Item1.Kind == ConnectionKind.ClaudeCode && p.Item2.Length > 0)
-            .Select(p => p.Item2)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        var agyPlanner = choices.Strong.Kind == ConnectionKind.Antigravity && choices.ArchitectModel.Length > 0;
-        if (!interactive || (claudeModels.Count == 0 && !agyPlanner))
+        // What to ask a tiny question of: every model reached through a CLI login. (An API is checked as its key is entered.)
+        var probes = new List<(string Model, string Title, string Login, Func<IProvider> Make)>();
+        foreach (var (connection, model, strongRole) in new[] { (choices.Strong, choices.ArchitectModel, true), (choices.Cheap, choices.WorkerModel, false) })
+        {
+            if (model.Length == 0)
+            {
+                continue;
+            }
+
+            (string Title, string Login, Func<IProvider> Make)? probe = connection.Kind switch
+            {
+                ConnectionKind.ClaudeCode => ("Claude Code", "your Claude Code login", () => new ClaudeCliProvider(runner)),
+                ConnectionKind.Codex => ("Codex", "your Codex login", () => new CodexCliProvider(runner)),
+                ConnectionKind.Antigravity when strongRole => ("Antigravity", "your Antigravity login", () => new AgyCliProvider(runner)),
+                _ => null,
+            };
+            if (probe is { } p && !probes.Any(x => x.Title == p.Title && x.Model.Equals(model, StringComparison.OrdinalIgnoreCase)))
+            {
+                probes.Add((model, p.Title, p.Login, p.Make));
+            }
+        }
+
+        if (!interactive || probes.Count == 0)
         {
             return;
         }
 
         console.WriteLine();
-        var targets = claudeModels.Select(m => $"{m} (Claude Code)").Concat(agyPlanner ? [$"{choices.ArchitectModel} (Antigravity)"] : []);
+        var targets = probes.Select(p => $"{p.Model} ({p.Title})");
         if (!console.Confirm($"Test the connection for {string.Join(" and ", targets)} now? [grey](a few tokens each)[/]", true))
         {
             return;
         }
 
-        foreach (var model in claudeModels)
+        foreach (var (model, _, login, make) in probes)
         {
-            await ProbeAsync(model, new ClaudeCliProvider(runner), "your Claude Code login", ct);
-        }
-
-        if (agyPlanner)
-        {
-            await ProbeAsync(choices.ArchitectModel, new AgyCliProvider(runner), "your Antigravity login", ct);
+            await ProbeAsync(model, make(), login, ct);
         }
     }
 

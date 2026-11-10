@@ -2,6 +2,7 @@ using System.Text;
 using Tokonomy.Core.Abstractions;
 using Tokonomy.Core.Config;
 using Tokonomy.Core.Model;
+using Tokonomy.Core.Net;
 using Tokonomy.Runtime.Gates;
 using Tokonomy.Runtime.Git;
 using Tokonomy.Runtime.Process;
@@ -129,9 +130,12 @@ public sealed class ConfigExecutor(string name, ExecutorDefinition definition, E
             }
 
             var args = BuildArgs(definition, vars, model);
+            var proxy = ProxySettings.Current.ForProvider(ProxyIdOf(definition));
             var env = EnvironmentBuilder.ForWorker(
                 session.ExtraAllowedEnv,
-                definition.Env.ToDictionary(kv => kv.Key, kv => Substitute(kv.Value, vars), StringComparer.Ordinal));
+                definition.Env.ToDictionary(kv => kv.Key, kv => Substitute(kv.Value, vars), StringComparer.Ordinal),
+                null,
+                proxy);
 
             Directory.CreateDirectory(session.LogDirectory);
             var stdout = Path.Combine(session.LogDirectory, $"{brief.Label}.stdout.log");
@@ -143,6 +147,7 @@ public sealed class ConfigExecutor(string name, ExecutorDefinition definition, E
                 Environment = env,
                 ReplaceEnvironment = true,
                 Timeout = timeout,
+                Proxy = proxy,
                 StdoutFile = stdout,
                 StderrFile = stderr,
             }, ct);
@@ -261,6 +266,16 @@ public sealed class ConfigExecutor(string name, ExecutorDefinition definition, E
         return sb.ToString();
     }
 
+    /// <summary>The connection an agent CLI talks to, for the proxy scope: claude, codex, antigravity, otherwise a tool like OpenCode.</summary>
+    internal static string ProxyIdOf(ExecutorDefinition definition) =>
+        Path.GetFileNameWithoutExtension(definition.Cmd.FirstOrDefault() ?? "").ToLowerInvariant() switch
+        {
+            "claude" => "claude",
+            "codex" => "codex",
+            "agy" => "antigravity",
+            _ => ProxySettings.OtherId,
+        };
+
     public static bool IsAgy(ExecutorDefinition definition) =>
         string.Equals(definition.UsageFormat, "agy-json", StringComparison.OrdinalIgnoreCase);
 
@@ -275,6 +290,7 @@ public sealed class ConfigExecutor(string name, ExecutorDefinition definition, E
         {
             "claude-json" => ClaudeUsageParser.Parse(stdoutText),
             "agy-json" => AgyUsageParser.Parse(stdoutText, model),
+            "codex-json" => CodexRun.Parse(stdoutText).ToUsage(model),
             _ => [],
         };
     }

@@ -142,10 +142,10 @@ public static class ConfigLoader
                 "provider.api_key_env looks like an API key. Put the *name* of an environment variable here, never the key.");
         }
 
-        if (policy.ArchitectProvider.Kind is not (ArchitectProviderConfig.ApiKind or ArchitectProviderConfig.ClaudeCliKind or ArchitectProviderConfig.AgyCliKind))
+        if (policy.ArchitectProvider.Kind is not (ArchitectProviderConfig.ApiKind or ArchitectProviderConfig.ClaudeCliKind or ArchitectProviderConfig.AgyCliKind or ArchitectProviderConfig.CodexCliKind))
         {
             yield return new(Severity.Error, file, null,
-                $"architect_provider.kind '{policy.ArchitectProvider.Kind}' is not supported; use '{ArchitectProviderConfig.ApiKind}', '{ArchitectProviderConfig.ClaudeCliKind}' or '{ArchitectProviderConfig.AgyCliKind}'.");
+                $"architect_provider.kind '{policy.ArchitectProvider.Kind}' is not supported; use '{ArchitectProviderConfig.ApiKind}', '{ArchitectProviderConfig.ClaudeCliKind}', '{ArchitectProviderConfig.AgyCliKind}' or '{ArchitectProviderConfig.CodexCliKind}'.");
         }
 
         if (!string.IsNullOrWhiteSpace(policy.ArchitectProvider.BaseUrl) &&

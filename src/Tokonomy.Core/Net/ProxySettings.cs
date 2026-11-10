@@ -26,6 +26,16 @@ public sealed partial class ProxySettings
     /// <summary>Hosts that skip the proxy (a host also covers its subdomains). Loopback always skips it.</summary>
     public List<string> NoProxy { get; set; } = [];
 
+    /// <summary>
+    /// Which connections use the proxy, by id: <c>claude</c>, <c>codex</c>, <c>antigravity</c>, <c>openrouter</c>,
+    /// <c>anthropic</c>, <c>gemini</c>, <c>openai</c>, <c>deepseek</c>, <c>custom</c> and <see cref="OtherId"/> (git, tests
+    /// and every other tool). Empty means everything.
+    /// </summary>
+    public List<string> Scope { get; set; } = [];
+
+    /// <summary>Git, gates, tests and any process that is not a model connection.</summary>
+    public const string OtherId = "other";
+
     public static ProxySettings Off { get; } = new();
 
     /// <summary>What every part of Tokonomy uses. Set once at startup by the CLI; it is <see cref="Off"/> until then (so tests never see the user's file).</summary>
@@ -158,6 +168,32 @@ public sealed partial class ProxySettings
         ? $"{m.Groups["scheme"].Value}://{m.Groups["userinfo"].Value.Split(':')[0]}:***@{m.Groups["host"].Value}:{m.Groups["port"].Value}"
         : m.Value);
 
+    /// <summary>Does traffic of this connection go through the proxy? True for everything when no scope is set.</summary>
+    public bool AppliesTo(string providerId) =>
+        Scope.Count == 0 || Scope.Contains(providerId, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>These settings when they apply to <paramref name="providerId"/>, otherwise <see cref="Off"/>.</summary>
+    public ProxySettings ForProvider(string providerId) => IsActive && AppliesTo(providerId) ? this : Off;
+
+    /// <summary>Which connection an API host belongs to: the known services by name, anything else is a custom provider.</summary>
+    public static string ProviderIdForHost(string host)
+    {
+        host = host.ToLowerInvariant();
+        bool Is(string domain) => host == domain || host.EndsWith("." + domain, StringComparison.Ordinal);
+        return Is("openrouter.ai") ? "openrouter"
+            : Is("anthropic.com") ? "anthropic"
+            : Is("googleapis.com") ? "gemini"
+            : Is("openai.com") ? "openai"
+            : Is("deepseek.com") ? "deepseek"
+            : "custom";
+    }
+
+    /// <summary>Readable scope for messages.</summary>
+    [JsonIgnore]
+    public string ScopeDisplay => Scope.Count == 0
+        ? "everything"
+        : string.Join(", ", Scope.Select(s => s.Equals(OtherId, StringComparison.OrdinalIgnoreCase) ? "git, tests and other tools" : s));
+
     /// <summary>A handler for Tokonomy's own HTTP clients: through the proxy when active, otherwise the .NET default.</summary>
     public SocketsHttpHandler CreateHandler(DecompressionMethods decompression = DecompressionMethods.None)
     {
@@ -176,7 +212,22 @@ public sealed partial class ProxySettings
         var (host, port, credential) = Endpoint();
         var scheme = Scheme == "socks5h" ? "socks5" : Scheme; // .NET sends the host name to a SOCKS5 proxy either way
         var uri = new UriBuilder(scheme, host, port).Uri;
-        return new WebProxy(uri, BypassOnLocal: true, BypassList(), credential);
+        var inner = new WebProxy(uri, BypassOnLocal: true, BypassList(), credential);
+        return Scope.Count == 0 ? inner : new ScopedWebProxy(inner, this);
+    }
+
+    /// <summary>Sends only the hosts of connections in the scope through the proxy; everything else goes direct.</summary>
+    private sealed class ScopedWebProxy(IWebProxy inner, ProxySettings owner) : IWebProxy
+    {
+        public ICredentials? Credentials
+        {
+            get => inner.Credentials;
+            set => inner.Credentials = value;
+        }
+
+        public Uri? GetProxy(Uri destination) => IsBypassed(destination) ? destination : inner.GetProxy(destination);
+
+        public bool IsBypassed(Uri host) => inner.IsBypassed(host) || !owner.AppliesTo(ProviderIdForHost(host.Host));
     }
 
     /// <summary>

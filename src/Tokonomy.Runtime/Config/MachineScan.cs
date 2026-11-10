@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Tokonomy.Core.Net;
 using Tokonomy.Runtime.Process;
 
 namespace Tokonomy.Runtime.Config;
@@ -16,6 +17,7 @@ public sealed record MachineReport
     public required ToolState Git { get; init; }
     public required ToolState Claude { get; init; }
     public required ToolState Antigravity { get; init; }
+    public required ToolState Codex { get; init; }
     public required ToolState OpenCode { get; init; }
     public required ToolState Python { get; init; }
     public required ToolState Node { get; init; }
@@ -30,11 +32,12 @@ public sealed record MachineReport
     {
         ConnectionKind.ClaudeCode => Claude,
         ConnectionKind.Antigravity => Antigravity,
+        ConnectionKind.Codex => Codex,
         _ => strongRole ? new ToolState("API", true, null, "needs only a key", "") : OpenCode,
     };
 
     /// <summary>Any agent CLI that can write code (the cheap role needs one).</summary>
-    public bool HasCodingAgent => Claude.Ready || Antigravity.Ready || OpenCode.Installed;
+    public bool HasCodingAgent => Claude.Ready || Antigravity.Ready || Codex.Ready || OpenCode.Installed;
 }
 
 public static class MachineScan
@@ -43,7 +46,8 @@ public static class MachineScan
     {
         var claude = ClaudeAsync(runner, root, ct);
         var agy = AntigravityAsync(runner, root, ct);
-        await Task.WhenAll(claude, agy);
+        var codex = CodexAsync(runner, root, ct);
+        await Task.WhenAll(claude, agy, codex);
 
         return new MachineReport
         {
@@ -51,12 +55,23 @@ public static class MachineScan
             Claude = claude.Result,
             Antigravity = agy.Result.State,
             AntigravityModels = agy.Result.Models,
+            Codex = codex.Result,
             OpenCode = Simple("opencode", root, "npm install -g opencode-ai   (needs Node.js)"),
             Python = Simple("python", root, "winget install Python.Python.3.12   (or https://www.python.org/downloads)"),
             Node = Simple("node", root, "winget install OpenJS.NodeJS.LTS   (or https://nodejs.org)"),
             WindowsSandbox = OperatingSystem.IsWindows() ? Sandbox() : null,
         };
     }
+
+    /// <summary>Looks at one CLI again (after the user signed in): installed, signed in, and for Antigravity the models of the plan.</summary>
+    public static async Task<(ToolState State, IReadOnlyList<string> Models)> CheckToolAsync(
+        ConnectionKind kind, IProcessRunner runner, string root, CancellationToken ct) => kind switch
+    {
+        ConnectionKind.ClaudeCode => (await ClaudeAsync(runner, root, ct), []),
+        ConnectionKind.Codex => (await CodexAsync(runner, root, ct), []),
+        ConnectionKind.Antigravity => await AntigravityAsync(runner, root, ct),
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "only CLI connections have a sign-in"),
+    };
 
     private static ToolState Simple(string name, string root, string hint)
     {
@@ -67,6 +82,34 @@ public static class MachineScan
     internal const string ClaudeHint = "npm install -g @anthropic-ai/claude-code   then run `claude` once and sign in";
     internal const string AntigravityHint = "install the Antigravity CLI (`agy`) from Google, then run `agy` once and sign in with your Google account";
 
+    internal const string CodexHint = "npm install -g @openai/codex   then run `codex login` (ChatGPT account, or an API key: `codex login --with-api-key`)";
+
+    private static async Task<ToolState> CodexAsync(IProcessRunner runner, string root, CancellationToken ct)
+    {
+        if (ExecutableResolver.TryResolve("codex", root) is null)
+        {
+            return new ToolState("codex", false, null, "not installed", CodexHint);
+        }
+
+        try
+        {
+            // `codex login status` exits 0 and says how you are signed in, or exits non-zero when you are not.
+            var outcome = await runner.RunAsync(new ProcessSpec { Args = ["codex", "login", "status"], WorkingDirectory = root, Timeout = TimeSpan.FromSeconds(30), Proxy = ProxySettings.Current.ForProvider("codex") }, ct);
+            var said = (outcome.Stdout + "\n" + outcome.Stderr).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .FirstOrDefault(l => l.Contains("logged in", StringComparison.OrdinalIgnoreCase));
+            if (outcome.Succeeded && said is not null)
+            {
+                return new ToolState("codex", true, true, said.ToLowerInvariant().Replace("logged in", "signed in"), "");
+            }
+
+            return new ToolState("codex", true, false, "installed, not signed in", "run `codex login`");
+        }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or ExecutableNotFoundException)
+        {
+            return new ToolState("codex", true, null, "installed", "");
+        }
+    }
+
     private static async Task<ToolState> ClaudeAsync(IProcessRunner runner, string root, CancellationToken ct)
     {
         if (ExecutableResolver.TryResolve("claude", root) is null)
@@ -76,7 +119,7 @@ public static class MachineScan
 
         try
         {
-            var outcome = await runner.RunAsync(new ProcessSpec { Args = ["claude", "auth", "status"], WorkingDirectory = root, Timeout = TimeSpan.FromSeconds(30) }, ct);
+            var outcome = await runner.RunAsync(new ProcessSpec { Args = ["claude", "auth", "status"], WorkingDirectory = root, Timeout = TimeSpan.FromSeconds(30), Proxy = ProxySettings.Current.ForProvider("claude") }, ct);
             using var doc = JsonDocument.Parse(outcome.Stdout.Trim());
             var loggedIn = doc.RootElement.TryGetProperty("loggedIn", out var l) && l.ValueKind == JsonValueKind.True;
             var method = doc.RootElement.TryGetProperty("authMethod", out var m) ? m.GetString() : null;
@@ -100,7 +143,7 @@ public static class MachineScan
 
         try
         {
-            var outcome = await runner.RunAsync(new ProcessSpec { Args = ["agy", "models"], WorkingDirectory = root, Timeout = TimeSpan.FromSeconds(60) }, ct);
+            var outcome = await runner.RunAsync(new ProcessSpec { Args = ["agy", "models"], WorkingDirectory = root, Timeout = TimeSpan.FromSeconds(60), Proxy = ProxySettings.Current.ForProvider("antigravity") }, ct);
             var models = ParseModels(outcome.Stdout);
             return outcome.Succeeded && models.Count > 0
                 ? (new ToolState("agy", true, true, $"signed in, {models.Count} model(s) in your plan", ""), models)

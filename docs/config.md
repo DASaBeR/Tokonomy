@@ -232,14 +232,37 @@ The strong model (`models.architect`) and the cheap model (`models.worker`) are 
 |---|---|---|
 | strong | Claude Code subscription | `architect_provider: { kind: claude-cli }` |
 | strong | Antigravity subscription | `architect_provider: { kind: agy-cli }` (the session may read only its scratch prompt file; no writes, no commands; the answering model is verified) |
+| strong | Codex CLI (ChatGPT plan, or an API key given to `codex login`) | `architect_provider: { kind: codex-cli }` (`codex exec`, read-only sandbox, empty scratch folder) |
 | strong | any OpenAI-compatible API | `architect_provider: { kind: api, base_url: ..., api_key_env: NAME }` (its own endpoint and key) |
 | cheap | Claude Code subscription | `executors.default: claude-code-sub` |
 | cheap | Antigravity subscription | `executors.default: antigravity` |
+| cheap | Codex CLI | `executors.default: codex` (`usage_format: codex-json`; tokens only, cost estimated) |
 | cheap | any OpenAI-compatible API | `executors.default: opencode` and `provider: { base_url, api_key_env }` (metered through Tokonomy's proxy) |
 
 Antigravity (`agy`) has no API-key option, so a Gemini API key is a separate connection through Google's OpenAI-compatible endpoint. The services Tokonomy has run end to end are OpenRouter (strong and cheap) and the CLI logins; Anthropic, Gemini, OpenAI, DeepSeek and custom endpoints use the same protocol but are marked "not tested live". API keys are only ever read from the environment variable named in the config, and are removed from worker and gate environments.
 
 `tokonomy init` scans the machine, asks for both choices, checks keys, tests the CLI logins on request, and writes all of the above.
+
+### Signing in
+
+When you pick Claude Code, Codex or Antigravity and it is installed but not signed in, the setup offers **Sign in now**. It runs the tool's own login with the terminal handed over to it (`claude auth login`, `codex login`, or `agy` for Antigravity, which has no separate login command), your browser opens at the provider, and when you come back Tokonomy checks the sign-in and carries on. Codex also offers a device-code sign-in for a machine without a browser (`codex login --device-auth`). It is never offered under `--yes` or `--json`.
+
+The same thing is available any time, for example when a login expires: `tokonomy login` shows who is signed in and offers to sign in the ones that are not; `tokonomy login codex` (or `claude`, `antigravity`) goes straight to one. If a proxy is set, the sign-in and the checks go through it.
+
+### GPT through Codex
+
+`codex` uses whatever Codex is signed in with: a ChatGPT plan (`codex login`) or an API key (`codex login --with-api-key`). Tokonomy never passes it a key from your environment, so the login Codex holds decides who is billed. For a plain OpenAI API key without Codex, choose "I have an OpenAI API key" in the GPT menu instead (strong role, or cheap role through OpenCode). Codex cannot list the models of a plan, so the menu offers common ids (`gpt-5-codex`, `gpt-5`, `gpt-5-mini`) and any id can be typed; the connection test at the end of `init` makes a tiny call with the one you picked. The Codex adapter has not yet been run end to end on a signed-in account.
+
+### Custom provider (AvalAI and others)
+
+Choose **Custom provider** for any service that speaks the OpenAI chat API and is not in the menu. `tokonomy init` asks for:
+
+1. the **base URL** (usually ending in `/v1`, for example `https://api.avalai.ir/v1`; a pasted `.../chat/completions` is trimmed),
+2. a **name**, and the **name of the environment variable** for its key (it suggests `AVALAI_API_KEY`); then you paste the key once, it is checked against `GET {base}/models`, and kept only as a user environment variable,
+3. the **model**, picked from the provider's `/models` list when it has one, otherwise typed,
+4. optionally the model's **price per million tokens** (input and output), so the ledger and spending caps measure it instead of showing it as estimated.
+
+Without questions: `tokonomy init --yes --strong custom --custom-url https://api.avalai.ir/v1 --custom-key-env AVALAI_API_KEY --custom-name AvalAI --architect gpt-4o --cheap custom --worker gpt-4o-mini`. The address and variable name (never the key) are remembered per user, so the next project offers the same setup. The key is sent as `Authorization: Bearer <key>`; services that need another header or extra headers are not supported yet. A cheap model on a custom provider writes code through OpenCode, metered by Tokonomy's proxy. `tokonomy proxy test` includes the custom provider.
 
 ## Claude architect + Antigravity worker
 
@@ -371,12 +394,16 @@ Behind V2RayN or any other proxy? Set it once; it applies to every project and e
 tokonomy proxy set socks5://127.0.0.1:10808     # or 127.0.0.1:10809 / http://... for an HTTP proxy
 tokonomy proxy test                              # the proxy, then each model/subscription you use, through it
 tokonomy proxy test --live                       # also one tiny real call per model
+tokonomy proxy scope                             # choose which models use it (asked as strong / cheap / both)
+tokonomy proxy set 127.0.0.1:10808 --only openrouter,other   # or say it up front
 tokonomy proxy off | on | (no argument = show)
 ```
 
+By default **everything** goes through the proxy. When you set one in a terminal, you are asked which models should use it: both, only the strong model, only the cheap model, or a pick connection by connection. This is for the case where only some providers need it, for example OpenRouter through V2RayN while Codex connects directly. The choice is saved as connection ids (`claude`, `codex`, `antigravity`, `openrouter`, `anthropic`, `gemini`, `openai`, `deepseek`, `custom`) plus `other` for git, tests and every other tool; `--only all` resets it. A role is saved as the connection it is today, so run `tokonomy proxy scope` again if you later change providers. `tokonomy proxy test` shows which targets go through the proxy and which connect directly.
+
 It is saved in `%LOCALAPPDATA%\tokonomy\proxy.json`. `TOKONOMY_PROXY` (an address, or `off`) overrides it.
 When on, everything goes through it: API planning and key checks, the metering proxy's calls to the model provider, and
-every child process (Claude Code, Antigravity, git, gates, workers) via `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY`.
+every child process (Claude Code, Codex, Antigravity, git, gates, workers, and the sign-in and status commands) via `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY`. The proxy is applied where processes are started, so nothing Tokonomy launches can skip it; a variable an executor sets itself still wins.
 Claude Code and most CLI tools cannot speak SOCKS, so for a SOCKS proxy Tokonomy runs a small local HTTP bridge (HTTPS
 tunnels only) and hands that to them. `localhost`/`127.0.0.1` always skip the proxy. Proxy credentials in the address are
 stored in that file and are the one secret that workers also receive; prefer a proxy without a password.

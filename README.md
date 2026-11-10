@@ -104,7 +104,7 @@ More terms (baseline, takeover, locked region, strategy) are in the [glossary](d
 ## Works behind a proxy
 
 Running a proxy app such as V2RayN, or a corporate proxy? Tell Tokonomy once and **all** of its traffic goes through it:
-API planning, Claude Code, Antigravity, the cheap model's calls, git and the gates. No per-tool configuration.
+API planning, Claude Code, Antigravity, Codex, the cheap model's calls, git and the gates. No per-tool configuration.
 
 ```
 tokonomy proxy set socks5://127.0.0.1:10808    # or 127.0.0.1:10809 / http://... for an HTTP proxy
@@ -113,9 +113,11 @@ tokonomy proxy test --live                      # also one tiny real call per mo
 tokonomy proxy off                              # back to direct connections (the address is kept)
 ```
 
+- **Choose which models use it.** Everything by default, or only the strong model, only the cheap model, or provider by provider (`tokonomy proxy scope`): for example OpenRouter through the proxy while Codex connects directly.
 - **Per user, not per project.** Saved in `%LOCALAPPDATA%	okonomy\proxy.json`, so every project uses it. The `TOKONOMY_PROXY` environment variable overrides it.
 - **HTTP, HTTPS and SOCKS5.** Claude Code and most CLI tools cannot speak SOCKS, so Tokonomy runs a small local HTTP bridge that tunnels through your SOCKS proxy for them.
 - **Know it works before you spend.** `tokonomy proxy test` reports, for each connection you use, whether it is reachable through the proxy and how fast. `--live` confirms a real answer from each model.
+- **Sign-in goes through it too.** `tokonomy login` (and the "Sign in now" choice in setup) opens the Claude, Codex or Antigravity login in your browser with the proxy applied.
 - **Local traffic is never proxied.** `localhost` and `127.0.0.1` always skip it, and `--no-proxy` adds more hosts.
 
 A password inside the proxy address is stored in that file and is also visible to workers; prefer a proxy without one. More in [docs/config.md](docs/config.md#proxy-per-user).
@@ -142,7 +144,7 @@ Both installers verify SHA-256 checksums. Single-file binaries are published for
 tokonomy build "a responsive landing page for a SaaS product"
 ```
 
-The first time, it asks a few questions (who plans, who codes, which models) and writes the config for you. It creates the git repository and a first commit if needed, checks your tools, plans, shows the plan and asks you to confirm, then builds and verifies each step and offers to merge the result. Setup first looks at your machine (is Claude Code installed and signed in? Antigravity? OpenCode? Python? Windows Sandbox?), then asks for two independent choices: the **strong** model (plans, rescues hard steps, writes the tests) and the **cheap** model (writes the code). Each can come from any provider: Claude through a Claude Code subscription or an Anthropic API key, Gemini through an Antigravity subscription (Antigravity has no API-key mode) or a Gemini API key, OpenRouter, OpenAI, DeepSeek or any OpenAI-compatible endpoint. Each choice shows that provider's own model menu (Claude Code's models, your plan's `agy models`, about 20 OpenRouter models with live prices and at least two free ones, or the service's own list). For an API you paste the key once; it is checked, and kept only as a user environment variable, never in a project file. Whatever is missing (a tool, a login, a key, Python, Windows Sandbox) is named with the exact command to fix it, and the setup can still be finished and completed later. `tokonomy init --yes --strong claude --cheap antigravity` does it without questions; the cheap role always needs a coding agent (Claude Code, Antigravity or OpenCode).
+The first time, it asks a few questions (who plans, who codes, which models) and writes the config for you. It creates the git repository and a first commit if needed, checks your tools, plans, shows the plan and asks you to confirm, then builds and verifies each step and offers to merge the result. Setup first looks at your machine (is Claude Code installed and signed in? Antigravity? Codex? OpenCode? Python? Windows Sandbox?), then asks for two independent choices: the **strong** model (plans, rescues hard steps, writes the tests) and the **cheap** model (writes the code). Each can come from any provider: Claude through a Claude Code subscription or an Anthropic API key, Gemini through an Antigravity subscription (Antigravity has no API-key mode) or a Gemini API key, GPT through the Codex CLI (ChatGPT plan or API key) or an OpenAI API key, OpenRouter, DeepSeek, or a **custom provider**: any OpenAI-compatible endpoint (AvalAI, a company gateway, a local server) where you give the address, key and model. Each choice shows that provider's own model menu (Claude Code's models, your plan's `agy models`, about 20 OpenRouter models with live prices and at least two free ones, or the service's own list). For an API you paste the key once; it is checked, and kept only as a user environment variable, never in a project file. Whatever is missing (a tool, a login, a key, Python, Windows Sandbox) is named with the exact command to fix it, and the setup can still be finished and completed later. `tokonomy init --yes --strong claude --cheap antigravity` does it without questions; the cheap role always needs a coding agent (Claude Code, Antigravity, Codex or OpenCode).
 
 **Step by step**, for control over each stage:
 

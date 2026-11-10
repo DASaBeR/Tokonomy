@@ -47,7 +47,7 @@ public static partial class EnvironmentBuilder
         }
 
         // The user's proxy applies to everything a worker runs; an executor's own variables can still override it.
-        (proxy ?? ProxySettings.Current).Apply(env);
+        (proxy ?? ProxySettings.Current.ForProvider(ProxySettings.OtherId)).Apply(env);
         foreach (var (key, value) in executorEnv)
         {
             env[key] = value;
@@ -70,7 +70,7 @@ public static partial class EnvironmentBuilder
 
         // Added after the scrub: a proxy URL with credentials is dropped from the inherited environment, but the proxy the
         // user configured in Tokonomy is meant to reach Claude Code, Antigravity, git and the gates.
-        (proxy ?? ProxySettings.Current).Apply(env);
+        (proxy ?? ProxySettings.Current.ForProvider(ProxySettings.OtherId)).Apply(env);
         return env;
     }
 

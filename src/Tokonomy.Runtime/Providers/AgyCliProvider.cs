@@ -1,4 +1,5 @@
 using System.Text;
+using Tokonomy.Core.Net;
 using Tokonomy.Core.Abstractions;
 using Tokonomy.Core.Config;
 using Tokonomy.Runtime.Executors;
@@ -64,9 +65,10 @@ public sealed class AgyCliProvider(IProcessRunner runner, string command = "agy"
             {
                 Args = args,
                 WorkingDirectory = workDir,
-                Environment = EnvironmentBuilder.ForGate([]),
+                Environment = EnvironmentBuilder.ForGate([], null, ProxySettings.Current.ForProvider("antigravity")),
                 ReplaceEnvironment = true,
                 Timeout = _timeout,
+                Proxy = ProxySettings.Current.ForProvider("antigravity"),
             }, ct);
 
             if (outcome.TimedOut)

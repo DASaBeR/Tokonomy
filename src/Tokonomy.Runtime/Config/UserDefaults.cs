@@ -6,6 +6,9 @@ namespace Tokonomy.Runtime.Config;
 /// What you picked last time, kept in your user profile (never in a project, never a key), so the next project starts with
 /// one question instead of the whole setup.
 /// </summary>
+/// <summary>A provider the user typed in: what it is called, where it is, and the NAME of the variable holding its key.</summary>
+public sealed record CustomApi(string Name, string BaseUrl, string KeyVariable);
+
 public sealed class UserDefaults
 {
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true, PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
@@ -14,6 +17,11 @@ public sealed class UserDefaults
     public string Strong { get; set; } = "";
 
     public string Cheap { get; set; } = "";
+
+    /// <summary>The address and key variable name (never the key) of a custom provider, when the strong role uses one.</summary>
+    public CustomApi? StrongCustom { get; set; }
+
+    public CustomApi? CheapCustom { get; set; }
     public string ArchitectModel { get; set; } = "";
     public string WorkerModel { get; set; } = "";
 
@@ -26,8 +34,24 @@ public sealed class UserDefaults
     {
         ConnectionKind.ClaudeCode => "claude",
         ConnectionKind.Antigravity => "antigravity",
+        ConnectionKind.Codex => "codex",
         _ => connection.Api!.Id,
     };
+
+    public static CustomApi? CustomOf(Connection connection) =>
+        connection.Api is { Id: Sources.CustomId } api ? new CustomApi(api.Title, api.BaseUrl, api.KeyVariable) : null;
+
+    /// <summary>The connection saved under <paramref name="id"/>; a custom provider comes back from its saved address.</summary>
+    public static bool TryConnection(string id, CustomApi? custom, out Connection connection)
+    {
+        if (id == Sources.CustomId && custom is not null)
+        {
+            connection = Connection.For(Sources.Custom(custom.Name, custom.BaseUrl, custom.KeyVariable));
+            return true;
+        }
+
+        return Sources.TryParse(id, out connection);
+    }
 
     public static UserDefaults? Load(string? path = null)
     {
@@ -59,6 +83,8 @@ public sealed class UserDefaults
             {
                 Strong = Id(choices.Strong),
                 Cheap = Id(choices.Cheap),
+                StrongCustom = CustomOf(choices.Strong),
+                CheapCustom = CustomOf(choices.Cheap),
                 ArchitectModel = choices.ArchitectModel,
                 WorkerModel = choices.WorkerModel,
             }, Json));

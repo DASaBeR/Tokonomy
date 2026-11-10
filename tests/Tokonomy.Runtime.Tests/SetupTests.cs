@@ -85,7 +85,7 @@ public sealed class SetupTests
     }
 
     private static readonly Connection[] AllConnections =
-        [Connection.Claude, Connection.Antigravity, .. Sources.ApiServices.Select(Connection.For)];
+        [Connection.Claude, Connection.Antigravity, Connection.Codex, .. Sources.ApiServices.Select(Connection.For)];
 
     public static IEnumerable<object[]> Pairs() =>
         from strong in AllConnections
@@ -128,6 +128,7 @@ public sealed class SetupTests
             {
                 ConnectionKind.ClaudeCode => ArchitectProviderConfig.ClaudeCliKind,
                 ConnectionKind.Antigravity => ArchitectProviderConfig.AgyCliKind,
+                ConnectionKind.Codex => ArchitectProviderConfig.CodexCliKind,
                 _ => ArchitectProviderConfig.ApiKind,
             };
             Assert.Equal(kind, config.Policy.ArchitectProvider.Kind);
@@ -262,7 +263,9 @@ public sealed class SetupTests
     [InlineData("OpenRouter", true)]
     [InlineData("gemini", true)]
     [InlineData("deepseek", true)]
-    [InlineData("gpt", false)]
+    [InlineData("gpt", true)]
+    [InlineData("codex", true)]
+    [InlineData("nonsense", false)]
     public void Sources_parse_from_flags(string text, bool ok) => Assert.Equal(ok, Sources.TryParse(text, out _));
 
     [Fact]

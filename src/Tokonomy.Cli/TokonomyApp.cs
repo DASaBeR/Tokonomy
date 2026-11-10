@@ -39,12 +39,16 @@ public static class TokonomyApp
             config.AddCommand<PlanCommand>("plan").WithDescription("Step by step: only plan (see the plan, then use `run`).")
                 .WithExample("plan", "\"Add rate limiting to /login\"");
             config.AddCommand<RunCommand>("run").WithDescription("Step by step: execute the latest plan.");
+            config.AddCommand<LoginCommand>("login").WithDescription("Sign Claude Code, Codex or Antigravity in to its provider (opens the browser).")
+                .WithExample("login", "codex");
             config.AddBranch("proxy", proxy =>
             {
                 proxy.SetDescription("Send every connection through an HTTP or SOCKS5 proxy (per user).");
                 proxy.SetDefaultCommand<ProxyShowCommand>();
                 proxy.AddCommand<ProxySetCommand>("set").WithDescription("Save and turn on a proxy.")
                     .WithExample("proxy", "set", "127.0.0.1:10808");
+                proxy.AddCommand<ProxyScopeCommand>("scope").WithDescription("Choose which models or connections use the proxy.")
+                    .WithExample("proxy", "scope", "--only", "openrouter");
                 proxy.AddCommand<ProxyOnCommand>("on").WithDescription("Turn the saved proxy on.");
                 proxy.AddCommand<ProxyOffCommand>("off").WithDescription("Turn the proxy off (the address is kept).");
                 proxy.AddCommand<ProxyTestCommand>("test").WithDescription("Check the proxy and each model or subscription you use through it.");
