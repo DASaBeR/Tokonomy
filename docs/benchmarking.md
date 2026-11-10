@@ -88,21 +88,22 @@ Needed before any public claim: harder tasks where the cheap worker fails, more 
 
 **Setup.** Tasks `cron-next` and `unified-diff` from `examples/tasks-extreme.yaml` (hidden acceptance tests, verified fair with `examples/verify_tasks.py`). Strong model / architect / supervisor: `claude-opus-5-5` on a **Claude Code subscription**. Cheap worker: `gemini-3.8-flash-high` on an **Antigravity subscription**. No API keys. Config: `examples/.tokonomy-opus-gemini/`. Gates and sandboxed hidden tests as in the other runs.
 
-| | Strategy 4 (Opus plans + supervises, Gemini writes) | Strategy 1b (Opus alone + gates) |
-|---|---|---|
-| Passed | 2/2 | 2/2 |
-| Average time per trial | 18.6 min | **1.8 min** |
-| Opus tokens (fresh input + output) | **16k** (+1.6k cache reads) | 57k (+518k cache reads) |
-| Gemini tokens (fresh input + output) | 1.13M (+1.95M cache reads) | none |
-| Cost per success, API-equivalent | about $1.40 | **$0.37** |
+| | Strategy 2 (Gemini alone, single shot) | Strategy 4 (Opus plans + supervises, Gemini writes) | Strategy 1b (Opus alone + gates) |
+|---|---|---|---|
+| Passed | 2/2 | 2/2 | 2/2 |
+| Average time per trial | 8.8 min | 18.6 min | **1.8 min** |
+| Opus tokens (fresh input + output) | none | **16k** (+1.6k cache reads) | 57k (+518k cache reads) |
+| Gemini tokens (fresh input + output) | 699k (+612k cache reads) | 1.13M (+1.95M cache reads) | none |
+| Cost per success, API-equivalent | $0.70 | about $1.40 | **$0.37** |
 
 Cost is an API-equivalent estimate, not money spent: Gemini is priced like `google/gemini-3.8-flash` on OpenRouter ($0.825 in / $4.125 out per million tokens), Opus uses Claude Code's own estimate, and on subscriptions the real marginal cost of both is $0. Antigravity counts thinking tokens in its output. Cache reads are listed separately; input is fresh (uncached) tokens.
 
 **What this shows**
 
-- **The tasks were easy for Opus.** It solved both on the first attempt, with one attempt per unit, in under two minutes each. Strategy 4 never needed an architect takeover. So the pilot cannot show the case supervision exists for: a cheap worker that fails and a strong model that rescues it.
+- **The tasks were easy for both models.** Gemini alone, with no gates and no supervision, also passed both. So the pilot cannot show the case supervision exists for. Opus solved both on the first attempt, with one attempt per unit, in under two minutes each. Strategy 4 never needed an architect takeover. So the pilot cannot show the case supervision exists for: a cheap worker that fails and a strong model that rescues it.
 - **The practical benefit is saving Claude tokens.** Under strategy 4 the Claude subscription pays only for planning and supervision (about 16k tokens on these two tasks, against 57k plus 518k cache reads when Opus does the work), and the Antigravity subscription does the writing. If your Claude quota is the scarce resource, the simple jobs can go to Gemini and Claude is kept for the hard parts.
 - **The price is time and total tokens.** Strategy 4 took about ten times longer and used about twenty times more tokens overall, because Gemini Flash-high spends a lot per call (about 100k input tokens and large thinking output). In API-equivalent dollars Opus alone was cheaper here.
-- Strategy 2 (Gemini alone) is not reported: its first two trials were invalid, because the harness discarded the worker's output when a diff exceeded the 400-line limit even though the strategy has no gates (fixed since; to be re-run).
+- **On tasks this easy, supervision only added cost.** Strategy 4 did the same job as Gemini alone at about twice the API-equivalent cost and time, because it adds a planning step and per-unit gate runs and retries. Whether that pays off on tasks where the cheap model fails is not measured here.
+- **A harness bias was found and fixed along the way.** The first Gemini-alone trials "failed" because the harness discarded the worker's output when a diff exceeded the 400-line limit, even though that strategy has no gates. Strategies without gates now skip the limit, and the re-run passed. Results from before that fix, in any benchmark, are not comparable for strategies 1, 2 and 3.
 
 **Not measured.** More than two tasks, repeats, tasks where Opus alone struggles, and whether the cheap worker plus takeover matches Opus on those.

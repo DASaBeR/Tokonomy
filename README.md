@@ -16,6 +16,7 @@ If you use Claude Code, Codex, Gemini CLI, OpenCode or Aider and your token bill
 
 - [Why Tokonomy](#why-tokonomy)
 - [How it works](#how-it-works)
+- [What is a gate?](#what-is-a-gate)
 - [Key features](#key-features)
 - [Install](#install)
 - [Quick start](#quick-start)
@@ -70,6 +71,22 @@ Design principles:
 2. **Gates outrank opinions.** Tests and linters beat any model's review.
 3. **Judge by the diff from git, not by the agent's report.**
 4. **Measure everything.** If it is not in the ledger, it did not happen.
+
+## What is a gate?
+
+A **gate** is an automatic pass/fail check that Tokonomy runs on the cheap model's work before accepting it. It is an ordinary command: a build, a linter, a type check, your test suite. Because a command decides, the model saying "done" counts for nothing.
+
+```
+worker makes a change  →  gates run  →  all pass:  commit it
+                                      →  one fails: worker retries with the gate's output,
+                                                    then the strong model takes over
+```
+
+- **Existing project:** `tokonomy init` detects your stack and proposes gates such as `dotnet build` and `dotnet test`, or `npm test`.
+- **Project with no tests (a landing page, a script):** the strong model writes the tests for each step while it plans. The cheap model cannot change them, and a step is accepted only when they pass. These are called *acceptance tests*.
+- **Safe by default:** gates run code the worker wrote, so they run in a disposable Windows Sandbox VM, not on your machine.
+
+More terms (baseline, takeover, locked region, strategy) are in the [glossary](docs/glossary.md).
 
 ## Key features
 
@@ -135,7 +152,7 @@ tokonomy report <run-id>                      # cost per tier, tokens, architect
 tokonomy bench examples/tasks.yaml --strategies 1,1b,2,3,4 --repeat 3
 ```
 
-The harness runs the same tasks under each strategy, verifies results independently, and reports cost per *successful* task. Results so far are small and **not conclusive**. In one early run on 8 tasks (Claude Sonnet 5.5 as the strong model, DeepSeek V4.1 Flash as the worker), architect + cheap worker + gates passed 21/21 trials at about **$0.047 per successful task**, against 23/23 at **$0.153** for the strong model alone with gates, roughly 3× cheaper at the same pass rate. That is one small taskset, one repository and one executor, and the cheap worker never failed, so it shows the direction, not proof. See [docs/benchmarking.md](docs/benchmarking.md) for the data and its limits. A first pilot with subscriptions only (Claude Opus plans and supervises, Gemini 3.8 Flash high on Antigravity writes the code) passed 2/2 tasks, but those tasks were easy for Opus: Opus alone was faster and cheaper in API-equivalent terms. What the split buys there is **Claude quota**: the Claude subscription spent about 16k tokens on planning and supervision, against 57k (plus 518k cache reads) when Opus did the work, while Gemini tokens did the simple writing. See [docs/benchmarking.md](docs/benchmarking.md). Contributions of tasksets and results are welcome.
+The harness runs the same tasks under each strategy, verifies results independently, and reports cost per *successful* task. Results so far are small and **not conclusive**. In one early run on 8 tasks (Claude Sonnet 5.5 as the strong model, DeepSeek V4.1 Flash as the worker), architect + cheap worker + gates passed 21/21 trials at about **$0.047 per successful task**, against 23/23 at **$0.153** for the strong model alone with gates, roughly 3× cheaper at the same pass rate. That is one small taskset, one repository and one executor, and the cheap worker never failed, so it shows the direction, not proof. See [docs/benchmarking.md](docs/benchmarking.md) for the data and its limits. A first pilot with subscriptions only (Claude Opus plans and supervises, Gemini 3.8 Flash high on Antigravity writes the code) passed 2/2 tasks, but the tasks were easy: Opus alone and Gemini alone passed them too, and Opus alone was fastest and cheapest in API-equivalent terms. What the split buys there is **Claude quota**: the Claude subscription spent about 16k tokens on planning and supervision, against 57k (plus 518k cache reads) when Opus did the work, while Gemini tokens did the simple writing. See [docs/benchmarking.md](docs/benchmarking.md). Contributions of tasksets and results are welcome.
 
 ## Security
 
@@ -170,6 +187,7 @@ Requires the .NET 10 SDK.
 
 ## Docs
 
+- [Glossary](docs/glossary.md)
 - [Configuration](docs/config.md)
 - [Benchmarking](docs/benchmarking.md)
 - [Threat model](docs/threat-model.md)
