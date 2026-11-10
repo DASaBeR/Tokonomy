@@ -41,6 +41,10 @@ public sealed partial class DoctorCommand(IAnsiConsole console, IProcessRunner r
 
         checks.Add(await VersionCheck("tools", "git", ["git", "--version"], cwd, null, required: true, cancellationToken));
 
+        checks.Add(Core.Net.ProxySettings.Current.IsActive
+            ? new("network", "proxy", Level.Ok, "on: " + Core.Net.ProxySettings.Current.Display + " (tokonomy proxy test)")
+            : new("network", "proxy", Level.Ok, "off (direct connections)"));
+
         var dir = settings.Config ?? ConfigLoader.FindConfigDirectory(cwd);
         if (dir is null)
         {

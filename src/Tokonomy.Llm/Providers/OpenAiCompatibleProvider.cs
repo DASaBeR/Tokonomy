@@ -1,9 +1,11 @@
 using System.ClientModel;
+using System.ClientModel.Primitives;
 using System.Collections.Concurrent;
 using Microsoft.Extensions.AI;
 using OpenAI;
 using Tokonomy.Core.Abstractions;
 using Tokonomy.Core.Config;
+using Tokonomy.Core.Net;
 
 namespace Tokonomy.Llm.Providers;
 
@@ -20,10 +22,11 @@ public sealed class MissingApiKeyException(string variable)
 public sealed class OpenAiCompatibleProvider : IProvider, IDisposable
 {
     private readonly OpenAIClient _client;
+    private readonly HttpClient? _http;
     private readonly PriceTable _prices;
     private readonly ConcurrentDictionary<string, IChatClient> _chatClients = new(StringComparer.Ordinal);
 
-    public OpenAiCompatibleProvider(ProviderConfig config, PriceTable prices, Func<string, string?>? getEnv = null)
+    public OpenAiCompatibleProvider(ProviderConfig config, PriceTable prices, Func<string, string?>? getEnv = null, ProxySettings? proxy = null)
     {
         ArgumentNullException.ThrowIfNull(config);
         getEnv ??= Environment.GetEnvironmentVariable;
@@ -33,7 +36,15 @@ public sealed class OpenAiCompatibleProvider : IProvider, IDisposable
             throw new MissingApiKeyException(config.ApiKeyEnv);
         }
 
-        _client = new OpenAIClient(new ApiKeyCredential(key), new OpenAIClientOptions { Endpoint = new Uri(config.BaseUrl) });
+        var options = new OpenAIClientOptions { Endpoint = new Uri(config.BaseUrl) };
+        proxy ??= ProxySettings.Current;
+        if (proxy.IsActive)
+        {
+            _http = new HttpClient(proxy.CreateHandler(), disposeHandler: true) { Timeout = TimeSpan.FromMinutes(10) };
+            options.Transport = new HttpClientPipelineTransport(_http);
+        }
+
+        _client = new OpenAIClient(new ApiKeyCredential(key), options);
         _prices = prices;
     }
 
@@ -74,5 +85,7 @@ public sealed class OpenAiCompatibleProvider : IProvider, IDisposable
         {
             chat.Dispose();
         }
+
+        _http?.Dispose();
     }
 }

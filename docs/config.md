@@ -362,3 +362,21 @@ models:
 ```
 
 Tokonomy ships no built-in prices because they go stale. Calls to unpriced models are recorded and flagged as **estimated**.
+
+## Proxy (per user)
+
+Behind V2RayN or any other proxy? Set it once; it applies to every project and every connection:
+
+```
+tokonomy proxy set socks5://127.0.0.1:10808     # or 127.0.0.1:10809 / http://... for an HTTP proxy
+tokonomy proxy test                              # the proxy, then each model/subscription you use, through it
+tokonomy proxy test --live                       # also one tiny real call per model
+tokonomy proxy off | on | (no argument = show)
+```
+
+It is saved in `%LOCALAPPDATA%\tokonomy\proxy.json`. `TOKONOMY_PROXY` (an address, or `off`) overrides it.
+When on, everything goes through it: API planning and key checks, the metering proxy's calls to the model provider, and
+every child process (Claude Code, Antigravity, git, gates, workers) via `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY`.
+Claude Code and most CLI tools cannot speak SOCKS, so for a SOCKS proxy Tokonomy runs a small local HTTP bridge (HTTPS
+tunnels only) and hands that to them. `localhost`/`127.0.0.1` always skip the proxy. Proxy credentials in the address are
+stored in that file and are the one secret that workers also receive; prefer a proxy without a password.

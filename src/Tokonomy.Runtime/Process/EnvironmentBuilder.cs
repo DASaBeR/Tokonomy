@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Text.RegularExpressions;
+using Tokonomy.Core.Net;
 
 namespace Tokonomy.Runtime.Process;
 
@@ -27,11 +28,11 @@ public static partial class EnvironmentBuilder
         "CARGO_HOME", "RUSTUP_HOME", "NVM_DIR", "NODE_PATH", "VIRTUAL_ENV", "PYENV_ROOT", "CONDA_PREFIX", "UV_CACHE_DIR",
         // Networking and certificates
         "SSL_CERT_FILE", "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE",
-        "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy",
     ];
 
     public static Dictionary<string, string> ForWorker(
-        IEnumerable<string> extraAllowed, IReadOnlyDictionary<string, string> executorEnv, IDictionary? parent = null)
+        IEnumerable<string> extraAllowed, IReadOnlyDictionary<string, string> executorEnv, IDictionary? parent = null, ProxySettings? proxy = null)
     {
         ArgumentNullException.ThrowIfNull(executorEnv);
         var source = Snapshot(parent);
@@ -45,6 +46,8 @@ public static partial class EnvironmentBuilder
             }
         }
 
+        // The user's proxy applies to everything a worker runs; an executor's own variables can still override it.
+        (proxy ?? ProxySettings.Current).Apply(env);
         foreach (var (key, value) in executorEnv)
         {
             env[key] = value;
@@ -53,7 +56,7 @@ public static partial class EnvironmentBuilder
         return env;
     }
 
-    public static Dictionary<string, string> ForGate(IEnumerable<string> alsoRemove, IDictionary? parent = null)
+    public static Dictionary<string, string> ForGate(IEnumerable<string> alsoRemove, IDictionary? parent = null, ProxySettings? proxy = null)
     {
         var remove = new HashSet<string>(alsoRemove ?? [], KeyComparer);
         var env = new Dictionary<string, string>(KeyComparer);
@@ -65,6 +68,9 @@ public static partial class EnvironmentBuilder
             }
         }
 
+        // Added after the scrub: a proxy URL with credentials is dropped from the inherited environment, but the proxy the
+        // user configured in Tokonomy is meant to reach Claude Code, Antigravity, git and the gates.
+        (proxy ?? ProxySettings.Current).Apply(env);
         return env;
     }
 

@@ -37,7 +37,7 @@ internal sealed class SetupWizard(IAnsiConsole console, IProcessRunner runner, F
     private sealed record Pick(string Id, string Label);
 
     private HttpClient? _http;
-    private HttpClient Http => _http ??= httpFactory?.Invoke() ?? new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
+    private HttpClient Http => _http ??= httpFactory?.Invoke() ?? new HttpClient(Tokonomy.Core.Net.ProxySettings.Current.CreateHandler(), disposeHandler: true) { Timeout = TimeSpan.FromSeconds(20) };
 
     private IReadOnlyList<CatalogModel> _openRouterMenu = [];
     private IReadOnlyList<CatalogModel> _openRouterAll = [];

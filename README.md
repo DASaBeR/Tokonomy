@@ -18,6 +18,7 @@ If you use Claude Code, Codex, Gemini CLI, OpenCode or Aider and your token bill
 - [How it works](#how-it-works)
 - [What is a gate?](#what-is-a-gate)
 - [Key features](#key-features)
+- [Works behind a proxy](#works-behind-a-proxy)
 - [Install](#install)
 - [Quick start](#quick-start)
 - [Benchmarking: cost per successful task](#benchmarking-cost-per-successful-task)
@@ -95,9 +96,29 @@ More terms (baseline, takeover, locked region, strategy) are in the [glossary](d
 - **Supervised retries and takeover.** Gate failures, no-change results and timeouts trigger retry, then an architect takeover with structured edits and locked regions, not a free-roaming agent.
 - **Cost ledger and metering proxy.** Tokens and spend are measured per tier and per run, independent of what the agent reports.
 - **Benchmark harness.** Compare five strategies (strong model alone, cheap model alone, and supervised combinations) on your own tasks, with a `--max-usd` spending cap.
+- **One proxy for everything.** Set an HTTP or SOCKS5 proxy once per user (V2RayN, corporate, ...) and every model call, subscription login, git and gate command uses it. [Details](#works-behind-a-proxy).
 - **Works with your agent.** Executors are adapters around coding-agent CLIs. Any OpenAI-compatible provider can serve the models.
 - **Git-native.** Each run lives on its own branch with one commit per unit, so review and merge are normal git.
 - **Single binary.** Cross-platform, one-command install, no hosted service, no telemetry by default.
+
+## Works behind a proxy
+
+Running a proxy app such as V2RayN, or a corporate proxy? Tell Tokonomy once and **all** of its traffic goes through it:
+API planning, Claude Code, Antigravity, the cheap model's calls, git and the gates. No per-tool configuration.
+
+```
+tokonomy proxy set socks5://127.0.0.1:10808    # or 127.0.0.1:10809 / http://... for an HTTP proxy
+tokonomy proxy test                             # checks the proxy, then each model or subscription you use, through it
+tokonomy proxy test --live                      # also one tiny real call per model
+tokonomy proxy off                              # back to direct connections (the address is kept)
+```
+
+- **Per user, not per project.** Saved in `%LOCALAPPDATA%	okonomy\proxy.json`, so every project uses it. The `TOKONOMY_PROXY` environment variable overrides it.
+- **HTTP, HTTPS and SOCKS5.** Claude Code and most CLI tools cannot speak SOCKS, so Tokonomy runs a small local HTTP bridge that tunnels through your SOCKS proxy for them.
+- **Know it works before you spend.** `tokonomy proxy test` reports, for each connection you use, whether it is reachable through the proxy and how fast. `--live` confirms a real answer from each model.
+- **Local traffic is never proxied.** `localhost` and `127.0.0.1` always skip it, and `--no-proxy` adds more hosts.
+
+A password inside the proxy address is stored in that file and is also visible to workers; prefer a proxy without one. More in [docs/config.md](docs/config.md#proxy-per-user).
 
 ## Install
 

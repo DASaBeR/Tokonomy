@@ -77,7 +77,7 @@ public sealed class MeteringProxy : IAsyncDisposable
         _prices = prices;
         _onUsage = onUsage;
         _isBlocked = isBlocked;
-        _http = new HttpClient(options.Handler ?? new SocketsHttpHandler { AutomaticDecompression = DecompressionMethods.None }, disposeHandler: true)
+        _http = new HttpClient(options.Handler ?? Tokonomy.Core.Net.ProxySettings.Current.CreateHandler(), disposeHandler: true)
         {
             Timeout = Timeout.InfiniteTimeSpan,
         };
