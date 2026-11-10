@@ -27,6 +27,7 @@ internal sealed class Shell(IAnsiConsole console, Func<string[], Task<int>> runC
                 new SelectionPrompt<Item>()
                     .Title("[bold]What would you like to do?[/]  [grey](↑/↓ to move, Enter to select)[/]")
                     .PageSize(12)
+                    .WrapAround()
                     .HighlightStyle(Theme.Accent)
                     .AddChoices(items.Append(quit))
                     .UseConverter(i => ReferenceEquals(i, quit)
@@ -63,7 +64,7 @@ internal sealed class Shell(IAnsiConsole console, Func<string[], Task<int>> runC
             {
                 console.WriteLine();
                 console.MarkupLine("[grey]Press any key to go back to the menu...[/]");
-                Console.ReadKey(intercept: true);
+                console.Input.ReadKey(true);
             }
 
             console.Clear();
@@ -72,12 +73,13 @@ internal sealed class Shell(IAnsiConsole console, Func<string[], Task<int>> runC
 
     private List<Item> BuildItems() =>
     [
+        new("Type a task or /command", "write what you want built, or /doctor, /report ...", AskFreeText),
         new("Build a task", "set up, plan, confirm, build, verify, merge", () => AskTask("build")),
         new("Plan only", "see the plan first, run it later", () => AskTask("plan")),
         new("Run the latest plan", "execute the plan you made", () => Task.FromResult<string[]?>(["run"])),
         new("Runs and costs", "browse past runs and what they cost", PickRun),
         new("Doctor", "check git, tools, API keys, gates", AskDoctor),
-        new("Setup", "choose who plans and who codes", () => Task.FromResult<string[]?>(["init"])),
+        new("Setup", "choose who plans and who codes", AskSetup),
         new("Accounts", "sign in to Claude, Codex or Antigravity", AskAccount),
         new("Proxy", "route connections through HTTP or SOCKS5", AskProxy),
         new("Benchmark", "compare strategies on a taskset", AskBench),
@@ -94,6 +96,7 @@ internal sealed class Shell(IAnsiConsole console, Func<string[], Task<int>> runC
         var picked = console.Prompt(new SelectionPrompt<string>()
             .Title($"[bold]{Markup.Escape(title)}[/]")
             .PageSize(12)
+                    .WrapAround()
             .HighlightStyle(Theme.Accent)
             .AddChoices(list.Select(o => o.Label).Append(Back)));
         _backed = picked == Back;
@@ -165,10 +168,119 @@ internal sealed class Shell(IAnsiConsole console, Func<string[], Task<int>> runC
         return Task.FromResult<string[]?>(string.IsNullOrWhiteSpace(task) ? null : [command, task]);
     }
 
+    private const string SlashHint = "[grey]Describe a task to build it, or type a command: /build <task>  /plan <task>  /doctor  /report  /run  /setup  /login  /proxy[/]";
+
+    private static readonly string[] Strategies = ["1", "1b", "2", "3", "4"];
+
+    private static readonly Dictionary<string, string[]> Slash = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["/doctor"] = ["doctor"],
+        ["/report"] = ["report"],
+        ["/runs"] = ["report"],
+        ["/run"] = ["run"],
+        ["/setup"] = ["init"],
+        ["/init"] = ["init"],
+        ["/login"] = ["login"],
+        ["/proxy"] = ["proxy"],
+    };
+
+    /// <summary>One prompt like Claude Code's: plain text is a task to build; "/name" runs a command.</summary>
+    private Task<string[]?> AskFreeText()
+    {
+        console.MarkupLine(SlashHint);
+        var text = console.Prompt(new TextPrompt<string>("[aqua]›[/]").AllowEmpty()).Trim();
+        if (text.Length == 0)
+        {
+            _backed = true;
+            return Task.FromResult<string[]?>(null);
+        }
+
+        if (!text.StartsWith('/'))
+        {
+            return Task.FromResult<string[]?>(["build", text]);
+        }
+
+        var space = text.IndexOf(' ');
+        var name = space < 0 ? text : text[..space];
+        var rest = space < 0 ? "" : text[(space + 1)..].Trim();
+        if (name.Equals("/build", StringComparison.OrdinalIgnoreCase) || name.Equals("/plan", StringComparison.OrdinalIgnoreCase))
+        {
+            if (rest.Length == 0)
+            {
+                Output.Warn(console, $"{name} needs a task, e.g. {name} add a login page");
+                return Task.FromResult<string[]?>(null);
+            }
+
+            return Task.FromResult<string[]?>([name[1..].ToLowerInvariant(), rest]);
+        }
+
+        if (Slash.TryGetValue(name, out var args))
+        {
+            return Task.FromResult<string[]?>(rest.Length == 0 ? args : [.. args, .. rest.Split(' ', StringSplitOptions.RemoveEmptyEntries)]);
+        }
+
+        Output.Warn(console, $"Unknown command {name}. Try /doctor, /report, /run, /setup, /login or /proxy.");
+        return Task.FromResult<string[]?>(null);
+    }
+
+    private Task<string[]?> AskSetup() =>
+        Task.FromResult(Choose<string[]>("Setup", [
+            ("Guided setup (recommended)", ["init"]),
+            ("Redo setup and overwrite the current one", ["init", "--force"]),
+            ("Use the same choices as last time, no questions", ["init", "--yes"]),
+        ]));
+
+    /// <summary>Benchmark wizard: taskset, strategies, trials per task and a hard spend cap (required: trials cost real money).</summary>
     private Task<string[]?> AskBench()
     {
-        var file = console.Prompt(new TextPrompt<string>("[bold]Path to the taskset file:[/]").AllowEmpty());
-        return Task.FromResult<string[]?>(string.IsNullOrWhiteSpace(file) ? null : ["bench", file]);
+        var found = Directory.EnumerateFiles(Directory.GetCurrentDirectory(), "tasks*.y*ml").Select(Path.GetFileName).OfType<string>().ToList();
+        string? file;
+        if (found.Count > 0)
+        {
+            file = Choose<string>("Which taskset?", found.Select(f => (f, f)).Append(("Type a path...", "")));
+            if (file is null)
+            {
+                return Task.FromResult<string[]?>(null);
+            }
+
+            if (file.Length == 0)
+            {
+                file = console.Prompt(new TextPrompt<string>("[bold]Path to the taskset file:[/]").AllowEmpty());
+            }
+        }
+        else
+        {
+            file = console.Prompt(new TextPrompt<string>("[bold]Path to the taskset file:[/]").AllowEmpty());
+        }
+
+        if (string.IsNullOrWhiteSpace(file))
+        {
+            _backed = true;
+            return Task.FromResult<string[]?>(null);
+        }
+
+        var strategies = console.Prompt(new MultiSelectionPrompt<string>()
+            .Title("[bold]Which strategies to compare?[/] [grey](space to tick, Enter to confirm)[/]")
+            .Required()
+            .HighlightStyle(Theme.Accent)
+            .AddChoices(Strategies)
+            .Select("1").Select("1b").Select("2")
+            .UseConverter(x => x switch
+            {
+                "1" => "1   strong model alone",
+                "1b" => "1b  strong model alone + gates",
+                "2" => "2   cheap model alone + gates",
+                "3" => "3   cheap model with strong-model review",
+                _ => "4   strong plans, cheap codes, gates + supervision",
+            }));
+        var repeat = console.Prompt(new TextPrompt<int>("[bold]Trials per task[/]:").DefaultValue(1).Validate(n => n is >= 1 and <= 10 ? ValidationResult.Success() : ValidationResult.Error("1 to 10")));
+        var cap = console.Prompt(new TextPrompt<decimal>("[bold]Hard spend cap in USD[/] [grey](the run stops there)[/]:").DefaultValue(0.50m)
+            .Validate(n => n > 0 ? ValidationResult.Success() : ValidationResult.Error("must be above 0")));
+        var dry = console.Confirm("Dry run first (estimate only, no model calls)?", defaultValue: true);
+
+        string[] args = ["bench", file.Trim(), "--strategies", string.Join(',', strategies), "--repeat", repeat.ToString(CultureInfo.InvariantCulture),
+            "--max-usd", cap.ToString(CultureInfo.InvariantCulture)];
+        return Task.FromResult<string[]?>(dry ? [.. args, "--dry-run"] : args);
     }
 
     private void Help()

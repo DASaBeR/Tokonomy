@@ -138,6 +138,8 @@ Both installers verify SHA-256 checksums. Single-file binaries are published for
 
 ## Quick start
 
+**The interactive way.** Run `tokonomy` with no arguments in a terminal (or `tokonomy shell`) for a home screen with an arrow-key menu: build a task, plan, run, browse past runs and costs, doctor, setup, accounts, proxy and a benchmark wizard. The first entry is a single prompt: type a task to build it, or a command such as `/doctor`, `/report`, `/run`, `/setup`, `/login`, `/proxy`, `/plan <task>`. During a run the spinner line shows the running cost and tokens. In a pipe or CI, `tokonomy` with no arguments still prints help, and every command keeps its flags, `--yes` and `--json`.
+
 **The short way.** In any folder (it does not need to be a git repository yet):
 
 ```sh
