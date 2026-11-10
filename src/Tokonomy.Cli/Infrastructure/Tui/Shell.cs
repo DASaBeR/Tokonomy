@@ -223,12 +223,31 @@ internal sealed class Shell(IAnsiConsole console, Func<string[], Task<int>> runC
         return Task.FromResult<string[]?>(null);
     }
 
-    private Task<string[]?> AskSetup() =>
-        Task.FromResult(Choose<string[]>("Setup", [
-            ("Guided setup (recommended)", ["init"]),
-            ("Redo setup and overwrite the current one", ["init", "--force"]),
-            ("Use the same choices as last time, no questions", ["init", "--yes"]),
-        ]));
+    private Task<string[]?> AskSetup()
+    {
+        const string where = "Change where tests run (safe sandbox or this computer)";
+        var picked = console.Prompt(new SelectionPrompt<string>()
+            .Title("[bold]Setup[/]")
+            .PageSize(12)
+            .WrapAround()
+            .HighlightStyle(Theme.Accent)
+            .AddChoices("Guided setup (recommended)", "Redo setup and overwrite the current one", "Use the same choices as last time, no questions", where, Back));
+        _backed = picked == Back;
+        return Task.FromResult<string[]?>(picked switch
+        {
+            Back => null,
+            where => ChangeIsolation(),
+            "Guided setup (recommended)" => ["init"],
+            "Redo setup and overwrite the current one" => ["init", "--force"],
+            _ => ["init", "--yes"],
+        });
+    }
+
+    private string[]? ChangeIsolation()
+    {
+        IsolationScreen.Run(console);
+        return null;
+    }
 
     /// <summary>Benchmark wizard: taskset, strategies, trials per task and a hard spend cap (required: trials cost real money).</summary>
     private Task<string[]?> AskBench()
