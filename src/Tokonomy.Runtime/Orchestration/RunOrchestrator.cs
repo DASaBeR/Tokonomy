@@ -102,6 +102,7 @@ public sealed class RunOrchestrator(
     public async Task<RunOutcome> RunAsync(RunRequest request, IRunObserver? observer, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
+        using var work = Tokonomy.Runtime.Process.ChildProcesses.BeginWork(); // a Ctrl+C waits for this run's cleanup
         observer ??= new NullObserver();
         _usageObserver = observer;
         var policy = request.Policy;

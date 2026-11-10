@@ -66,6 +66,9 @@ public static class ToolLogin
 
         using var process = System.Diagnostics.Process.Start(psi)
                             ?? throw new InvalidOperationException($"Could not start '{plan.Args[0]}'.");
+        // Counts as work so Ctrl+C waits for the kill below. Deliberately not put in the kill-on-close job: the browser
+        // it opens may be started by it and must outlive Tokonomy.
+        using var work = ChildProcesses.BeginWork();
         try
         {
             await process.WaitForExitAsync(ct);

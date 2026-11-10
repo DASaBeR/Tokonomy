@@ -14,6 +14,7 @@ internal static class ClarifyPrompt
 
     public static IReadOnlyList<ClarifyingAnswer>? Ask(IAnsiConsole console, IReadOnlyList<ClarifyingQuestion> questions)
     {
+        Ui.DiscardPendingInput();
         console.WriteLine();
         console.MarkupLine($"[bold]The architect has {questions.Count} question{(questions.Count == 1 ? "" : "s")} before planning[/] [grey](so it does not have to guess)[/]");
         console.WriteLine();

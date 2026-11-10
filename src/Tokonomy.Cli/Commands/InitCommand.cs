@@ -130,7 +130,7 @@ public sealed class InitCommand(IAnsiConsole console, IProcessRunner runner, Ser
         console.WriteLine();
         if (Ui.IsInteractive(console) && !options.Yes)
         {
-            var task = console.Prompt(new TextPrompt<string>("[bold]What do you want to build?[/] [grey](Enter to skip; you can run `tokonomy build \"...\"` any time)[/]").AllowEmpty());
+            var task = Ui.ReadTask(console, "[bold]What do you want to build?[/] [grey](Enter to skip; you can run `tokonomy build \"...\"` any time)[/]", allowEmpty: true);
             if (!string.IsNullOrWhiteSpace(task))
             {
                 return await new BuildCommand(console, runner, services).ExecuteAsync(

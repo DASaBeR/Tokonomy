@@ -75,13 +75,22 @@ public static class TokonomyApp
         });
 
         using var cts = new CancellationTokenSource();
+        var finished = false;
+        var presses = 0;
         ConsoleCancelEventHandler onCancel = (_, e) =>
         {
-            // First Ctrl+C cancels gracefully (kills worker process trees, records the run); a second one exits.
-            if (!cts.IsCancellationRequested)
+            // Tokonomy always handles Ctrl+C itself, so nothing is left behind by the default hard exit.
+            e.Cancel = true;
+            if (Interlocked.Increment(ref presses) == 1)
             {
-                e.Cancel = true;
+                // First press: stop gracefully (kill worker process trees, stop sandboxes, record the run).
+                Console.Error.WriteLine("Stopping... (press Ctrl+C again to force quit)");
                 cts.Cancel();
+                _ = Task.Run(() => ForceQuitIfStuckAsync(() => Volatile.Read(ref finished)));
+            }
+            else
+            {
+                ForceQuit();
             }
         };
         Console.CancelKeyPress += onCancel;
@@ -91,7 +100,48 @@ public static class TokonomyApp
         }
         finally
         {
+            Volatile.Write(ref finished, true);
             Console.CancelKeyPress -= onCancel;
         }
+    }
+
+    private static readonly TimeSpan IdleGrace = TimeSpan.FromMilliseconds(1500);
+    private static readonly TimeSpan CleanupGrace = TimeSpan.FromSeconds(45);
+
+    /// <summary>
+    /// After Ctrl+C: if nothing is running that needs a graceful stop (for instance the user is sitting at a prompt, which
+    /// cannot see the cancellation) quit soon; if a run is cleaning up, give it time, but never forever.
+    /// </summary>
+    private static async Task ForceQuitIfStuckAsync(Func<bool> finished)
+    {
+        var since = System.Diagnostics.Stopwatch.StartNew();
+        var idle = TimeSpan.Zero;
+        var step = TimeSpan.FromMilliseconds(100);
+        while (!finished())
+        {
+            await Task.Delay(step);
+            idle = ChildProcesses.Busy > 0 ? TimeSpan.Zero : idle + step;
+            if (idle >= IdleGrace || since.Elapsed >= CleanupGrace)
+            {
+                ForceQuit();
+            }
+        }
+    }
+
+    /// <summary>Stops every subprocess Tokonomy started, restores the cursor and exits.</summary>
+    private static void ForceQuit()
+    {
+        ChildProcesses.KillAll();
+        try
+        {
+            Console.Out.Write("\u001b[?25h"); // a prompt may have hidden the cursor
+            Console.Out.Flush();
+        }
+        catch (IOException)
+        {
+        }
+
+        Console.Error.WriteLine("Cancelled.");
+        Environment.Exit(130);
     }
 }

@@ -30,6 +30,7 @@ public sealed class ProcessRunner : IProcessRunner
 
         var stopwatch = Stopwatch.StartNew();
         process.Start();
+        using var tracked = ChildProcesses.Adopt(process);
         if (spec.StdinText is not null)
         {
             try

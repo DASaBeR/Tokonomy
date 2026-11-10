@@ -51,7 +51,7 @@ public sealed class BuildCommand(IAnsiConsole console, IProcessRunner runner, Se
         var task = settings.Task;
         if (string.IsNullOrWhiteSpace(task))
         {
-            task = console.Prompt(new TextPrompt<string>("[bold]What do you want to build?[/]"));
+            task = Ui.ReadTask(console, "[bold]What do you want to build?[/]");
             console.WriteLine();
         }
 
@@ -92,6 +92,7 @@ public sealed class BuildCommand(IAnsiConsole console, IProcessRunner runner, Se
 
         // 3. Confirm.
         console.WriteLine();
+        Ui.DiscardPendingInput();
         if (!settings.Yes && Ui.IsInteractive(console) && !console.Confirm("Build this now?", true))
         {
             console.MarkupLine($"Plan saved. Build it later with [bold]tokonomy run --plan {runId}[/]");

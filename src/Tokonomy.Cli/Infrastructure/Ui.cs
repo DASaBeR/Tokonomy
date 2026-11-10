@@ -14,6 +14,83 @@ internal static class Ui
     public static bool IsInteractive(IAnsiConsole console) =>
         console.Profile.Capabilities.Interactive && !Console.IsInputRedirected;
 
+    /// <summary>Throws away keys typed or pasted ahead of time, so they cannot answer the next prompt by accident.</summary>
+    public static void DiscardPendingInput()
+    {
+        if (Console.IsInputRedirected)
+        {
+            return;
+        }
+
+        try
+        {
+            while (Console.KeyAvailable)
+            {
+                Console.ReadKey(intercept: true);
+            }
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    /// <summary>
+    /// Reads the task. A multi-line paste arrives as several lines at once; a plain prompt would take the first and leave the
+    /// rest to answer the next questions. Everything pasted together is kept as one task.
+    /// </summary>
+    public static string ReadTask(IAnsiConsole console, string prompt, bool allowEmpty = false)
+    {
+        var textPrompt = new TextPrompt<string>(prompt);
+        if (allowEmpty)
+        {
+            textPrompt.AllowEmpty();
+        }
+
+        var lines = new List<string> { console.Prompt(textPrompt) };
+        if (!Console.IsInputRedirected)
+        {
+            try
+            {
+                Thread.Sleep(100); // let the rest of a paste arrive
+                var line = new System.Text.StringBuilder();
+                while (Console.KeyAvailable)
+                {
+                    var key = Console.ReadKey(intercept: true);
+                    if (key.Key == ConsoleKey.Enter)
+                    {
+                        lines.Add(line.ToString());
+                        line.Clear();
+                    }
+                    else if (!char.IsControl(key.KeyChar) || key.KeyChar == '\t')
+                    {
+                        line.Append(key.KeyChar);
+                    }
+
+                    if (!Console.KeyAvailable)
+                    {
+                        Thread.Sleep(50);
+                    }
+                }
+
+                if (line.Length > 0)
+                {
+                    lines.Add(line.ToString());
+                }
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        }
+
+        var task = string.Join("\n", lines.Select(l => l.TrimEnd())).Trim();
+        if (lines.Count > 1 && task.Length > 0)
+        {
+            Note(console, $"Took all {lines.Count} pasted lines as the task.");
+        }
+
+        return task;
+    }
+
     public static void Banner(IAnsiConsole console, string subtitle)
     {
         console.WriteLine();
