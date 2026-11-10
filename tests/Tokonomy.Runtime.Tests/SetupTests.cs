@@ -436,3 +436,15 @@ public sealed class SetupTests
         Assert.Contains(ConfigLoader.Validate(bad, "p.yaml"), i => i.Message.Contains("architect_provider.api_key_env", StringComparison.Ordinal));
     }
 }
+
+public class UserDirectoryTests
+{
+    [Fact]
+    public void Tests_never_use_the_real_user_folder()
+    {
+        var real = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "tokonomy");
+
+        Assert.NotEqual(real, UserDirectory.Path);
+        Assert.StartsWith(Path.GetTempPath(), UserDefaults.DefaultPath, StringComparison.OrdinalIgnoreCase);
+    }
+}

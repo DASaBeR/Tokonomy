@@ -25,8 +25,7 @@ public sealed class UserDefaults
     public string ArchitectModel { get; set; } = "";
     public string WorkerModel { get; set; } = "";
 
-    public static string DefaultPath { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "tokonomy", "defaults.json");
+    public static string DefaultPath { get; } = Path.Combine(Tokonomy.Core.Config.UserDirectory.Path, "defaults.json");
 
     public bool IsComplete => ArchitectModel.Length > 0 && WorkerModel.Length > 0;
 

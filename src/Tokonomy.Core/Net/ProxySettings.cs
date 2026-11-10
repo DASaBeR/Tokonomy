@@ -41,8 +41,7 @@ public sealed partial class ProxySettings
     /// <summary>What every part of Tokonomy uses. Set once at startup by the CLI; it is <see cref="Off"/> until then (so tests never see the user's file).</summary>
     public static ProxySettings Current { get; set; } = Off;
 
-    public static string DefaultPath { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "tokonomy", "proxy.json");
+    public static string DefaultPath { get; } = Path.Combine(Tokonomy.Core.Config.UserDirectory.Path, "proxy.json");
 
     [JsonIgnore]
     public bool IsActive => Enabled && TryNormalize(Url, out _, out _);
