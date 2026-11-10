@@ -10,6 +10,22 @@ public static class TokonomyApp
 {
     public static async Task<int> RunAsync(string[] args, IAnsiConsole console, IProcessRunner? runner = null, Services? services = null)
     {
+        // No arguments in a real terminal: open the interactive menu. (Pipes/CI keep printing help.)
+        if (args.Length == 0 && Ui.IsInteractive(console))
+        {
+            return await new Infrastructure.Tui.Shell(console, a => RunCommandsAsync(a, console, runner, services)).RunAsync();
+        }
+
+        if (args is ["shell"])
+        {
+            return await new Infrastructure.Tui.Shell(console, a => RunCommandsAsync(a, console, runner, services)).RunAsync();
+        }
+
+        return await RunCommandsAsync(args, console, runner, services);
+    }
+
+    private static async Task<int> RunCommandsAsync(string[] args, IAnsiConsole console, IProcessRunner? runner, Services? services)
+    {
         var registrar = new TypeRegistrar();
         registrar.RegisterInstance(typeof(IAnsiConsole), console);
         registrar.RegisterInstance(typeof(IProcessRunner), runner ?? new ProcessRunner());
