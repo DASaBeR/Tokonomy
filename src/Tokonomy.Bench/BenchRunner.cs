@@ -142,7 +142,7 @@ public sealed class BenchRunner(
 
             var baseSha = await _git.ResolveAsync(clone, task.Base, ct);
 
-            var planned = await TaskPlanning.PlanAsync(strategy, task.Prompt, clone, baseSha, runId, provider, policy.Models.Architect, ledger, _git, ct);
+            var planned = await TaskPlanning.PlanAsync(strategy, task.Prompt, clone, baseSha, runId, provider, policy.Models.Architect, ledger, _git, ct, policy.Acceptance);
             var artifacts = new RunArtifacts(config.ConfigDirectory, runId, upstreamKey is null ? [] : [upstreamKey]);
             artifacts.SavePlan(new PlanFile
             {
@@ -162,8 +162,8 @@ public sealed class BenchRunner(
                 RepoRoot = clone,
                 BaseSha = baseSha,
                 Policy = policy,
-                ExecutorName = policy.Executors.Default,
-                Executor = config.Executors.Executors[policy.Executors.Default],
+                ExecutorName = policy.Executors.For(strategy.WorkerIsStrong),
+                Executor = config.Executors.Executors[policy.Executors.For(strategy.WorkerIsStrong)],
                 Artifacts = artifacts,
                 WorkerModel = strategy.WorkerIsStrong ? policy.Models.Architect : policy.Models.Worker,
                 UseGates = strategy.UseGates,
@@ -225,7 +225,7 @@ public sealed class BenchRunner(
         IGateExecutionProvider provider;
         try
         {
-            provider = GateExecutionFactory.Create(policy.GateExecution, runner, clone, [task.Acceptance.Cmd], [policy.Provider.ApiKeyEnv], policy.Isolation.WorktreeRoot);
+            provider = GateExecutionFactory.Create(policy.GateExecution, runner, clone, [task.Acceptance.Cmd], policy.KeyVariables, policy.Isolation.WorktreeRoot);
             var status = await provider.CheckAsync(ct);
             if (!status.Available)
             {

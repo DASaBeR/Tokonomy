@@ -226,7 +226,29 @@ public sealed class SqliteLedger : ILedger, IDisposable
             });
         }
 
-        return list;
+        // Token use per model comes from the llm_calls of each trial's run.
+        reader.Close();
+        using var usage = Command(
+            """
+            SELECT c.run_id, c.model, COUNT(*), SUM(c.input_tokens), SUM(c.output_tokens), SUM(c.cached_tokens), SUM(c.usd_micros)
+            FROM llm_calls c JOIN bench_results b ON b.run_id = c.run_id
+            WHERE b.bench_id = $b GROUP BY c.run_id, c.model ORDER BY c.run_id, c.model
+            """,
+            ("$b", benchId));
+        using var rows = usage.ExecuteReader();
+        var byRun = new Dictionary<string, List<ModelUsage>>(StringComparer.Ordinal);
+        while (rows.Read())
+        {
+            var runId = rows.GetString(0);
+            if (!byRun.TryGetValue(runId, out var models))
+            {
+                byRun[runId] = models = [];
+            }
+
+            models.Add(new ModelUsage(rows.GetString(1), rows.GetInt32(2), rows.GetInt64(3), rows.GetInt64(4), rows.GetInt64(5), FromMicros(rows.GetInt64(6))));
+        }
+
+        return list.Select(r => byRun.TryGetValue(r.RunId, out var m) ? r with { Models = m } : r).ToList();
     }
 
     public void RecordLlmCall(LlmCallRecord call)

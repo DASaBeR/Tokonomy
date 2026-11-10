@@ -9,7 +9,7 @@ public sealed record ScaffoldResult(string ConfigDirectory, IReadOnlyList<StackI
 /// <summary>Writes the initial <c>.tokonomy/</c> directory. Existing files are kept unless <c>force</c> is set.</summary>
 public static class Scaffolder
 {
-    public static ScaffoldResult Init(string repoRoot, bool force)
+    public static ScaffoldResult Init(string repoRoot, bool force, SetupChoices? choices = null)
     {
         var dir = Path.Combine(repoRoot, TokonomyConfig.DirectoryName);
         Directory.CreateDirectory(dir);
@@ -17,9 +17,9 @@ public static class Scaffolder
         var stacks = StackDetector.Detect(repoRoot);
         var files = new (string Name, string Content)[]
         {
-            (TokonomyConfig.PolicyFile, PolicyYaml(stacks)),
+            (TokonomyConfig.PolicyFile, PolicyYaml(stacks, choices)),
             (TokonomyConfig.ExecutorsFileName, ExecutorsYaml),
-            (TokonomyConfig.PricesFile, PricesYaml),
+            (TokonomyConfig.PricesFile, PricesFor(choices)),
             (".gitignore", GitIgnore),
         };
 
@@ -41,22 +41,53 @@ public static class Scaffolder
         return new ScaffoldResult(dir, stacks, written, skipped);
     }
 
-    internal static string PolicyYaml(IReadOnlyList<StackInfo> stacks)
+    internal static string PolicyYaml(IReadOnlyList<StackInfo> stacks, SetupChoices? choices = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine("# Tokonomy policy. Docs: docs/config.md");
         sb.AppendLine("# LLMs produce content; this file makes decisions.");
         sb.AppendLine();
         sb.AppendLine("models:");
-        sb.AppendLine("  architect: \"\"   # strong model, e.g. an OpenRouter model id");
-        sb.AppendLine("  worker: \"\"      # cheap model passed to the executor as a model override");
+        sb.AppendLine($"  architect: {Quote(choices?.ArchitectModel ?? "")}   # strong model: plans, takes over hard units, reviews, writes the tests");
+        sb.AppendLine($"  worker: {Quote(choices?.WorkerModel ?? "")}      # cheap model that writes the code");
         sb.AppendLine();
-        sb.AppendLine("provider:");
-        sb.AppendLine("  base_url: https://openrouter.ai/api/v1");
-        sb.AppendLine("  api_key_env: OPENROUTER_API_KEY   # the variable NAME; the key never goes in this file");
-        sb.AppendLine();
+        if (choices is null)
+        {
+            WriteProvider(sb, Sources.OpenRouter);
+        }
+        else
+        {
+            // The strong model: a CLI login, or its own API endpoint (which may differ from the worker's).
+            switch (choices.Strong.Kind)
+            {
+                case ConnectionKind.ClaudeCode:
+                    sb.AppendLine("# The strong model runs on your Claude Code login: no API key.");
+                    sb.AppendLine("architect_provider: { kind: claude-cli }");
+                    break;
+                case ConnectionKind.Antigravity:
+                    sb.AppendLine("# The strong model runs on your Antigravity login: no API key.");
+                    sb.AppendLine("architect_provider: { kind: agy-cli }");
+                    break;
+                default:
+                    sb.AppendLine($"# The strong model is called over the {choices.Strong.Api!.Title} API.");
+                    sb.AppendLine($"architect_provider: {{ kind: api, base_url: {Quote(choices.Strong.Api.BaseUrl)}, api_key_env: {choices.Strong.Api.KeyVariable} }}");
+                    break;
+            }
+
+            sb.AppendLine();
+            if (choices.Cheap.IsApi)
+            {
+                sb.AppendLine("# The cheap model's traffic goes through Tokonomy's metering proxy to this API.");
+                WriteProvider(sb, choices.Cheap.Api!);
+            }
+        }
+
         sb.AppendLine("executors:");
-        sb.AppendLine("  default: opencode");
+        sb.AppendLine($"  default: {(choices is null ? "opencode" : Sources.Executor(choices.Cheap))}");
+        if (choices is not null && !choices.Strong.IsApi && Sources.Executor(choices.Strong) != Sources.Executor(choices.Cheap))
+        {
+            sb.AppendLine($"  strong: {Sources.Executor(choices.Strong)}   # runs the strong model when it does the work itself (benchmark strategies 1 and 1b)");
+        }
         sb.AppendLine();
         sb.AppendLine("# Run once per run in the fresh worktree, before the baseline (network allowed).");
         var prepare = stacks.SelectMany(s => s.Prepare).ToList();
@@ -94,6 +125,17 @@ public static class Scaffolder
 
         sb.AppendLine("  - { type: locked_regions }");
         sb.AppendLine();
+        if (choices?.Acceptance is { } acceptance)
+        {
+            sb.AppendLine("# The architect writes the tests for each unit; the worker cannot change them and the unit is accepted");
+            sb.AppendLine("# only when this command passes. Docs: docs/config.md (Acceptance tests).");
+            sb.AppendLine("acceptance:");
+            sb.AppendLine($"  cmd: [{string.Join(", ", acceptance.Cmd.Select(Quote))}]");
+            sb.AppendLine("  dir: acceptance");
+            sb.AppendLine($"  hint: {Quote(acceptance.Hint)}");
+            sb.AppendLine();
+        }
+
         sb.AppendLine("escalation:");
         sb.AppendLine("  max_retries_per_unit: 2    # failed attempts on a unit before escalation");
         sb.AppendLine("  max_takeovers_per_unit: 1  # architect takeovers allowed per unit (0 disables takeover)");
@@ -116,12 +158,20 @@ public static class Scaffolder
         sb.AppendLine("# Needs Windows Pro/Enterprise/Education 24H2+ with the Windows Sandbox feature (see docs/config.md).");
         sb.AppendLine("# host-unsafe runs them on this machine with your privileges; there is no automatic fallback.");
         sb.AppendLine("gate_execution:");
-        sb.AppendLine("  provider: windows-sandbox     # windows-sandbox | host-unsafe");
+        sb.AppendLine($"  provider: {choices?.GateExecution ?? "windows-sandbox"}     # windows-sandbox | host-unsafe");
         sb.AppendLine("  network_policy: none          # gates: none | full");
         sb.AppendLine("  prepare_network: full         # prepare steps (base commit only): none | full");
         sb.AppendLine("  resource_limits: { memory_mb: 4096 }");
         sb.AppendLine("  toolchains: []                # default: the folders of the gate commands' executables, e.g. [\"C:/Program Files/dotnet\"]");
         return sb.ToString();
+    }
+
+    private static void WriteProvider(StringBuilder sb, ApiService service)
+    {
+        sb.AppendLine("provider:");
+        sb.AppendLine($"  base_url: {service.BaseUrl}");
+        sb.AppendLine($"  api_key_env: {service.KeyVariable}   # the variable NAME; the key never goes in this file");
+        sb.AppendLine();
     }
 
     private static string InlineGate(GateConfig gate)
@@ -266,6 +316,29 @@ public static class Scaffolder
               permission_modes: true
               proxy_routable: false
         """;
+
+    /// <summary>prices.yaml with the chosen OpenRouter models priced, so their cost is measured instead of estimated.</summary>
+    internal static string PricesFor(SetupChoices? choices)
+    {
+        if (choices is null || choices.Prices.Count == 0)
+        {
+            return PricesYaml;
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine("# Model prices in USD per million tokens, used to cost architect calls and metered worker calls.");
+        sb.AppendLine("# Filled in by `tokonomy init` from OpenRouter's public price list; edit if yours differ.");
+        sb.AppendLine();
+        sb.AppendLine("models:");
+        foreach (var (model, (input, output)) in choices.Prices.OrderBy(p => p.Key, StringComparer.Ordinal))
+        {
+            sb.AppendLine($"  {Quote(model)}:");
+            sb.AppendLine(string.Create(System.Globalization.CultureInfo.InvariantCulture, $"    input: {input}"));
+            sb.AppendLine(string.Create(System.Globalization.CultureInfo.InvariantCulture, $"    output: {output}"));
+        }
+
+        return sb.ToString();
+    }
 
     internal const string PricesYaml = """
         # Model prices in USD per million tokens, used to cost architect calls and metered worker calls.

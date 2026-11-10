@@ -19,9 +19,10 @@ public static class GateExecutionFactory
     public static IEnumerable<IReadOnlyList<string>> Commands(Policy policy)
     {
         ArgumentNullException.ThrowIfNull(policy);
-        return policy.Prepare.Concat(policy.Gates.Where(g => g.Type == GateConfig.CommandType))
+        var commands = policy.Prepare.Concat(policy.Gates.Where(g => g.Type == GateConfig.CommandType))
             .Where(g => g.Cmd.Count > 0)
             .Select(g => (IReadOnlyList<string>)g.Cmd);
+        return policy.Acceptance.Enabled ? commands.Append(policy.Acceptance.Cmd) : commands;
     }
 
     /// <summary>Throws <see cref="GateIsolationUnavailableException"/> with a diagnostic when no usable provider is configured.</summary>

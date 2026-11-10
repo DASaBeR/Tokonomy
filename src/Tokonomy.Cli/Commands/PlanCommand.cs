@@ -30,12 +30,38 @@ public sealed partial class PlanCommand(IAnsiConsole console, IProcessRunner run
 {
     public override async Task<int> ExecuteAsync(CommandContext context, PlanSettings settings, CancellationToken cancellationToken)
     {
-        var config = ConfigLocator.LoadOrReport(console, settings, out var exit);
+        var (config, exit) = await ConfigLocator.LoadOrSetupAsync(console, runner, settings, yes: false, cancellationToken);
         if (config is null)
         {
             return exit;
         }
 
+        var (code, runId, planned) = await PlanCoreAsync(config, settings, cancellationToken);
+        if (planned is null || settings.Json)
+        {
+            return code;
+        }
+
+        ShowPlan(config, runId!, planned);
+        console.MarkupLine($"Next: [bold]tokonomy run[/] (or tokonomy run --plan {runId})");
+        return ExitCodes.Ok;
+    }
+
+    internal void ShowPlan(Tokonomy.Runtime.Config.TokonomyConfig config, string runId, PlannedTask planned)
+    {
+        Ui.PlanView(console, runId, planned.Contract);
+        if (planned.ArchitectUsd > 0 || config.Policy.ArchitectProvider.Kind != Tokonomy.Core.Config.ArchitectProviderConfig.ApiKind)
+        {
+            Ui.Note(console, $"planning cost: {Ui.Money(planned.ArchitectUsd, planned.CostEstimated)}");
+        }
+
+        Ui.Note(console, $"saved: {Path.GetRelativePath(config.RepoRoot, new RunArtifacts(config.ConfigDirectory, runId).PlanPath)}");
+    }
+
+    /// <summary>Makes sure git is ready, asks the architect for a plan and saves it. Returns the new run id and the plan.</summary>
+    internal async Task<(int Exit, string? RunId, PlannedTask? Planned)> PlanCoreAsync(
+        Tokonomy.Runtime.Config.TokonomyConfig config, PlanSettings settings, CancellationToken cancellationToken)
+    {
         Strategy strategy;
         try
         {
@@ -44,21 +70,21 @@ public sealed partial class PlanCommand(IAnsiConsole console, IProcessRunner run
         catch (ArgumentException ex)
         {
             Output.Error(console, ex.Message);
-            return ExitCodes.Usage;
+            return (ExitCodes.Usage, null, null);
         }
 
         var models = config.Policy.Models;
         if (string.IsNullOrWhiteSpace(models.Architect) || (!strategy.WorkerIsStrong && string.IsNullOrWhiteSpace(models.Worker)))
         {
-            Output.Error(console, "Set models.architect and models.worker in policy.yaml first.");
-            return ExitCodes.ConfigError;
+            Output.Error(console, "Set models.architect and models.worker in policy.yaml first (or run `tokonomy init --force` to redo the setup).");
+            return (ExitCodes.ConfigError, null, null);
         }
 
         var git = new GitCli(runner);
         string baseSha;
         try
         {
-            baseSha = await git.HeadAsync(config.RepoRoot, cancellationToken);
+            baseSha = await Ui.EnsureRepoAsync(console, git, config.RepoRoot, cancellationToken);
             if (!await git.IsCleanAsync(config.RepoRoot, cancellationToken))
             {
                 Output.Warn(console, "Uncommitted changes are not part of the plan; the run starts from HEAD.");
@@ -66,8 +92,8 @@ public sealed partial class PlanCommand(IAnsiConsole console, IProcessRunner run
         }
         catch (GitException ex)
         {
-            Output.Error(console, $"{config.RepoRoot} must be a git repository with at least one commit. {ex.Message}");
-            return ExitCodes.Failed;
+            Output.Error(console, $"Could not prepare the git repository in {config.RepoRoot}: {ex.Message}");
+            return (ExitCodes.Failed, null, null);
         }
 
         var prices = Services.LoadPrices(config);
@@ -88,18 +114,16 @@ public sealed partial class PlanCommand(IAnsiConsole console, IProcessRunner run
         try
         {
             var provider = strategy.UsesArchitectPlan ? services.ProviderFactory(config, prices) : null;
-            if (strategy.UsesArchitectPlan)
-            {
-                console.MarkupLine($"Planning with [bold]{Markup.Escape(models.Architect)}[/]...");
-            }
-
-            planned = await TaskPlanning.PlanAsync(strategy, settings.Task, config.RepoRoot, baseSha, runId, provider, models.Architect, ledger, git, cancellationToken);
+            planned = strategy.UsesArchitectPlan && !settings.Json
+                ? await Ui.SpinAsync(console, $"{models.Architect} is planning (usually 30-90 seconds)", () =>
+                    TaskPlanning.PlanAsync(strategy, settings.Task, config.RepoRoot, baseSha, runId, provider, models.Architect, ledger, git, cancellationToken, config.Policy.Acceptance))
+                : await TaskPlanning.PlanAsync(strategy, settings.Task, config.RepoRoot, baseSha, runId, provider, models.Architect, ledger, git, cancellationToken, config.Policy.Acceptance);
         }
         catch (Exception ex) when (ex is PlanningException or MissingApiKeyException or HttpRequestException or InvalidOperationException)
         {
             ledger.FinishRun(runId, RunStatus.Error, DateTimeOffset.UtcNow);
             Output.Error(console, ex.Message);
-            return ExitCodes.Failed;
+            return (ExitCodes.Failed, null, null);
         }
 
         var artifacts = new RunArtifacts(config.ConfigDirectory, runId);
@@ -116,31 +140,9 @@ public sealed partial class PlanCommand(IAnsiConsole console, IProcessRunner run
         if (settings.Json)
         {
             Output.Json(console, new { run_id = runId, strategy = strategy.Id, base_sha = baseSha, architect_usd = planned.ArchitectUsd, contract = planned.Contract });
-            return ExitCodes.Ok;
         }
 
-        var table = new Table().Border(TableBorder.Rounded).AddColumns("Unit", "Title", "Depends on", "Files");
-        foreach (var unit in planned.Contract.Units)
-        {
-            table.AddRow(Markup.Escape(unit.Id), Markup.Escape(unit.Title), Markup.Escape(string.Join(", ", unit.DependsOn)),
-                Markup.Escape(string.Join(", ", unit.Files.Take(4))));
-        }
-
-        console.Write(table);
-        foreach (var rule in planned.Contract.Rules)
-        {
-            console.MarkupLine($"  [grey]{Markup.Escape(rule.Id)}[/] {Markup.Escape(rule.Text)}");
-        }
-
-        if (strategy.UsesArchitectPlan)
-        {
-            console.MarkupLine(string.Create(CultureInfo.InvariantCulture,
-                $"Architect cost: ${planned.ArchitectUsd:0.0000}{(planned.CostEstimated ? " (est.)" : "")}"));
-        }
-
-        console.MarkupLine($"Plan [bold]{runId}[/] saved to {Markup.Escape(Path.GetRelativePath(config.RepoRoot, artifacts.PlanPath))}");
-        console.MarkupLine($"Next: [bold]tokonomy run[/] (or tokonomy run --plan {runId})");
-        return ExitCodes.Ok;
+        return (ExitCodes.Ok, runId, planned);
     }
 
     internal static string Slug(string task)

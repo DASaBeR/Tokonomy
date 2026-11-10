@@ -61,6 +61,23 @@ public sealed partial class DoctorCommand(IAnsiConsole console, IProcessRunner r
         }
 
         checks.Add(new("config", TokonomyConfig.DirectoryName, Level.Ok, config.ConfigDirectory));
+        checks.AddRange(await ConfigChecksAsync(config, settings.RemoveLeftoverWorktrees, settings.RemoveLeftoverGateEnvironments, cancellationToken));
+        return Render(checks, settings.Json);
+    }
+
+    /// <summary>
+    /// The checks `tokonomy build` runs before it spends anything: every Fail (and every warning) as one readable line.
+    /// </summary>
+    internal async Task<(IReadOnlyList<string> Failures, IReadOnlyList<string> Warnings)> PreflightAsync(TokonomyConfig config, CancellationToken cancellationToken)
+    {
+        var checks = await ConfigChecksAsync(config, false, false, cancellationToken);
+        static string Line(Check c) => $"{c.Area}: {c.Name} - {c.Detail}";
+        return (checks.Where(c => c.Level == Level.Fail).Select(Line).ToList(), checks.Where(c => c.Level == Level.Warn).Select(Line).ToList());
+    }
+
+    private async Task<List<Check>> ConfigChecksAsync(TokonomyConfig config, bool removeWorktrees, bool removeGateEnvs, CancellationToken cancellationToken)
+    {
+        var checks = new List<Check>();
         var repo = config.RepoRoot;
         var policy = config.Policy;
 
@@ -76,6 +93,14 @@ public sealed partial class DoctorCommand(IAnsiConsole console, IProcessRunner r
         {
             var found = ExecutableResolver.TryResolve(exec.Cmd[0], repo);
             checks.Add(new("executor", execName, found is null ? Level.Fail : Level.Ok, found ?? $"'{exec.Cmd[0]}' not on PATH"));
+        }
+
+        if (!string.IsNullOrWhiteSpace(policy.Executors.Strong) && policy.Executors.Strong != execName)
+        {
+            var strongExec = config.Executors.Executors[policy.Executors.Strong];
+            var strongFound = ExecutableResolver.TryResolve(strongExec.Cmd[0], repo);
+            checks.Add(new("executor", $"{policy.Executors.Strong} (strong model alone)", strongFound is null ? Level.Fail : Level.Ok,
+                strongFound ?? $"'{strongExec.Cmd[0]}' not found"));
         }
 
         if (!exec.Capabilities.Headless)
@@ -99,20 +124,40 @@ public sealed partial class DoctorCommand(IAnsiConsole console, IProcessRunner r
             checks.Add(new("executor", "metering", Level.Warn, "worker cost will be recorded as estimated"));
         }
 
-        // Architect provider.
-        var cliArchitect = policy.ArchitectProvider.Kind == ArchitectProviderConfig.ClaudeCliKind;
+        // Architect (the strong model): a CLI login or an API key.
+        var architectKind = policy.ArchitectProvider.Kind;
+        var cliArchitect = architectKind is ArchitectProviderConfig.ClaudeCliKind or ArchitectProviderConfig.AgyCliKind;
         if (cliArchitect)
         {
-            var claude = ExecutableResolver.TryResolve(policy.ArchitectProvider.Command, repo);
-            checks.Add(new("architect", policy.ArchitectProvider.Command, claude is null ? Level.Fail : Level.Ok,
-                claude is null ? $"'{policy.ArchitectProvider.Command}' not on PATH" : "Claude Code CLI (cost recorded as estimated)"));
+            var cmd = policy.ArchitectProvider.CommandOrDefault;
+            var found = ExecutableResolver.TryResolve(cmd, repo);
+            var what = architectKind == ArchitectProviderConfig.AgyCliKind ? "Antigravity CLI" : "Claude Code CLI";
+            checks.Add(new("architect", cmd, found is null ? Level.Fail : Level.Ok,
+                found is null ? $"'{cmd}' not found ({what} is not installed or not on PATH)" : $"{what} (cost recorded as estimated)"));
         }
 
-        // Provider key: report presence only, never the value. Needed for an API architect or a metered worker.
-        var keySet = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(policy.Provider.ApiKeyEnv));
-        var keyNeeded = !cliArchitect || exec.Capabilities.ProxyRoutable;
-        checks.Add(new("provider", policy.Provider.ApiKeyEnv, keySet || !keyNeeded ? Level.Ok : Level.Fail,
-            keySet ? "set" : keyNeeded ? "not set" : "not set (not needed: architect and worker use CLI logins)"));
+        // Provider keys: report presence only, never the value. One per role that uses an API.
+        var keyChecks = new List<(string Variable, string Role)>();
+        if (!cliArchitect)
+        {
+            keyChecks.Add((policy.ArchitectProvider.EffectiveProvider(policy.Provider).ApiKeyEnv, "strong model"));
+        }
+
+        if (exec.Capabilities.ProxyRoutable)
+        {
+            keyChecks.Add((policy.Provider.ApiKeyEnv, "worker"));
+        }
+
+        foreach (var (variable, role) in keyChecks.DistinctBy(k => k.Variable, StringComparer.OrdinalIgnoreCase))
+        {
+            var set = !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(variable));
+            checks.Add(new("provider", variable, set ? Level.Ok : Level.Fail, set ? $"set ({role})" : $"not set ({role})"));
+        }
+
+        if (keyChecks.Count == 0)
+        {
+            checks.Add(new("provider", "API key", Level.Ok, "not needed: both roles use CLI logins"));
+        }
 
         // Prices.
         var prices = PriceTable.Load(Path.Combine(config.ConfigDirectory, TokonomyConfig.PricesFile));
@@ -132,8 +177,8 @@ public sealed partial class DoctorCommand(IAnsiConsole console, IProcessRunner r
             checks.Add(new("gates", gate.DisplayName, found is null ? Level.Fail : Level.Ok, found ?? $"'{gate.Cmd[0]}' not on PATH"));
         }
 
-        checks.AddRange(await WorktreeChecks(policy, repo, config.LedgerPath, settings.RemoveLeftoverWorktrees, cancellationToken));
-        checks.AddRange(await GateExecutionChecks(policy, repo, settings.RemoveLeftoverGateEnvironments, cancellationToken));
+        checks.AddRange(await WorktreeChecks(policy, repo, config.LedgerPath, removeWorktrees, cancellationToken));
+        checks.AddRange(await GateExecutionChecks(policy, repo, removeGateEnvs, cancellationToken));
 
         // Ledger.
         try
@@ -151,7 +196,7 @@ public sealed partial class DoctorCommand(IAnsiConsole console, IProcessRunner r
             checks.Add(await LongPathsCheck(repo, cancellationToken));
         }
 
-        return Render(checks, settings.Json);
+        return checks;
     }
 
     /// <summary>Checks specific to the Antigravity worker: the requested model exists, and write isolation is in place.</summary>
@@ -209,7 +254,7 @@ public sealed partial class DoctorCommand(IAnsiConsole console, IProcessRunner r
         IGateExecutionProvider provider;
         try
         {
-            provider = GateExecutionFactory.Create(gx, runner, repo, commands, [policy.Provider.ApiKeyEnv], policy.Isolation.WorktreeRoot);
+            provider = GateExecutionFactory.Create(gx, runner, repo, commands, policy.KeyVariables, policy.Isolation.WorktreeRoot);
         }
         catch (GateIsolationUnavailableException ex)
         {

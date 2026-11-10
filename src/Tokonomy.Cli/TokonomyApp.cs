@@ -32,11 +32,13 @@ public static class TokonomyApp
                 return ex is CommandParseException or CommandRuntimeException ? ExitCodes.Usage : ExitCodes.Failed;
             });
 
-            config.AddCommand<InitCommand>("init").WithDescription("Detect the stack and scaffold .tokonomy/ config.");
+            config.AddCommand<BuildCommand>("build").WithDescription("Do everything in one go: set up, plan, confirm, build and verify, merge.")
+                .WithExample("build", "\"a responsive landing page for a SaaS product\"");
+            config.AddCommand<InitCommand>("init").WithDescription("Guided setup: pick who plans and who codes (no files to edit).");
             config.AddCommand<DoctorCommand>("doctor").WithDescription("Check git, executors, capabilities, API keys and gate tools.");
-            config.AddCommand<PlanCommand>("plan").WithDescription("Architect produces a contract and unit DAG.")
+            config.AddCommand<PlanCommand>("plan").WithDescription("Step by step: only plan (see the plan, then use `run`).")
                 .WithExample("plan", "\"Add rate limiting to /login\"");
-            config.AddCommand<RunCommand>("run").WithDescription("Execute the latest plan under supervision.");
+            config.AddCommand<RunCommand>("run").WithDescription("Step by step: execute the latest plan.");
             config.AddCommand<ReportCommand>("report").WithDescription("Show the cost and quality ledger.");
             config.AddCommand<BenchCommand>("bench").WithDescription("Compare strategies on a taskset.")
                 .WithExample("bench", "tasks.yaml", "--strategies", "1,1b,2", "--repeat", "3");

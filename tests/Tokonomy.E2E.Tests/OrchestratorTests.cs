@@ -44,7 +44,7 @@ public sealed class OrchestratorTests : IDisposable
         Rules = [new Rule("R1", "keep it small")],
     };
 
-    private async Task<RunOutcome> Run(Contract contract, Policy policy, FakeExecutor executor, Strategy strategy, string runId = "run-1")
+    private async Task<RunOutcome> Run(Contract contract, Policy policy, FakeExecutor executor, Strategy strategy, string runId = "run-1", Tokonomy.Llm.Providers.PriceTable? prices = null)
     {
         _ledger.StartRun(new RunRecord { Id = runId, Strategy = strategy.Id, TaskId = "t", Repo = _repo.Path, Status = RunStatus.Planned, Started = DateTimeOffset.UtcNow });
         var orchestrator = new RunOrchestrator(new ProcessRunner(), _ledger, new Supervisor(), _ => executor);
@@ -62,7 +62,48 @@ public sealed class OrchestratorTests : IDisposable
             UseGates = strategy.UseGates,
             AllowEscalation = strategy.AllowEscalation,
             MaxAttempts = strategy.MaxAttempts,
+            Prices = prices ?? Tokonomy.Llm.Providers.PriceTable.Empty,
         }, null, default);
+    }
+
+    [Fact]
+    public async Task Tokens_without_a_reported_cost_are_priced_from_the_price_table_instead_of_counting_as_free()
+    {
+        var executor = new FakeExecutor(FakeExecutor.Write("app.txt", "feature v2\n"))
+        {
+            Usage = [new WorkerUsage("flash", 1_000_000, 100_000, 0, null)],
+        };
+        var prices = new Tokonomy.Llm.Providers.PriceTable(new Dictionary<string, Tokonomy.Llm.Providers.ModelPrice>
+        {
+            ["flash"] = new() { Input = 1m, Output = 10m },
+        });
+        var contract = new Contract { Task = "t", Units = [new WorkUnit { Id = "U1", Title = "Feature", Spec = "Add 'feature' to app.txt" }] };
+
+        var outcome = await Run(contract, PolicyWithGate(), executor, Strategy.Supervised, prices: prices);
+
+        Assert.Equal(RunStatus.Pass, outcome.Status);
+        var run = _ledger.GetRun("run-1")!;
+        Assert.Equal(2.0m, run.TotalUsd);
+        Assert.Equal(CostSource.Estimated, run.CostSource);
+    }
+
+    [Fact]
+    public async Task Cache_reads_reported_separately_are_priced_at_the_cached_rate_not_the_fresh_rate()
+    {
+        var executor = new FakeExecutor(FakeExecutor.Write("app.txt", "feature v2\n"))
+        {
+            Usage = [new WorkerUsage("flash", 100_000, 10_000, 1_000_000, null)],
+        };
+        var prices = new Tokonomy.Llm.Providers.PriceTable(new Dictionary<string, Tokonomy.Llm.Providers.ModelPrice>
+        {
+            ["flash"] = new() { Input = 1m, CachedInput = 0.1m, Output = 10m },
+        });
+        var contract = new Contract { Task = "t", Units = [new WorkUnit { Id = "U1", Title = "Feature", Spec = "Add 'feature' to app.txt" }] };
+
+        await Run(contract, PolicyWithGate(), executor, Strategy.Supervised, prices: prices);
+
+        // 100k fresh at $1 + 1M cached at $0.10 + 10k output at $10 per million = 0.1 + 0.1 + 0.1
+        Assert.Equal(0.3m, _ledger.GetRun("run-1")!.TotalUsd);
     }
 
     [Fact]

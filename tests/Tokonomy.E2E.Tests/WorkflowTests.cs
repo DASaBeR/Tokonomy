@@ -70,8 +70,8 @@ public sealed class WorkflowTests : IDisposable
 
         var (runExit, runOut) = await Cli(services, "run", "--config", ConfigDir);
         Assert.True(runExit == 0, runOut);
-        Assert.Contains("RETRY", runOut, StringComparison.Ordinal);
-        Assert.Contains("ACCEPT", runOut, StringComparison.Ordinal);
+        Assert.Contains("retrying", runOut, StringComparison.Ordinal);
+        Assert.Contains("accepted", runOut, StringComparison.Ordinal);
         Assert.Contains("PASS", runOut, StringComparison.Ordinal);
         Assert.Equal("strong-model", executor.Calls[0].Model);
 

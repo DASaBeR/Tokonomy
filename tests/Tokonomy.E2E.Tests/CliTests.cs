@@ -24,9 +24,15 @@ public sealed class CliTests : IDisposable
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
         try
         {
+            // Init now creates a real git repository; git writes its objects read-only.
+            foreach (var file in Directory.EnumerateFiles(_repo, "*", SearchOption.AllDirectories))
+            {
+                File.SetAttributes(file, FileAttributes.Normal);
+            }
+
             Directory.Delete(_repo, recursive: true);
         }
-        catch (IOException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
         }
     }
@@ -124,7 +130,7 @@ public sealed class CliTests : IDisposable
     [Fact]
     public async Task Plan_requires_models()
     {
-        await Run("init", "--path", _repo);
+        await Run("init", "--path", _repo, "--preset", "api", "--architect", "", "--worker", "");
 
         var (exit, output) = await Run("plan", "do something", "--config", ConfigDir);
 

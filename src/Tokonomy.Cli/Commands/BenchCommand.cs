@@ -109,16 +109,19 @@ public sealed class BenchCommand(IAnsiConsole console, IProcessRunner runner, Se
         var prices = Services.LoadPrices(config);
 
         // A model without a price makes every call cost $0 in the ledger, which silently disables the spending caps.
+        // Only models whose cost nobody else reports need one: Claude Code reports its own cost, and a claude-cli
+        // architect does too.
+        static bool NeedsPrice(ExecutorDefinition e) => !string.Equals(e.UsageFormat, "claude-json", StringComparison.OrdinalIgnoreCase);
         var used = new List<string>();
-        // A claude-cli architect reports its own (estimated) cost, so only a strong model that does the work through the
-        // metering proxy needs a price.
         var architectMetered = config.Policy.ArchitectProvider.Kind != ArchitectProviderConfig.ClaudeCliKind;
-        if (strategies.Any(s => s.WorkerIsStrong || (s.UsesArchitectPlan && architectMetered)))
+        var strongExecutor = config.Executors.Executors[config.Policy.Executors.For(strongModelDoesTheWork: true)];
+        var cheapExecutor = config.Executors.Executors[config.Policy.Executors.Default];
+        if (strategies.Any(s => (s.WorkerIsStrong && NeedsPrice(strongExecutor)) || (s.UsesArchitectPlan && architectMetered)))
         {
             used.Add(models.Architect);
         }
 
-        if (strategies.Any(s => !s.WorkerIsStrong))
+        if (strategies.Any(s => !s.WorkerIsStrong) && NeedsPrice(cheapExecutor))
         {
             used.Add(models.Worker);
         }

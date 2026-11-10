@@ -90,4 +90,40 @@ internal static class ConfigLocator
         exitCode = ExitCodes.Ok;
         return config;
     }
+
+    /// <summary>
+    /// Like <see cref="LoadOrReport"/>, but a folder with no .tokonomy/ is set up on the spot (git repository, first commit,
+    /// guided setup) instead of sending the user away to run commands and edit files first.
+    /// </summary>
+    public static async Task<(TokonomyConfig? Config, int Exit)> LoadOrSetupAsync(
+        IAnsiConsole console, Tokonomy.Runtime.Process.IProcessRunner runner, CommonSettings settings, bool yes, CancellationToken ct, bool banner = true)
+    {
+        var found = settings.Config ?? ConfigLoader.FindConfigDirectory(Directory.GetCurrentDirectory());
+        if (found is null || !Directory.Exists(found))
+        {
+            if (!yes && !Ui.IsInteractive(console))
+            {
+                Output.Error(console, $"No {TokonomyConfig.DirectoryName} directory found. Run `tokonomy init` first (add --yes to accept the defaults without questions).");
+                return (null, ExitCodes.ConfigError);
+            }
+
+            var root = Directory.GetCurrentDirectory();
+            if (banner)
+            {
+                Ui.Banner(console, "first-time setup for this folder");
+            }
+
+            Ui.Note(console, "First time in this folder: setting it up.");
+            await Ui.EnsureRepoAsync(console, new Tokonomy.Runtime.Git.GitCli(runner), root, ct);
+            if (await new SetupWizard(console, runner).RunAsync(root, new SetupOptions { Yes = yes }, ct) is null)
+            {
+                return (null, ExitCodes.Usage);
+            }
+
+            console.WriteLine();
+        }
+
+        var config = LoadOrReport(console, settings, out var exit);
+        return (config, exit);
+    }
 }

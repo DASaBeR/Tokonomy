@@ -80,7 +80,24 @@ public sealed record BenchResultRecord
     public CostSource CostSource { get; init; }
     public TimeSpan Duration { get; init; }
     public string? Note { get; init; }
+
+    /// <summary>Token use of every model that worked on this trial (read from the run's ledger rows, not stored on the trial).</summary>
+    public IReadOnlyList<ModelUsage> Models { get; init; } = [];
+
+    /// <summary>Fresh (uncached) prompt tokens. Cache reads are counted separately in <see cref="CachedTokens"/>.</summary>
+    public long InputTokens => Models.Sum(m => m.InputTokens);
+
+    public long OutputTokens => Models.Sum(m => m.OutputTokens);
+
+    /// <summary>Prompt tokens served from a cache (billed at a lower rate); not part of <see cref="InputTokens"/>.</summary>
+    public long CachedTokens => Models.Sum(m => m.CachedTokens);
+
+    /// <summary>Fresh input plus output: the tokens that were actually processed and generated, cache reads left out.</summary>
+    public long TotalTokens => InputTokens + OutputTokens;
 }
+
+/// <summary>What one model used in one run: calls, tokens and cost.</summary>
+public sealed record ModelUsage(string Model, int Calls, long InputTokens, long OutputTokens, long CachedTokens, decimal Usd);
 
 /// <summary>Aggregated view used by <c>tokonomy report</c>.</summary>
 public sealed record RunSummary

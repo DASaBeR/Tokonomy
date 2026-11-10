@@ -72,6 +72,8 @@ public interface IRunObserver
 {
     void Stage(string message) { }
     void UnitStarted(WorkUnit unit) { }
+    void AttemptStarted(WorkUnit unit, int attempt) { }
+    void GatesStarted(WorkUnit unit) { }
     void AttemptFinished(WorkUnit unit, int attempt, RunResult run, UnitDiff diff, IReadOnlyList<GateResult> gates, Decision decision) { }
     void Warning(string message) { }
     void TakeoverFinished(WorkUnit unit, bool success, string note) { }
@@ -170,12 +172,16 @@ public sealed class RunOrchestrator(
             var commandGates = request.UseGates
                 ? policy.Gates.Where(g => g.Type == GateConfig.CommandType).Select(g => new CommandGate(g)).ToList()
                 : [];
-            var gates = new GateSession(provider, request, workspace, dependencies, commandGates, observer);
+            AcceptanceFiles? acceptance = request.UseGates && policy.Acceptance.Enabled ? new AcceptanceFiles(policy.Acceptance.Dir) : null;
+            var acceptanceGate = acceptance is null
+                ? null
+                : new CommandGate(new GateConfig { Name = AcceptanceFiles.GateName, Cmd = policy.Acceptance.Cmd, TimeoutSeconds = policy.Acceptance.TimeoutSeconds });
+            var gates = new GateSession(provider, request, workspace, dependencies, commandGates, observer, acceptance, acceptanceGate);
             var baseline = new Dictionary<string, GateRun>(StringComparer.Ordinal);
             if (commandGates.Count > 0)
             {
                 observer.Stage($"Running {commandGates.Count} gate(s) on the base commit (baseline)");
-                foreach (var (gate, run, _) in await gates.RunAllAsync("baseline", i => $"baseline-gate{i}.log", ct))
+                foreach (var (gate, run, _) in await gates.RunAllAsync("baseline", i => $"baseline-gate{i}.log", ct, includeAcceptance: false))
                 {
                     baseline[gate.Name] = run;
                     artifacts.Append("baseline", new { gate = gate.Name, run.Passed, failing = run.FailingTests?.Count });
@@ -321,6 +327,14 @@ public sealed class RunOrchestrator(
         var policy = request.Policy;
         var artifacts = request.Artifacts;
         var state = new UnitState { Unit = unit };
+        if (gates.Acceptance is { } acceptanceFiles && acceptanceFiles.Add(unit).Count > 0)
+        {
+            // The architect's tests for this unit go in as their own commit, so they are never part of the worker's diff.
+            acceptanceFiles.Enforce(workspace.Path);
+            await workspace.CommitAsync($"tokonomy({unit.Id}): acceptance tests", ct);
+            artifacts.Append("acceptance", new { unit = unit.Id, files = acceptanceFiles.Paths });
+        }
+
         var unitStart = await workspace.HeadAsync(ct);
         var maxAttempts = request.MaxAttempts ?? int.MaxValue;
         string? feedback = null;
@@ -332,13 +346,15 @@ public sealed class RunOrchestrator(
         while (true)
         {
             state.Attempts++;
-            var brief = BriefWriter.Build(request.Contract, unit, state.Attempts, request.Executor.BriefFile, feedback, completed, handoffs);
+            var brief = BriefWriter.Build(request.Contract, unit, state.Attempts, request.Executor.BriefFile, feedback, completed, handoffs,
+                gates.Acceptance is { Count: > 0 } ? (gates.Acceptance.Paths, string.Join(' ', policy.Acceptance.Cmd)) : null);
             artifacts.WriteLog($"{brief.Label}.brief.md", brief.Body);
 
             await watch.BeforeAttemptAsync(ct);
+            observer.AttemptStarted(unit, state.Attempts);
             var run = await executor.RunAsync(brief, workspace.Path, request.WorkerModel,
                 TimeSpan.FromSeconds(policy.Escalation.WorkerTimeoutSeconds), linked.Token);
-            RecordReportedUsage(request.RunId, unit.Id, run, budget);
+            RecordReportedUsage(request.RunId, unit.Id, run, budget, request.Prices);
 
             // Before git looks at the worktree (staging a junction is how a link would get into the diff): links,
             // the .git pointer and, for executors that report their commands, files hidden in ignored paths.
@@ -359,6 +375,11 @@ public sealed class RunOrchestrator(
             List<string?> gateLogs = [];
             if (!violated)
             {
+                if (diff.ChangedPaths.Count > 0)
+                {
+                    observer.GatesStarted(unit);
+                }
+
                 try
                 {
                     (gateResults, gateLogs) = await RunGatesAsync(request, brief.Label, workspace.Path, diff, gates, baseline, locks, linked.Token);
@@ -660,10 +681,14 @@ public sealed class RunOrchestrator(
     }
 
     /// <summary>Records usage the executor reported itself (not metered by the proxy); always marked estimated.</summary>
-    private void RecordReportedUsage(string runId, string unitId, RunResult run, BudgetGuard budget)
+    private void RecordReportedUsage(string runId, string unitId, RunResult run, BudgetGuard budget, PriceTable prices)
     {
         foreach (var usage in run.Usage)
         {
+            // Tokens only (Antigravity reports no cost): use the configured price, so the cost is an API-equivalent figure
+            // instead of zero. It stays marked estimated.
+            // Executors report cache reads separately from fresh input, while the price table expects the total prompt size.
+            var usd = usage.Usd ?? prices.Cost(usage.Model, usage.InputTokens + usage.CachedTokens, usage.OutputTokens, usage.CachedTokens) ?? 0;
             ledger.RecordLlmCall(new LlmCallRecord
             {
                 RunId = runId,
@@ -673,10 +698,10 @@ public sealed class RunOrchestrator(
                 InputTokens = usage.InputTokens,
                 OutputTokens = usage.OutputTokens,
                 CachedTokens = usage.CachedTokens,
-                Usd = usage.Usd ?? 0,
+                Usd = usd,
                 Source = CostSource.Estimated,
             });
-            budget.Add(usage.Usd ?? 0);
+            budget.Add(usd);
         }
     }
 
@@ -700,6 +725,13 @@ public sealed class RunOrchestrator(
     /// <summary>Applies strategy limits on top of the supervisor's policy decision, for escalations that are not taken.</summary>
     internal static Decision Constrain(Decision decision, RunRequest request, UnitState state, int maxAttempts, bool architectAvailable)
     {
+        // The size limit belongs to supervision. A strategy that runs without gates is single shot by design and is judged
+        // by the hidden acceptance check alone, so a big diff must not discard its work.
+        if (decision.Kind == DecisionKind.Split && !request.UseGates)
+        {
+            return new Decision(DecisionKind.Accept, $"{decision.Reason}; size limit not applied in a strategy without gates");
+        }
+
         if (decision.Kind is DecisionKind.Takeover or DecisionKind.Split)
         {
             if (!request.AllowEscalation)
@@ -736,14 +768,14 @@ public sealed class RunOrchestrator(
     private async Task<IGateExecutionProvider?> ResolveGateProviderAsync(RunRequest request, IRunObserver observer, CancellationToken ct)
     {
         var policy = request.Policy;
-        var needed = policy.Prepare.Count > 0 || (request.UseGates && policy.Gates.Any(g => g.Type == GateConfig.CommandType));
+        var needed = policy.Prepare.Count > 0 || (request.UseGates && (policy.Acceptance.Enabled || policy.Gates.Any(g => g.Type == GateConfig.CommandType)));
         if (!needed)
         {
             return null;
         }
 
         var provider = gateProvider ?? GateExecutionFactory.Create(
-            policy.GateExecution, runner, request.RepoRoot, GateExecutionFactory.Commands(policy), [policy.Provider.ApiKeyEnv], policy.Isolation.WorktreeRoot);
+            policy.GateExecution, runner, request.RepoRoot, GateExecutionFactory.Commands(policy), policy.KeyVariables, policy.Isolation.WorktreeRoot);
         var status = await provider.CheckAsync(ct);
         if (!status.Available)
         {
@@ -843,14 +875,28 @@ public sealed class RunOrchestrator(
     /// leaves behind (a background process, a planted file) can influence the next.
     /// </summary>
     private sealed class GateSession(
-        IGateExecutionProvider? provider, RunRequest request, RunWorkspace workspace, string? dependencies, List<CommandGate> gates, IRunObserver observer)
+        IGateExecutionProvider? provider, RunRequest request, RunWorkspace workspace, string? dependencies, List<CommandGate> commandGates, IRunObserver observer,
+        AcceptanceFiles? acceptance = null, CommandGate? acceptanceGate = null)
     {
-        public async Task<List<(CommandGate Gate, GateRun Run, string Log)>> RunAllAsync(string label, Func<int, string> logName, CancellationToken ct)
+        public AcceptanceFiles? Acceptance => acceptance;
+
+        public async Task<List<(CommandGate Gate, GateRun Run, string Log)>> RunAllAsync(
+            string label, Func<int, string> logName, CancellationToken ct, bool includeAcceptance = true)
         {
             var results = new List<(CommandGate, GateRun, string)>();
+            var gates = includeAcceptance && acceptanceGate is not null && acceptance is { Count: > 0 }
+                ? [.. commandGates, acceptanceGate]
+                : commandGates;
             if (gates.Count == 0 || provider is null)
             {
                 return results;
+            }
+
+            // Whatever the worker did to the architect's tests is undone first, so the gate judges the originals.
+            if (includeAcceptance && acceptance is { Count: > 0 } && acceptance.Enforce(workspace.Path) is { Count: > 0 } tampered)
+            {
+                request.Artifacts.Append("acceptance_tamper", new { label, files = tampered });
+                observer.Warning($"The worker changed the architect's acceptance tests ({string.Join(", ", tampered.Take(3))}); they were restored before the gates ran.");
             }
 
             var env = await provider.CreateAsync(new GateEnvironmentRequest

@@ -62,6 +62,9 @@ public static class ConfigLoader
 
     public static TokonomyConfig Load(string configDirectory)
     {
+        // Always absolute: run artifacts live under it, and a worker runs with the worktree as its working directory, so
+        // a path like examples/.tokonomy/runs/... would not exist for it.
+        configDirectory = Path.GetFullPath(configDirectory);
         var issues = new List<ConfigIssue>();
         var policyPath = Path.Combine(configDirectory, TokonomyConfig.PolicyFile);
         var executorsPath = Path.Combine(configDirectory, TokonomyConfig.ExecutorsFileName);
@@ -73,6 +76,12 @@ public static class ConfigLoader
         {
             issues.AddRange(Validate(policy, policyPath));
             issues.AddRange(Validate(executors, executorsPath));
+            if (!string.IsNullOrWhiteSpace(policy.Executors.Strong) && !executors.Executors.ContainsKey(policy.Executors.Strong))
+            {
+                issues.Add(new ConfigIssue(Severity.Error, executorsPath, null,
+                    $"executors.strong '{policy.Executors.Strong}' is not defined in {TokonomyConfig.ExecutorsFileName}."));
+            }
+
             if (!executors.Executors.ContainsKey(policy.Executors.Default))
             {
                 issues.Add(new(Severity.Error, policyPath, null,
@@ -133,10 +142,35 @@ public static class ConfigLoader
                 "provider.api_key_env looks like an API key. Put the *name* of an environment variable here, never the key.");
         }
 
-        if (policy.ArchitectProvider.Kind is not (ArchitectProviderConfig.ApiKind or ArchitectProviderConfig.ClaudeCliKind))
+        if (policy.ArchitectProvider.Kind is not (ArchitectProviderConfig.ApiKind or ArchitectProviderConfig.ClaudeCliKind or ArchitectProviderConfig.AgyCliKind))
         {
             yield return new(Severity.Error, file, null,
-                $"architect_provider.kind '{policy.ArchitectProvider.Kind}' is not supported; use '{ArchitectProviderConfig.ApiKind}' or '{ArchitectProviderConfig.ClaudeCliKind}'.");
+                $"architect_provider.kind '{policy.ArchitectProvider.Kind}' is not supported; use '{ArchitectProviderConfig.ApiKind}', '{ArchitectProviderConfig.ClaudeCliKind}' or '{ArchitectProviderConfig.AgyCliKind}'.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(policy.ArchitectProvider.BaseUrl) &&
+            (!Uri.TryCreate(policy.ArchitectProvider.BaseUrl, UriKind.Absolute, out var architectUri) || (architectUri.Scheme != "https" && architectUri.Scheme != "http")))
+        {
+            yield return new(Severity.Error, file, null, $"architect_provider.base_url '{policy.ArchitectProvider.BaseUrl}' is not an http(s) URL.");
+        }
+
+        if (policy.ArchitectProvider.ApiKeyEnv is { Length: > 0 } architectKey && LooksLikeSecret(architectKey))
+        {
+            yield return new(Severity.Error, file, null,
+                "architect_provider.api_key_env looks like an API key. Put the *name* of an environment variable here, never the key.");
+        }
+
+        if (policy.Acceptance.Enabled)
+        {
+            if (Tokonomy.Core.Planning.AcceptancePaths.Normalize(policy.Acceptance.Dir, policy.Acceptance.Dir + "/x") is null)
+            {
+                yield return new(Severity.Error, file, null, "acceptance.dir must be a relative directory inside the repository (for example 'acceptance').");
+            }
+
+            if (policy.Acceptance.TimeoutSeconds <= 0)
+            {
+                yield return new(Severity.Error, file, null, "acceptance.timeout_seconds must be positive.");
+            }
         }
 
         for (var i = 0; i < policy.Gates.Count; i++)
@@ -220,7 +254,7 @@ public static class ConfigLoader
 
     private static IEnumerable<ConfigIssue> ValidateGateExecution(Policy policy, string file)
     {
-        var runsCommands = policy.Prepare.Count > 0 || policy.Gates.Any(g => g.Type == GateConfig.CommandType);
+        var runsCommands = policy.Prepare.Count > 0 || policy.Acceptance.Enabled || policy.Gates.Any(g => g.Type == GateConfig.CommandType);
         if (policy.GateExecution is not { } g)
         {
             if (runsCommands)

@@ -106,6 +106,19 @@ public class SupervisorTests
             Policy(e => e.ProtectedPaths = ["src/auth/**"])).Kind);
 
     [Fact]
+    public void Oversized_diff_that_every_gate_verified_is_accepted_with_a_note()
+    {
+        var d = Sut.Decide(State(lines: 453), Ok, [Gate(GateStatus.Passed)], Policy());
+
+        Assert.Equal(DecisionKind.Accept, d.Kind);
+        Assert.Contains("large change", d.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Oversized_diff_with_no_gate_to_verify_it_still_splits() =>
+        Assert.Equal(DecisionKind.Split, Sut.Decide(State(lines: 453), Ok, [], Policy()).Kind);
+
+    [Fact]
     public void Protected_path_triggers_takeover_even_when_gates_pass()
     {
         var d = Sut.Decide(State(paths: "src/auth/token.py"), Ok, [Gate(GateStatus.Passed)], Policy(e => e.ProtectedPaths = ["src/auth/**"]));

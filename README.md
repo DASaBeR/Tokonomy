@@ -98,6 +98,16 @@ Both installers verify SHA-256 checksums. Single-file binaries are published for
 
 ## Quick start
 
+**The short way.** In any folder (it does not need to be a git repository yet):
+
+```sh
+tokonomy build "a responsive landing page for a SaaS product"
+```
+
+The first time, it asks a few questions (who plans, who codes, which models) and writes the config for you. It creates the git repository and a first commit if needed, checks your tools, plans, shows the plan and asks you to confirm, then builds and verifies each step and offers to merge the result. Setup first looks at your machine (is Claude Code installed and signed in? Antigravity? OpenCode? Python? Windows Sandbox?), then asks for two independent choices: the **strong** model (plans, rescues hard steps, writes the tests) and the **cheap** model (writes the code). Each can come from any provider: Claude through a Claude Code subscription or an Anthropic API key, Gemini through an Antigravity subscription (Antigravity has no API-key mode) or a Gemini API key, OpenRouter, OpenAI, DeepSeek or any OpenAI-compatible endpoint. Each choice shows that provider's own model menu (Claude Code's models, your plan's `agy models`, about 20 OpenRouter models with live prices and at least two free ones, or the service's own list). For an API you paste the key once; it is checked, and kept only as a user environment variable, never in a project file. Whatever is missing (a tool, a login, a key, Python, Windows Sandbox) is named with the exact command to fix it, and the setup can still be finished and completed later. `tokonomy init --yes --strong claude --cheap antigravity` does it without questions; the cheap role always needs a coding agent (Claude Code, Antigravity or OpenCode).
+
+**Step by step**, for control over each stage:
+
 ```sh
 cd your-repo
 tokonomy init                                 # detect stack, write .tokonomy/ (set models and prices next)
@@ -125,7 +135,7 @@ tokonomy report <run-id>                      # cost per tier, tokens, architect
 tokonomy bench examples/tasks.yaml --strategies 1,1b,2,3,4 --repeat 3
 ```
 
-The harness runs the same tasks under each strategy, verifies results independently, and reports cost per *successful* task. Results so far are small and **not conclusive**. In one early run on 8 tasks (Claude Sonnet 5.5 as the strong model, DeepSeek V4.1 Flash as the worker), architect + cheap worker + gates passed 21/21 trials at about **$0.047 per successful task**, against 23/23 at **$0.153** for the strong model alone with gates, roughly 3× cheaper at the same pass rate. That is one small taskset, one repository and one executor, and the cheap worker never failed, so it shows the direction, not proof. See [docs/benchmarking.md](docs/benchmarking.md) for the data and its limits. Contributions of tasksets and results are welcome.
+The harness runs the same tasks under each strategy, verifies results independently, and reports cost per *successful* task. Results so far are small and **not conclusive**. In one early run on 8 tasks (Claude Sonnet 5.5 as the strong model, DeepSeek V4.1 Flash as the worker), architect + cheap worker + gates passed 21/21 trials at about **$0.047 per successful task**, against 23/23 at **$0.153** for the strong model alone with gates, roughly 3× cheaper at the same pass rate. That is one small taskset, one repository and one executor, and the cheap worker never failed, so it shows the direction, not proof. See [docs/benchmarking.md](docs/benchmarking.md) for the data and its limits. A first pilot with subscriptions only (Claude Opus plans and supervises, Gemini 3.8 Flash high on Antigravity writes the code) passed 2/2 tasks, but those tasks were easy for Opus: Opus alone was faster and cheaper in API-equivalent terms. What the split buys there is **Claude quota**: the Claude subscription spent about 16k tokens on planning and supervision, against 57k (plus 518k cache reads) when Opus did the work, while Gemini tokens did the simple writing. See [docs/benchmarking.md](docs/benchmarking.md). Contributions of tasksets and results are welcome.
 
 ## Security
 

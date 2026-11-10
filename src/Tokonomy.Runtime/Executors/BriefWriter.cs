@@ -11,7 +11,7 @@ public static class BriefWriter
 
     public static Brief Build(
         Contract contract, WorkUnit unit, int attempt, string briefFileName, string? feedback, IReadOnlyList<WorkUnit> completed,
-        IReadOnlyList<Handoff>? handoffs = null)
+        IReadOnlyList<Handoff>? handoffs = null, (IReadOnlyList<string> Files, string Command)? acceptance = null)
     {
         ArgumentNullException.ThrowIfNull(contract);
         ArgumentNullException.ThrowIfNull(unit);
@@ -43,6 +43,19 @@ public static class BriefWriter
             {
                 sb.AppendLine($"- {a}");
             }
+        }
+
+        if (acceptance is { } tests)
+        {
+            sb.AppendLine();
+            sb.AppendLine("## Acceptance tests (written by the architect; read-only)");
+            sb.AppendLine($"Your work is accepted only when `{tests.Command}` passes. These files define done:");
+            foreach (var file in tests.Files)
+            {
+                sb.AppendLine($"- {file}");
+            }
+
+            sb.AppendLine("Read them first and build exactly what they check. Do not edit, delete or add files in their directory: any change is reverted before they run.");
         }
 
         if (contract.Rules.Count > 0)

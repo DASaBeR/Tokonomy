@@ -3,6 +3,8 @@ using Spectre.Console;
 using Spectre.Console.Cli;
 using Tokonomy.Cli.Infrastructure;
 using Tokonomy.Runtime.Config;
+using Tokonomy.Runtime.Git;
+using Tokonomy.Runtime.Process;
 
 namespace Tokonomy.Cli.Commands;
 
@@ -15,11 +17,43 @@ public sealed class InitSettings : CommonSettings
     [CommandOption("-f|--force")]
     [Description("Overwrite existing config files.")]
     public bool Force { get; init; }
+
+    [CommandOption("-y|--yes")]
+    [Description("Do not ask questions: use the flags below, then defaults (the best setup for the tools installed here).")]
+    public bool Yes { get; init; }
+
+    [CommandOption("--preset <NAME>")]
+    [Description("Shortcut for both roles: claude-antigravity, claude (Claude does both) or api (OpenRouter does both).")]
+    public string? Preset { get; init; }
+
+    [CommandOption("--strong <SOURCE>")]
+    [Description("Where the strong model comes from: claude (Claude Code subscription), antigravity (Antigravity subscription), or an API: openrouter, anthropic, gemini, openai, deepseek.")]
+    public string? Strong { get; init; }
+
+    [CommandOption("--cheap <SOURCE>")]
+    [Description("Where the cheap model comes from: same values as --strong.")]
+    public string? Cheap { get; init; }
+
+    [CommandOption("--architect <MODEL>")]
+    [Description("Strong model id, e.g. claude-opus-5-5 or anthropic/claude-sonnet-5-5.")]
+    public string? Architect { get; init; }
+
+    [CommandOption("--worker <MODEL>")]
+    [Description("Cheap model id, e.g. gemini-3.8-flash-medium (see `agy models`) or deepseek/deepseek-v4.1-flash.")]
+    public string? Worker { get; init; }
+
+    [CommandOption("--isolation <MODE>")]
+    [Description("Where the worker's code is tested: windows-sandbox (safe, default) or host-unsafe (directly on this computer).")]
+    public string? Isolation { get; init; }
+
+    [CommandOption("--tests <on|off>")]
+    [Description("Let the strong model write the acceptance tests (default: on when the project has no test setup).")]
+    public string? Tests { get; init; }
 }
 
-public sealed class InitCommand(IAnsiConsole console) : Command<InitSettings>
+public sealed class InitCommand(IAnsiConsole console, IProcessRunner runner, Services services) : AsyncCommand<InitSettings>
 {
-    public override int Execute(CommandContext context, InitSettings settings, CancellationToken cancellationToken)
+    public override async Task<int> ExecuteAsync(CommandContext context, InitSettings settings, CancellationToken cancellationToken)
     {
         var root = System.IO.Path.GetFullPath(settings.Path ?? Directory.GetCurrentDirectory());
         if (!Directory.Exists(root))
@@ -28,43 +62,69 @@ public sealed class InitCommand(IAnsiConsole console) : Command<InitSettings>
             return ExitCodes.Usage;
         }
 
-        var notGit = !Directory.Exists(System.IO.Path.Combine(root, ".git")) && !File.Exists(System.IO.Path.Combine(root, ".git"));
-        var result = Scaffolder.Init(root, settings.Force);
+        if (settings.Tests is not (null or "on" or "off"))
+        {
+            Output.Error(console, "--tests must be 'on' or 'off'.");
+            return ExitCodes.Usage;
+        }
+
+        var options = new SetupOptions
+        {
+            Preset = settings.Preset,
+            Strong = settings.Strong,
+            Cheap = settings.Cheap,
+            Architect = settings.Architect,
+            Worker = settings.Worker,
+            Isolation = settings.Isolation,
+            Acceptance = settings.Tests is null ? null : settings.Tests == "on",
+            Yes = settings.Yes || settings.Json,
+            Force = settings.Force,
+        };
 
         if (settings.Json)
         {
+            var git = new GitCli(runner);
+            var boot = await RepoBootstrap.EnsureAsync(git, root, cancellationToken);
+            var quiet = new SetupWizard(AnsiConsole.Create(new AnsiConsoleSettings { Out = new AnsiConsoleOutput(TextWriter.Null) }), runner);
+            var scaffolded = await quiet.RunAsync(root, options, cancellationToken);
+            if (scaffolded is null)
+            {
+                return ExitCodes.Usage;
+            }
+
             Output.Json(console, new
             {
-                config_directory = result.ConfigDirectory,
-                stacks = result.Stacks.Select(s => new { s.Name, s.Marker, gates = s.Gates.Select(g => g.Cmd) }),
-                written = result.Written,
-                skipped = result.Skipped,
-                not_a_git_repo = notGit,
+                config_directory = scaffolded.ConfigDirectory,
+                stacks = scaffolded.Stacks.Select(s => new { s.Name, s.Marker, gates = s.Gates.Select(g => g.Cmd) }),
+                written = scaffolded.Written,
+                skipped = scaffolded.Skipped,
+                git_initialized = boot.InitializedRepo,
+                initial_commit_created = boot.CreatedInitialCommit,
             });
             return ExitCodes.Ok;
         }
 
-        if (notGit)
+        Ui.Banner(console, "setup");
+        await Ui.EnsureRepoAsync(console, new GitCli(runner), root, cancellationToken);
+        var result = await new SetupWizard(console, runner).RunAsync(root, options, cancellationToken);
+        if (result is null)
         {
-            Output.Warn(console, $"{root} is not a git repository root. Tokonomy needs git to isolate and diff work.");
-        }
-
-        console.MarkupLine(result.Stacks.Count == 0
-            ? "[yellow]No known stack detected.[/] Add gates to policy.yaml by hand."
-            : $"Detected: [green]{Markup.Escape(string.Join(", ", result.Stacks.Select(s => $"{s.Name} ({s.Marker})")))}[/]");
-
-        foreach (var file in result.Written)
-        {
-            console.MarkupLine($"  [green]wrote[/]   {Markup.Escape(System.IO.Path.Combine(TokonomyConfig.DirectoryName, file))}");
-        }
-
-        foreach (var file in result.Skipped)
-        {
-            console.MarkupLine($"  [grey]kept[/]    {Markup.Escape(System.IO.Path.Combine(TokonomyConfig.DirectoryName, file))} (use --force to overwrite)");
+            return ExitCodes.Usage;
         }
 
         console.WriteLine();
-        console.MarkupLine("Next: set [bold]models[/] in policy.yaml, add prices to prices.yaml, then run [bold]tokonomy doctor[/].");
+        if (Ui.IsInteractive(console) && !options.Yes)
+        {
+            var task = console.Prompt(new TextPrompt<string>("[bold]What do you want to build?[/] [grey](Enter to skip; you can run `tokonomy build \"...\"` any time)[/]").AllowEmpty());
+            if (!string.IsNullOrWhiteSpace(task))
+            {
+                return await new BuildCommand(console, runner, services).ExecuteAsync(
+                    context, new BuildSettings { Task = task.Trim(), Config = result.ConfigDirectory }, cancellationToken);
+            }
+        }
+
+        console.MarkupLine("Next: [bold]tokonomy build \"what you want built\"[/]");
+        console.MarkupLine("[grey]It plans, asks you to confirm, then builds and verifies each step.[/]");
         return ExitCodes.Ok;
     }
 }

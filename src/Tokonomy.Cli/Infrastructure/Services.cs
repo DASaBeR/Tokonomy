@@ -21,8 +21,9 @@ public sealed class Services
     private static IProvider CreateProvider(TokonomyConfig config, PriceTable prices) =>
         config.Policy.ArchitectProvider.Kind switch
         {
-            ArchitectProviderConfig.ClaudeCliKind => new ClaudeCliProvider(new ProcessRunner(), config.Policy.ArchitectProvider.Command),
-            _ => new OpenAiCompatibleProvider(config.Policy.Provider, prices),
+            ArchitectProviderConfig.ClaudeCliKind => new ClaudeCliProvider(new ProcessRunner(), config.Policy.ArchitectProvider.CommandOrDefault),
+            ArchitectProviderConfig.AgyCliKind => new AgyCliProvider(new ProcessRunner(), config.Policy.ArchitectProvider.CommandOrDefault),
+            _ => new OpenAiCompatibleProvider(config.Policy.ArchitectProvider.EffectiveProvider(config.Policy.Provider), prices),
         };
 
     public static PriceTable LoadPrices(TokonomyConfig config) =>

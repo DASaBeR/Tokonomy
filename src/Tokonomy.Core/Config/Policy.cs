@@ -7,10 +7,17 @@ public sealed class Policy
     public ExecutorSelection Executors { get; set; } = new();
     public ProviderConfig Provider { get; set; } = new();
     public ArchitectProviderConfig ArchitectProvider { get; set; } = new();
+
+    /// <summary>Names of every environment variable that holds a provider key (the worker's and the strong model's), to keep them out of worker and gate environments.</summary>
+    public IReadOnlyList<string> KeyVariables =>
+        new[] { Provider.ApiKeyEnv, ArchitectProvider.ApiKeyEnv ?? "" }.Where(v => !string.IsNullOrWhiteSpace(v)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     /// <summary>Commands run once per run before the baseline (dependency restore). Network is allowed.</summary>
     public List<GateConfig> Prepare { get; set; } = [];
 
     public List<GateConfig> Gates { get; set; } = [];
+
+    /// <summary>Architect-written acceptance tests. Off unless <c>acceptance.cmd</c> is set.</summary>
+    public AcceptanceConfig Acceptance { get; set; } = new();
     public EscalationConfig Escalation { get; set; } = new();
     public BudgetConfig Budget { get; set; } = new();
     public IsolationConfig Isolation { get; set; } = new();
@@ -104,7 +111,17 @@ public sealed class ModelsConfig
 
 public sealed class ExecutorSelection
 {
+    /// <summary>The executor that runs the cheap model (<c>models.worker</c>).</summary>
     public string Default { get; set; } = "opencode";
+
+    /// <summary>
+    /// The executor that runs the strong model when it does the work itself (strategies 1 and 1b), for setups where the
+    /// cheap model's agent cannot run it: Opus through Claude Code while the cheap model runs through Antigravity.
+    /// Unset: the default executor.
+    /// </summary>
+    public string? Strong { get; set; }
+
+    public string For(bool strongModelDoesTheWork) => strongModelDoesTheWork && !string.IsNullOrWhiteSpace(Strong) ? Strong : Default;
 }
 
 public sealed class ProviderConfig
@@ -121,16 +138,55 @@ public sealed class ArchitectProviderConfig
 {
     public const string ApiKind = "api";
     public const string ClaudeCliKind = "claude-cli";
+    public const string AgyCliKind = "agy-cli";
 
     /// <summary>
-    /// <c>api</c> (default): an OpenAI-compatible endpoint with a key, see <c>provider</c>.
+    /// <c>api</c> (default): an OpenAI-compatible endpoint with a key (this section's <c>base_url</c> and <c>api_key_env</c>
+    /// when set, otherwise <c>provider</c>).
     /// <c>claude-cli</c>: run Claude Code headless on your own login (no API key); <c>models.architect</c> is passed to
     /// <c>claude --model</c> (for example <c>opus</c>). Its reported cost is an estimate.
+    /// <c>agy-cli</c>: run the Antigravity CLI headless on your own login, with <c>models.architect</c> as its model.
     /// </summary>
     public string Kind { get; set; } = ApiKind;
 
-    /// <summary>Executable for <c>claude-cli</c>.</summary>
-    public string Command { get; set; } = "claude";
+    /// <summary>Executable for <c>claude-cli</c> or <c>agy-cli</c>. Default: <c>claude</c> / <c>agy</c>.</summary>
+    public string Command { get; set; } = "";
+
+    /// <summary>For <c>api</c>: the endpoint of the strong model when it differs from the worker's <c>provider</c>.</summary>
+    public string? BaseUrl { get; set; }
+
+    /// <summary>For <c>api</c>: the NAME of the environment variable with the strong model's key (never the key).</summary>
+    public string? ApiKeyEnv { get; set; }
+
+    public string CommandOrDefault => !string.IsNullOrWhiteSpace(Command) ? Command : Kind == AgyCliKind ? "agy" : "claude";
+
+    /// <summary>The OpenAI-compatible endpoint architect calls use: this section's overrides on top of <paramref name="worker"/>.</summary>
+    public ProviderConfig EffectiveProvider(ProviderConfig worker) => new()
+    {
+        BaseUrl = string.IsNullOrWhiteSpace(BaseUrl) ? worker.BaseUrl : BaseUrl,
+        ApiKeyEnv = string.IsNullOrWhiteSpace(ApiKeyEnv) ? worker.ApiKeyEnv : ApiKeyEnv,
+    };
+}
+
+/// <summary>
+/// <c>acceptance</c> in policy.yaml. The architect writes test files into <see cref="Dir"/> while planning; the worker
+/// cannot change them (Tokonomy restores them before every gate run) and a unit is accepted only when <see cref="Cmd"/>
+/// passes. Unlike <c>gates</c>, there is no baseline: a failure always blocks.
+/// </summary>
+public sealed class AcceptanceConfig
+{
+    /// <summary>Test runner command, e.g. <c>["python", "-m", "unittest", "discover", "-s", "acceptance"]</c>. Empty: feature off.</summary>
+    public List<string> Cmd { get; set; } = [];
+
+    /// <summary>Directory (relative to the repository root) the architect's test files must live in.</summary>
+    public string Dir { get; set; } = "acceptance";
+
+    /// <summary>One line telling the architect what kind of tests to write (language, framework, constraints).</summary>
+    public string? Hint { get; set; }
+
+    public int TimeoutSeconds { get; set; } = 300;
+
+    public bool Enabled => Cmd.Count > 0 && !string.IsNullOrWhiteSpace(Cmd[0]);
 }
 
 public sealed class GateConfig

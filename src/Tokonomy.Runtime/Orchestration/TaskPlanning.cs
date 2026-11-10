@@ -17,7 +17,8 @@ public static class TaskPlanning
 
     public static async Task<PlannedTask> PlanAsync(
         Strategy strategy, string task, string repoRoot, string baseSha, string runId,
-        IProvider? provider, string architectModel, ILedger ledger, GitCli git, CancellationToken ct)
+        IProvider? provider, string architectModel, ILedger ledger, GitCli git, CancellationToken ct,
+        Tokonomy.Core.Config.AcceptanceConfig? acceptance = null)
     {
         ArgumentNullException.ThrowIfNull(strategy);
         ArgumentNullException.ThrowIfNull(ledger);
@@ -35,7 +36,7 @@ public static class TaskPlanning
         var planner = new Planner(provider, architectModel);
         try
         {
-            var result = await planner.PlanAsync(task, context, ct);
+            var result = await planner.PlanAsync(task, context, ct, acceptance);
             var (usd, estimated) = Record(ledger, runId, result.Calls);
             return new PlannedTask(result.Contract, usd, estimated);
         }

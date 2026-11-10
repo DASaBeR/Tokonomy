@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Tokonomy.Core.Abstractions;
+using Tokonomy.Core.Config;
 using Tokonomy.Core.Model;
 using Tokonomy.Core.Planning;
 
@@ -33,7 +34,7 @@ public sealed partial class Planner(IProvider provider, string model)
         - The don't list names tempting mistakes to avoid.
         - Acceptance items describe observable checks (tests that should pass, behavior to verify).
 
-        Respond with ONLY a JSON object, no prose, matching:
+        Respond with ONLY a JSON object, no prose, matching (omit "tests" unless the section below requires them):
         {
           "units": [
             {"id": "U1", "title": "...", "spec": "...", "depends_on": [], "files": ["path"], "acceptance": ["..."]}
@@ -44,6 +45,23 @@ public sealed partial class Planner(IProvider provider, string model)
         Unit ids: a letter followed by letters, digits, '-' or '_' (e.g. U1).
         """;
 
+    internal static string AcceptancePrompt(AcceptanceConfig a) => $$"""
+
+
+        Executable acceptance tests (REQUIRED for this project):
+        - Write the tests yourself. Each unit gets "tests": [{"path": "{{a.Dir}}/test_xxx.py", "content": "<full file text>"}].
+          The tests for unit N run after unit N and every earlier unit, so a unit's tests may only assert what units up to
+          and including it deliver. Never assert something a later unit builds.
+        - Paths must be inside "{{a.Dir}}/". The worker cannot edit these files and the unit is rejected until the command
+          `{{string.Join(' ', a.Cmd)}}` passes, so they are the real definition of done: make them strict enough to catch a
+          lazy or empty implementation, and fair enough that a correct implementation of the spec passes.
+        - Tests run in an isolated environment without network, using only what the command already has. Use the
+          standard library or tools already in the repository. Do not require installing packages.
+        - Test observable behavior and structure (files exist, content, parsing, outputs), not implementation details.
+        - The worker sees the tests, so keep the spec and the tests consistent. Name every file the tests read.
+        {{(string.IsNullOrWhiteSpace(a.Hint) ? "" : "- Project hint: " + a.Hint.Trim())}}
+        """;
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
@@ -52,9 +70,11 @@ public sealed partial class Planner(IProvider provider, string model)
         AllowTrailingCommas = true,
     };
 
-    public async Task<PlanResult> PlanAsync(string task, string repoContext, CancellationToken ct)
+    public async Task<PlanResult> PlanAsync(string task, string repoContext, CancellationToken ct, AcceptanceConfig? acceptance = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(task);
+        var acceptanceOn = acceptance is { Enabled: true };
+        var system = acceptanceOn ? SystemPrompt + AcceptancePrompt(acceptance!) : SystemPrompt;
         var calls = new List<ProviderResponse>();
         var user = $"""
             # Task
@@ -66,10 +86,10 @@ public sealed partial class Planner(IProvider provider, string model)
 
         for (var attempt = 1; attempt <= 2; attempt++)
         {
-            var response = await provider.CompleteAsync(new ProviderRequest(model, SystemPrompt, user, JsonOutput: true), ct);
+            var response = await provider.CompleteAsync(new ProviderRequest(model, system, user, JsonOutput: true), ct);
             calls.Add(response);
 
-            var (contract, errors) = Parse(task, response.Text);
+            var (contract, errors) = Parse(task, response.Text, acceptanceOn ? acceptance!.Dir : null);
             if (contract is not null && errors.Count == 0)
             {
                 return new PlanResult(contract, calls);
@@ -96,7 +116,7 @@ public sealed partial class Planner(IProvider provider, string model)
         throw new InvalidOperationException("unreachable");
     }
 
-    internal static (Contract? Contract, IReadOnlyList<string> Errors) Parse(string task, string text)
+    internal static (Contract? Contract, IReadOnlyList<string> Errors) Parse(string task, string text, string? acceptanceDir = null)
     {
         var json = ExtractJson(text);
         if (json is null)
@@ -130,12 +150,19 @@ public sealed partial class Planner(IProvider provider, string model)
                 DependsOn = u.DependsOn ?? [],
                 Files = u.Files ?? [],
                 Acceptance = u.Acceptance ?? [],
+                Tests = (u.Tests ?? []).Select(t => new AcceptanceTestFile((t.Path ?? "").Replace('\\', '/').Trim(), t.Content ?? "")).ToList(),
             }).ToList(),
             Rules = (dto.Rules ?? []).Select((r, i) => new Rule(string.IsNullOrWhiteSpace(r.Id) ? $"R{i + 1}" : r.Id.Trim(), r.Text?.Trim() ?? "")).ToList(),
             DontList = dto.Dont ?? [],
         };
 
-        return (contract, ContractValidator.Validate(contract));
+        var problems = ContractValidator.Validate(contract).ToList();
+        if (acceptanceDir is not null)
+        {
+            problems.AddRange(AcceptancePaths.Validate(contract, acceptanceDir));
+        }
+
+        return (contract, problems);
     }
 
     internal static string? ExtractJson(string text)
@@ -170,6 +197,13 @@ public sealed partial class Planner(IProvider provider, string model)
 
         public List<string>? Files { get; set; }
         public List<string>? Acceptance { get; set; }
+        public List<TestDto>? Tests { get; set; }
+    }
+
+    private sealed class TestDto
+    {
+        public string? Path { get; set; }
+        public string? Content { get; set; }
     }
 
     private sealed class RuleDto

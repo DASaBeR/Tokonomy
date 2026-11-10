@@ -201,6 +201,44 @@ models:
   architect: claude-opus-5-5
 ```
 
+## Acceptance tests written by the architect
+
+`gates` are commands you provide. `acceptance` lets the strong model write the tests itself, so a project with no test suite (a landing page, a script) still gets a real definition of done, and the cheap worker has to meet it.
+
+```yaml
+acceptance:
+  cmd: ["python", "-m", "unittest", "discover", "-s", "acceptance"]   # empty: feature off
+  dir: acceptance                      # the architect's files must live here
+  hint: "Plain HTML/CSS/JS site. Test with Python's standard library (html.parser); no packages."
+  timeout_seconds: 300
+```
+
+What happens:
+
+1. **Plan.** `tokonomy plan` asks the architect for `tests` on each unit: `{path, content}` files inside `dir`. A plan with no tests, or with a path outside `dir`, is rejected and the architect is asked again.
+2. **Before each unit.** That unit's tests are written into the run worktree and committed on their own (`tokonomy(U1): acceptance tests`), so they are never part of the worker's diff. The worker brief lists them and says they are read-only. A unit's tests may only check what that unit and earlier units deliver: from unit N on, the tests of units 1..N all run.
+3. **Every gate run.** Before the command runs, Tokonomy rewrites each architect file from the plan and deletes any other file in `dir`. Weakening a test, deleting it or adding a `conftest.py` does nothing except leave a warning and an `acceptance_tamper` record.
+4. **Decision.** The command runs in the gate environment (see `gate_execution`) together with your other gates. It has **no baseline**: any failure blocks the unit, and the output goes back to the worker as feedback. Retry and takeover work as for any gate.
+
+The tests are only as good as the architect's plan, and they are the architect's reading of your request, not yours. Review the committed `acceptance/` files in the run branch, as you would review any other code. A takeover edit by the architect is also checked against them.
+
+## Connections: any model from any provider
+
+The strong model (`models.architect`) and the cheap model (`models.worker`) are connected independently.
+
+| Role | Connection | Config |
+|---|---|---|
+| strong | Claude Code subscription | `architect_provider: { kind: claude-cli }` |
+| strong | Antigravity subscription | `architect_provider: { kind: agy-cli }` (the session may read only its scratch prompt file; no writes, no commands; the answering model is verified) |
+| strong | any OpenAI-compatible API | `architect_provider: { kind: api, base_url: ..., api_key_env: NAME }` (its own endpoint and key) |
+| cheap | Claude Code subscription | `executors.default: claude-code-sub` |
+| cheap | Antigravity subscription | `executors.default: antigravity` |
+| cheap | any OpenAI-compatible API | `executors.default: opencode` and `provider: { base_url, api_key_env }` (metered through Tokonomy's proxy) |
+
+Antigravity (`agy`) has no API-key option, so a Gemini API key is a separate connection through Google's OpenAI-compatible endpoint. The services Tokonomy has run end to end are OpenRouter (strong and cheap) and the CLI logins; Anthropic, Gemini, OpenAI, DeepSeek and custom endpoints use the same protocol but are marked "not tested live". API keys are only ever read from the environment variable named in the config, and are removed from worker and gate environments.
+
+`tokonomy init` scans the machine, asks for both choices, checks keys, tests the CLI logins on request, and writes all of the above.
+
 ## Claude architect + Antigravity worker
 
 Both roles can run on subscriptions you already have, with no API key and no metering proxy.

@@ -9,7 +9,7 @@ namespace Tokonomy.Core.Supervision;
 /// <list type="number">
 /// <item>Worker used the wrong model → Fail (never retried, never taken over).</item>
 /// <item>Workspace violation (links, <c>.git</c> tampering) → Fail (never retried, never taken over).</item>
-/// <item>Diff larger than <c>max_diff_lines</c> → Split (the unit is mis-sized; cheaper than a takeover).</item>
+/// <item>Diff larger than <c>max_diff_lines</c> and not verified by any passing gate → Split (the unit is mis-sized; cheaper than a takeover). A large diff that every gate accepted is kept.</item>
 /// <item>Diff touches a protected path → Takeover.</item>
 /// <item>New dependency added and <c>review_on_new_dependency</c> → Takeover.</item>
 /// <item>Worker timed out → Takeover.</item>
@@ -48,7 +48,12 @@ public sealed class Supervisor : ISupervisor
             return new(DecisionKind.Fail, $"workspace violation: {violation.Detail}");
         }
 
-        if (unit.DiffLines > esc.MaxDiffLines)
+        // A large diff is a size guideline, not a defect: splitting a unit is not implemented, so rejecting a big change
+        // that every gate (the architect's acceptance tests included) has verified would only throw working code away.
+        // It is rejected only when nothing verified it: no gate ran, a gate failed, or the run faulted or timed out.
+        var oversized = unit.DiffLines > esc.MaxDiffLines;
+        var verified = gates.Count > 0 && gates.All(g => !g.Blocking) && run.Fault is null && !run.TimedOut;
+        if (oversized && !verified)
         {
             return new(DecisionKind.Split, $"diff has {unit.DiffLines} changed lines (limit {esc.MaxDiffLines})");
         }
@@ -100,6 +105,8 @@ public sealed class Supervisor : ISupervisor
                 : new(DecisionKind.Retry, reason);
         }
 
-        return new(DecisionKind.Accept, gates.Count == 0 ? "worker finished (no gates)" : "all gates passed");
+        return new(DecisionKind.Accept, gates.Count == 0
+            ? "worker finished (no gates)"
+            : oversized ? $"all gates passed (large change: {unit.DiffLines} lines, over the {esc.MaxDiffLines}-line guideline)" : "all gates passed");
     }
 }

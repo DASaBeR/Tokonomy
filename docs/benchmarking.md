@@ -80,3 +80,29 @@ Both strategies passed every trial on 7 of the 8 tasks (3/3 each). `ttl-cache` i
 - Not measured: strategies 1, 2 and 3 in this run, other repositories, other languages, other executors, larger tasks.
 
 Needed before any public claim: harder tasks where the cheap worker fails, more than one repository, a second executor, and more repeats.
+
+
+## Results so far: Claude Opus + Gemini Flash on subscriptions (pilot)
+
+> **A pilot on tasks that turned out to be easy for Opus.** Two tasks, one trial per cell, run on 2026-11-10. It checks the setup and gives a first look at token use; it does not test whether supervision pays off.
+
+**Setup.** Tasks `cron-next` and `unified-diff` from `examples/tasks-extreme.yaml` (hidden acceptance tests, verified fair with `examples/verify_tasks.py`). Strong model / architect / supervisor: `claude-opus-5-5` on a **Claude Code subscription**. Cheap worker: `gemini-3.8-flash-high` on an **Antigravity subscription**. No API keys. Config: `examples/.tokonomy-opus-gemini/`. Gates and sandboxed hidden tests as in the other runs.
+
+| | Strategy 4 (Opus plans + supervises, Gemini writes) | Strategy 1b (Opus alone + gates) |
+|---|---|---|
+| Passed | 2/2 | 2/2 |
+| Average time per trial | 18.6 min | **1.8 min** |
+| Opus tokens (fresh input + output) | **16k** (+1.6k cache reads) | 57k (+518k cache reads) |
+| Gemini tokens (fresh input + output) | 1.13M (+1.95M cache reads) | none |
+| Cost per success, API-equivalent | about $1.40 | **$0.37** |
+
+Cost is an API-equivalent estimate, not money spent: Gemini is priced like `google/gemini-3.8-flash` on OpenRouter ($0.825 in / $4.125 out per million tokens), Opus uses Claude Code's own estimate, and on subscriptions the real marginal cost of both is $0. Antigravity counts thinking tokens in its output. Cache reads are listed separately; input is fresh (uncached) tokens.
+
+**What this shows**
+
+- **The tasks were easy for Opus.** It solved both on the first attempt, with one attempt per unit, in under two minutes each. Strategy 4 never needed an architect takeover. So the pilot cannot show the case supervision exists for: a cheap worker that fails and a strong model that rescues it.
+- **The practical benefit is saving Claude tokens.** Under strategy 4 the Claude subscription pays only for planning and supervision (about 16k tokens on these two tasks, against 57k plus 518k cache reads when Opus does the work), and the Antigravity subscription does the writing. If your Claude quota is the scarce resource, the simple jobs can go to Gemini and Claude is kept for the hard parts.
+- **The price is time and total tokens.** Strategy 4 took about ten times longer and used about twenty times more tokens overall, because Gemini Flash-high spends a lot per call (about 100k input tokens and large thinking output). In API-equivalent dollars Opus alone was cheaper here.
+- Strategy 2 (Gemini alone) is not reported: its first two trials were invalid, because the harness discarded the worker's output when a diff exceeded the 400-line limit even though the strategy has no gates (fixed since; to be re-run).
+
+**Not measured.** More than two tasks, repeats, tasks where Opus alone struggles, and whether the cheap worker plus takeover matches Opus on those.
