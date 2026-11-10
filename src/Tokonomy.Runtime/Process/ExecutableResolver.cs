@@ -39,7 +39,40 @@ public static partial class ExecutableResolver
             }
         }
 
+        // Not on PATH: some CLIs install to a fixed directory and rely on a shell profile edit that a non-interactive
+        // process (or a scrubbed worker environment) never sees.
+        foreach (var dir in FallbackDirectories(command))
+        {
+            var candidate = Path.Combine(dir, command);
+            var hit = OperatingSystem.IsWindows() ? ProbeWindowsExtensions(candidate) : (File.Exists(candidate) ? candidate : null);
+            if (hit is not null)
+            {
+                return hit;
+            }
+        }
+
         return null;
+    }
+
+    /// <summary>Install locations of CLIs that are commonly missing from PATH. Only consulted after a PATH miss.</summary>
+    internal static IEnumerable<string> FallbackDirectories(string command, string? home = null)
+    {
+        var name = Path.GetFileNameWithoutExtension(command);
+        if (!string.Equals(name, "agy", StringComparison.OrdinalIgnoreCase))
+        {
+            yield break;
+        }
+
+        home ??= System.Environment.GetFolderPath(System.Environment.SpecialFolder.UserProfile);
+        if (string.IsNullOrEmpty(home))
+        {
+            yield break;
+        }
+
+        // `agy install` / the Antigravity installer put the binary here on Windows; macOS and Linux use ~/.local/bin.
+        yield return Path.Combine(home, ".gemini", "bin");
+        yield return Path.Combine(home, ".local", "bin");
+        yield return Path.Combine(home, ".antigravity", "bin");
     }
 
     public static string Resolve(string command, string workingDirectory, IReadOnlyDictionary<string, string>? env = null)

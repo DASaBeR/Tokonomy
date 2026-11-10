@@ -89,12 +89,13 @@ EXECUTE    Worker (cheap) runs the unit via an executor
   ↓
 GATE       Build, lint, types, tests, arch rules, locked regions
   ↓
-DECIDE     Supervisor applies policy
+DECIDE     Supervisor applies policy (a faulted worker run is never accepted)
   ├── Accept   → merge unit
-  ├── Retry    → rerun worker with gate feedback (up to N)
-  └── Takeover → architect applies structured edits → handoff → fresh worker
+  ├── Retry    → rerun worker with gate or fault feedback (up to N)
+  ├── Takeover → architect applies structured edits → handoff → fresh worker
+  └── Fail     → wrong model: never retried, never taken over
   ↓
-FINAL      One architect review of the combined diff
+FINAL      One advisory architect review of the combined diff (opt-in; cannot change the status)
   ↓
 LEDGER     Cost, quality, escalations, baseline comparison
 ```
@@ -222,6 +223,45 @@ executors:
 
 Agent CLI flags change often. Keep adapters as configuration, pin tested versions, and accept community PRs.
 
+### Implemented: Claude architect + Antigravity worker (subscriptions, no API key)
+
+```
+                     ┌──────────── architect_provider.kind = claude-cli ────────────┐
+ plan / takeover /   │ claude -p  (stdin prompt, --tools "", no MCP, no settings)    │
+ final review ──────►│ requested model must be among the models that produced output │
+                     └───────────────────────────────────────────────────────────────┘
+                     ┌──────────── executor "antigravity" (agy, headless) ──────────┐
+ work unit ─────────►│ --output-format stream-json --settings <per-attempt file>     │
+                     │ permissions: read/write_file(worktree), no commands (default) │
+                     │ deny: .git, .tokonomy, escaping links, ignored, temp, logins  │
+                     └───────────────┬───────────────────────────────────────────────┘
+                                     ▼
+              AgyRunParser → AgyRunInterpreter → RunResult { Fault?, ReportedModel, Audit }
+                                     ▼
+        WorkspaceWatch: new links / .git tampering / hidden ignored files ⇒ fault
+                                     ▼
+   Supervisor: Fault ⇒ never Accept (Retry → Takeover; ModelMismatch, WorkspaceViolation ⇒ Fail)
+```
+
+- **Providers and executors stay separate axes.** The architect runs through the provider layer (`IProvider`); the worker runs through an executor adapter. Neither can fall back to the other: the worker's model is checked against the session's reported model, the architect's against the models that produced output.
+- **Faults are typed** (`WorkerFault`: `ProcessFailed`, `ReportedError`, `PermissionDenied`, `ModelMismatch`, `NoResult`) and carried on `RunResult` next to the reported model and an `ExecutorAudit` (conversation id, shell commands run, denied actions, isolation notes). The supervisor checks the fault before the diff or the gates, so an attempt that crashed or was refused can never be accepted because its partial diff happens to pass.
+- **Executable discovery.** `ExecutableResolver` tries `PATH` and then known install directories (`~/.gemini/bin` for `agy`), also inside a scrubbed worker environment.
+- **Permissions are generated per attempt** from the gate commands and `permissions` config, written outside the worktree, and described to the worker in its brief. Rule semantics and every verified limitation are in [docs/threat-model.md](docs/threat-model.md) and [docs/config.md](docs/config.md).
+- **Worktree location** defaults to the local application data folder (outside temp and the repository) and is validated before use; see "Worktree security" below.
+- **Final review** (`escalation.final_review`) is one architect call over the combined diff after all units pass. It is advisory and recorded; gates outrank opinions.
+
+### Worktree security
+
+A worker is untrusted code with the user's privileges, so the worktree boundary is enforced in three places:
+
+1. **The agent's own permissions** (agy settings generated per attempt): worktree-only file access, no shell, deny rules for `.git`, `.tokonomy`, links that lead outside, ignored content, temp and credential folders.
+2. **Tokonomy's own file access** (`WorktreeGuard`): every read/write/delete Tokonomy performs inside a worktree refuses links on the path and, on Windows, opens the target as a reparse point and re-checks the handle (hard links, final path). Worktree git commands use the git dir recorded at creation, never the worktree's `.git` file, and run without inherited `GIT_*` variables.
+3. **Post-attempt inspection** (`WorkspaceWatch`): links are baselined after `prepare` and the base-commit gates; new escaping links, retargeted links and `.git` tampering fail the unit (`WorkspaceViolation`, never retried, never taken over, gates skipped). Cleanup unlinks before `git worktree remove`, which otherwise follows junctions and deletes their targets.
+
+Worktrees live under `%LOCALAPPDATA%\tokonomy\worktrees` (platform equivalents elsewhere); a configured root is refused if it overlaps temp, the repository, home, a drive root or system/credential folders. Gates execute code the worker wrote; with `gate_execution.provider: windows-sandbox` they run in a disposable Hyper-V-isolated VM per batch (source copy, no network, no host credentials, validated results), and there is no silent fallback to the host (threat model T16, G1-G13; `docs/gate-isolation-research.md`).
+
+Verification is layered: unit tests for the parser, interpreter, settings builder and supervisor (fixtures captured from real `agy` and `claude` output); orchestrator tests with a scripted worker and architect over real git, gates and ledger; and a gated live suite (`TOKONOMY_LIVE=1`) that runs the real CLIs end to end (see `LiveIntegrationTests.cs`).
+
 ### Policy file
 
 ```yaml
@@ -259,6 +299,7 @@ Git worktrees isolate changes, not execution. Workers can run arbitrary commands
 - **No secrets in briefs, transcripts, or the ledger.**
 - **Budget hard cap** per task and per run.
 - **Documented limits:** state plainly that worktrees are not a sandbox. Container sandboxing is on the roadmap.
+- **Worktree boundary (implemented):** worktrees outside temp and the repository; no link-following in Tokonomy's own file access or cleanup; per-attempt detection of links and `.git` tampering; the worker's agent denied links, git metadata, temp and credential folders. **Gate isolation (implemented, Phase 2.5):** gates, prepare steps and bench acceptance run through an `IGateExecutionProvider`: `windows-sandbox` (default when scaffolded) or an explicit `host-unsafe`; see `docs/gate-isolation.md`.
 
 ## 10. CLI surface (v1)
 

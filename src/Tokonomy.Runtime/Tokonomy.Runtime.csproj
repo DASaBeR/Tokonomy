@@ -1,4 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- Source-generated P/Invoke (WorktreeGuard: open files without following links on Windows). -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Tokonomy.Core\Tokonomy.Core.csproj" />
     <ProjectReference Include="..\Tokonomy.Llm\Tokonomy.Llm.csproj" />

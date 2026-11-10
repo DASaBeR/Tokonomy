@@ -1,6 +1,7 @@
 using Tokonomy.Core.Config;
 using Tokonomy.Core.Model;
 using Tokonomy.Runtime.Gates;
+using Tokonomy.Runtime.Gates.Isolation;
 using Tokonomy.Runtime.Git;
 using Tokonomy.Runtime.Process;
 
@@ -145,11 +146,9 @@ public class GateEvaluationTests
                 Name = "test",
                 Cmd = Shell.Cmd("cp fixture.xml report.xml; exit 1", "Copy-Item fixture.xml report.xml; exit 1"),
                 Report = "report.xml",
-            },
-            new ProcessRunner(),
-            EnvironmentBuilder.ForGate([]));
+            });
 
-        var run = await gate.ExecuteAsync(tmp.Path, null, default);
+        var run = await gate.ExecuteAsync(await HostEnvironment(tmp.Path), null, default);
 
         Assert.False(run.Passed);
         Assert.Equal(["tests.test_a::test_bad"], run.FailingTests!);
@@ -159,13 +158,17 @@ public class GateEvaluationTests
     public async Task Missing_gate_tool_is_a_failure_not_a_crash()
     {
         using var tmp = new TempDir();
-        var gate = new CommandGate(new GateConfig { Cmd = ["tokonomy-no-such-linter"] }, new ProcessRunner(), EnvironmentBuilder.ForGate([]));
+        var gate = new CommandGate(new GateConfig { Cmd = ["tokonomy-no-such-linter"] });
 
-        var run = await gate.ExecuteAsync(tmp.Path, null, default);
+        var run = await gate.ExecuteAsync(await HostEnvironment(tmp.Path), null, default);
 
         Assert.False(run.Passed);
         Assert.Contains("not found", run.OutputTail, StringComparison.Ordinal);
     }
+
+    private static Task<IGateEnvironment> HostEnvironment(string dir) =>
+        new HostUnsafeGateProvider(new ProcessRunner(), []).CreateAsync(
+            new GateEnvironmentRequest { RunId = "t", Label = "t", Source = new GateSource(dir, []) }, default);
 }
 
 public class TestReportParserTests

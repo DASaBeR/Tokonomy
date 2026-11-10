@@ -19,12 +19,28 @@ internal sealed class FakeExecutor(params Action<Brief, string>[] script) : IExe
     /// <summary>Usage the fake reports on every attempt, like an executor with a usage_format.</summary>
     public IReadOnlyList<WorkerUsage> Usage { get; init; } = [];
 
+    /// <summary>The fault the fake reports for the n-th call (1-based), like an executor that detected a bad run.</summary>
+    public Func<int, WorkerFault?>? FaultFor { get; init; }
+
+    /// <summary>An audit like agy's (an executor that reports every shell command it ran).</summary>
+    public ExecutorAudit? Audit { get; init; }
+
+    /// <summary>The session the orchestrator built, when the fake is created through the executor factory.</summary>
+    public Tokonomy.Runtime.Executors.ExecutorSession? Session { get; set; }
+
     public Task<RunResult> RunAsync(Brief brief, string workdir, string? model, TimeSpan timeout, CancellationToken ct)
     {
         Calls.Add((brief, model));
         var action = script[Math.Min(_calls++, script.Length - 1)];
         action(brief, workdir);
-        return Task.FromResult(new RunResult { ExitCode = 0, Duration = TimeSpan.FromMilliseconds(5), Usage = Usage });
+        return Task.FromResult(new RunResult
+        {
+            ExitCode = 0,
+            Duration = TimeSpan.FromMilliseconds(5),
+            Usage = Usage,
+            Fault = FaultFor?.Invoke(_calls),
+            Audit = Audit,
+        });
     }
 
     public static Action<Brief, string> Write(string file, string content) =>
@@ -123,6 +139,45 @@ internal static class Shell
     public static List<string> FileContains(string file, string text) => Cmd(
         $"grep -q '{text}' '{file}' || {{ echo 'missing {text} in {file}'; exit 1; }}",
         $"if ((Test-Path '{file}') -and ((Get-Content -Raw '{file}') -match '{text}')) {{ exit 0 }} else {{ Write-Output 'missing {text} in {file}'; exit 1 }}");
+
+    /// <summary>A directory link an unprivileged process can make: a junction on Windows, a symlink elsewhere.</summary>
+    public static void Junction(string link, string target)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            var psi = new ProcessStartInfo("cmd") { RedirectStandardOutput = true, RedirectStandardError = true };
+            foreach (var a in new[] { "/c", "mklink", "/J", link, target })
+            {
+                psi.ArgumentList.Add(a);
+            }
+
+            using var p = Process.Start(psi)!;
+            p.StandardOutput.ReadToEnd();
+            var err = p.StandardError.ReadToEnd();
+            p.WaitForExit();
+            if (p.ExitCode != 0)
+            {
+                throw new InvalidOperationException(err);
+            }
+        }
+        else
+        {
+            Directory.CreateSymbolicLink(link, target);
+        }
+    }
+
+    /// <summary>A command that creates a directory link named <paramref name="link"/> in the current directory.</summary>
+    public static List<string> MakeJunction(string link, string target) => Cmd(
+        $"ln -s '{target}' '{link}'",
+        $"New-Item -ItemType Junction -Path '{link}' -Target '{target}' | Out-Null");
+
+    /// <summary>Runs <paramref name="windows"/>/<paramref name="unix"/> only once app.txt contains "v2" (i.e. not on the base commit).</summary>
+    public static List<string> WhenChanged(string unix, string windows) => Cmd(
+        $"if grep -q v2 app.txt; then {unix}; fi; exit 0",
+        $"if ((Get-Content -Raw app.txt) -match 'v2') {{ {windows} }}; exit 0");
+
+    /// <summary>A command that writes a marker file (to prove whether it ran).</summary>
+    public static List<string> WriteMarker(string path) => Cmd($"echo ran > '{path}'", $"Set-Content -LiteralPath '{path}' ran");
 
     public static string YamlArray(IEnumerable<string> items) =>
         "[" + string.Join(", ", items.Select(i => System.Text.Json.JsonSerializer.Serialize(i))) + "]";

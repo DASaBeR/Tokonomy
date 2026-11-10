@@ -14,13 +14,37 @@ public sealed class GitCli(IProcessRunner runner)
         // safe.directory=* avoids "dubious ownership" failures on file systems that don't record owners
         // (FAT/exFAT, some network shares). Tokonomy only operates on repos the user pointed it at.
         List<string> argv = ["git", "-c", "safe.directory=*", "-c", "core.quotepath=off", .. args];
-        var outcome = await runner.RunAsync(new ProcessSpec { Args = argv, WorkingDirectory = cwd, Timeout = DefaultTimeout }, ct);
+        var outcome = await runner.RunAsync(new ProcessSpec
+        {
+            Args = argv,
+            WorkingDirectory = cwd,
+            Timeout = DefaultTimeout,
+            Environment = Environment(),
+            ReplaceEnvironment = true,
+        }, ct);
         if (!outcome.Succeeded && !allowFailure)
         {
             throw new GitException($"git {string.Join(' ', argv.Skip(5))} failed ({outcome.ExitCode}): {outcome.Stderr.Trim()}");
         }
 
         return outcome.Stdout;
+    }
+
+    /// <summary>
+    /// The parent environment without credentials and without any <c>GIT_*</c> variable: <c>GIT_DIR</c>,
+    /// <c>GIT_WORK_TREE</c>, <c>GIT_INDEX_FILE</c>, <c>GIT_CONFIG_*</c> and friends left over in the user's shell would
+    /// silently point Tokonomy's commits and resets at a different repository or index. Prompts are disabled.
+    /// </summary>
+    internal static Dictionary<string, string> Environment(System.Collections.IDictionary? parent = null)
+    {
+        var env = EnvironmentBuilder.ForGate([], parent);
+        foreach (var key in env.Keys.Where(k => k.StartsWith("GIT_", StringComparison.OrdinalIgnoreCase)).ToList())
+        {
+            env.Remove(key);
+        }
+
+        env["GIT_TERMINAL_PROMPT"] = "0";
+        return env;
     }
 
     public async Task<string> HeadAsync(string cwd, CancellationToken ct) =>

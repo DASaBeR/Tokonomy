@@ -29,6 +29,7 @@ public sealed class OrchestratorTests : IDisposable
     private static Policy PolicyWithGate() => new()
     {
         Models = { Architect = "strong", Worker = "cheap" },
+        GateExecution = new GateExecutionConfig { Provider = GateExecutionConfig.HostUnsafeProvider },
         Gates = [new GateConfig { Name = "has-feature", Cmd = Shell.FileContains("app.txt", "feature") }],
     };
 

@@ -129,7 +129,7 @@ The harness runs the same tasks under each strategy, verifies results independen
 
 ## Security
 
-Git worktrees isolate changes, **not execution**. Workers run with your privileges. Read [docs/threat-model.md](docs/threat-model.md) before running Tokonomy on code you do not trust.
+Git worktrees isolate changes, **not execution**. Gates (tests and builds that run the code workers write) run in a disposable **Windows Sandbox** VM with no network and no access to your files (`gate_execution`, see [docs/gate-isolation.md](docs/gate-isolation.md)); the worker CLIs themselves run with your privileges under their own permission rules. Read [docs/threat-model.md](docs/threat-model.md) before running Tokonomy on code you do not trust.
 
 ## FAQ
 

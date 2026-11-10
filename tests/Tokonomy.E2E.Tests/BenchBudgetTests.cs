@@ -67,6 +67,7 @@ public sealed class BenchBudgetTests : IDisposable
         File.WriteAllText(Path.Combine(configDir, "policy.yaml"), $$"""
             models: { architect: strong, worker: cheap }
             executors: { default: fake }
+            gate_execution: { provider: host-unsafe }
             budget: { max_usd_per_task: {{perTaskCap}} }
             """);
         File.WriteAllText(Path.Combine(configDir, "executors.yaml"), """

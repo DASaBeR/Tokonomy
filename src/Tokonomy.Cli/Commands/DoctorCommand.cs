@@ -5,12 +5,25 @@ using Tokonomy.Cli.Infrastructure;
 using Tokonomy.Core.Config;
 using Tokonomy.Llm.Providers;
 using Tokonomy.Runtime.Config;
+using Tokonomy.Runtime.Gates.Isolation;
+using Tokonomy.Runtime.Git;
 using Tokonomy.Runtime.Ledger;
 using Tokonomy.Runtime.Process;
 
 namespace Tokonomy.Cli.Commands;
 
-public sealed partial class DoctorCommand(IAnsiConsole console, IProcessRunner runner) : AsyncCommand<CommonSettings>
+public sealed class DoctorSettings : CommonSettings
+{
+    [CommandOption("--remove-leftover-worktrees")]
+    [System.ComponentModel.Description("Safely remove tokonomy worktrees left by interrupted runs (links inside are removed as links first; worktrees of running runs are skipped).")]
+    public bool RemoveLeftoverWorktrees { get; init; }
+
+    [CommandOption("--remove-leftover-gate-environments")]
+    [System.ComponentModel.Description("Stop Windows Sandbox environments left by crashed runs and delete their folders (including ones kept by cleanup_policy: keep-on-failure). Sandboxes Tokonomy did not start are never touched.")]
+    public bool RemoveLeftoverGateEnvironments { get; init; }
+}
+
+public sealed partial class DoctorCommand(IAnsiConsole console, IProcessRunner runner) : AsyncCommand<DoctorSettings>
 {
     private enum Level
     {
@@ -21,7 +34,7 @@ public sealed partial class DoctorCommand(IAnsiConsole console, IProcessRunner r
 
     private sealed record Check(string Area, string Name, Level Level, string Detail);
 
-    public override async Task<int> ExecuteAsync(CommandContext context, CommonSettings settings, CancellationToken cancellationToken)
+    public override async Task<int> ExecuteAsync(CommandContext context, DoctorSettings settings, CancellationToken cancellationToken)
     {
         var checks = new List<Check>();
         var cwd = Directory.GetCurrentDirectory();
@@ -70,6 +83,11 @@ public sealed partial class DoctorCommand(IAnsiConsole console, IProcessRunner r
             checks.Add(new("executor", "headless", Level.Fail, $"{execName} does not declare headless support"));
         }
 
+        if (Tokonomy.Runtime.Executors.ConfigExecutor.IsAgy(exec))
+        {
+            checks.AddRange(await AgyChecks(exec, policy, repo, cancellationToken));
+        }
+
         if (!string.IsNullOrEmpty(policy.Models.Worker) && !exec.Capabilities.ModelOverride)
         {
             checks.Add(new("executor", "model override", Level.Warn,
@@ -114,6 +132,9 @@ public sealed partial class DoctorCommand(IAnsiConsole console, IProcessRunner r
             checks.Add(new("gates", gate.DisplayName, found is null ? Level.Fail : Level.Ok, found ?? $"'{gate.Cmd[0]}' not on PATH"));
         }
 
+        checks.AddRange(await WorktreeChecks(policy, repo, config.LedgerPath, settings.RemoveLeftoverWorktrees, cancellationToken));
+        checks.AddRange(await GateExecutionChecks(policy, repo, settings.RemoveLeftoverGateEnvironments, cancellationToken));
+
         // Ledger.
         try
         {
@@ -131,6 +152,178 @@ public sealed partial class DoctorCommand(IAnsiConsole console, IProcessRunner r
         }
 
         return Render(checks, settings.Json);
+    }
+
+    /// <summary>Checks specific to the Antigravity worker: the requested model exists, and write isolation is in place.</summary>
+    private async Task<List<Check>> AgyChecks(ExecutorDefinition exec, Policy policy, string repo, CancellationToken ct)
+    {
+        var checks = new List<Check>();
+        var model = policy.Models.Worker;
+        if (!string.IsNullOrWhiteSpace(model) && ExecutableResolver.TryResolve(exec.Cmd[0], repo) is not null)
+        {
+            try
+            {
+                var outcome = await runner.RunAsync(new ProcessSpec { Args = [exec.Cmd[0], "models"], WorkingDirectory = repo, Timeout = TimeSpan.FromSeconds(60) }, ct);
+                var offered = outcome.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Select(l => l.Split('\t')[0].Trim())
+                    .Where(id => id.Length > 0 && !id.Contains(' '))
+                    .ToList();
+                if (!outcome.Succeeded || offered.Count == 0)
+                {
+                    checks.Add(new("worker model", model, Level.Warn, $"could not list models (exit {outcome.ExitCode}); the model is verified per run instead"));
+                }
+                else
+                {
+                    var found = offered.Contains(model, StringComparer.OrdinalIgnoreCase);
+                    checks.Add(new("worker model", model, found ? Level.Ok : Level.Fail,
+                        found ? "offered by `agy models`" : $"not offered by `agy models` ({string.Join(", ", offered)})"));
+                }
+            }
+            catch (Exception ex) when (ex is ExecutableNotFoundException or IOException or InvalidOperationException)
+            {
+                checks.Add(new("worker model", model, Level.Warn, ex.Message));
+            }
+        }
+
+        if (exec.Permissions.AllowGateCommands || exec.Permissions.Commands.Count > 0)
+        {
+            checks.Add(new("isolation", "worker commands", Level.Warn,
+                "the worker may run shell commands; a command that runs repository code (tests, builds) runs code the worker wrote, with your privileges"));
+        }
+
+        return checks;
+    }
+
+    /// <summary>Where gates run, whether that works on this machine, and environments left behind by crashed runs.</summary>
+    private async Task<List<Check>> GateExecutionChecks(Policy policy, string repo, bool remove, CancellationToken ct)
+    {
+        var checks = new List<Check>();
+        var commands = GateExecutionFactory.Commands(policy).ToList();
+        if (policy.GateExecution is not { } gx)
+        {
+            checks.Add(new("gate isolation", "provider", commands.Count > 0 ? Level.Fail : Level.Ok,
+                commands.Count > 0 ? GateExecutionFactory.MissingSection : "not configured (no gate or prepare commands)"));
+            return checks;
+        }
+
+        IGateExecutionProvider provider;
+        try
+        {
+            provider = GateExecutionFactory.Create(gx, runner, repo, commands, [policy.Provider.ApiKeyEnv], policy.Isolation.WorktreeRoot);
+        }
+        catch (GateIsolationUnavailableException ex)
+        {
+            checks.Add(new("gate isolation", gx.Provider, Level.Fail, ex.Message));
+            return checks;
+        }
+
+        var status = await provider.CheckAsync(ct);
+        checks.Add(new("gate isolation", provider.Name,
+            !status.Available ? Level.Fail : provider.IsIsolated ? Level.Ok : Level.Warn,
+            provider.IsIsolated ? status.Detail : "NOT ISOLATED: gates and prepare steps run code the worker wrote on this machine with your privileges"));
+        if (gx.NetworkPolicy == GateExecutionConfig.NetworkFull)
+        {
+            checks.Add(new("gate isolation", "network", Level.Warn, "network_policy: full lets code under test reach the internet, your LAN and this machine's network services"));
+        }
+
+        if (provider is not WindowsSandboxProvider sandbox)
+        {
+            return checks;
+        }
+
+        foreach (var toolchain in sandbox.Toolchains)
+        {
+            checks.Add(new("gate isolation", "toolchain", Level.Ok, $"{toolchain.HostPath} -> {toolchain.SandboxPath} (read-only)"));
+        }
+
+        if (remove)
+        {
+            foreach (var note in await sandbox.RecoverAsync(includeKept: true, ct))
+            {
+                checks.Add(new("gate isolation", "leftover environment", note.EndsWith(": removed", StringComparison.Ordinal) ? Level.Ok : Level.Warn, note));
+            }
+        }
+        else
+        {
+            var store = new GateEnvStore(GateEnvStore.DefaultRoot()!);
+            var leftovers = store.List().Where(GateEnvStore.IsOrphaned).ToList();
+            if (leftovers.Count > 0)
+            {
+                checks.Add(new("gate isolation", "leftover environments", Level.Warn,
+                    $"{leftovers.Count} environment(s) from earlier runs in {store.Root} (e.g. {leftovers[0].EnvId}); remove them with `tokonomy doctor --remove-leftover-gate-environments`"));
+            }
+        }
+
+        return checks;
+    }
+
+    /// <summary>The effective worktree root, whether it is safe, and worktrees left behind by earlier runs.</summary>
+    private async Task<List<Check>> WorktreeChecks(Policy policy, string repo, string ledgerPath, bool remove, CancellationToken ct)
+    {
+        var checks = new List<Check>();
+        var root = WorktreeRoot.Effective(policy.Isolation.WorktreeRoot, repo);
+        var source = string.IsNullOrWhiteSpace(policy.Isolation.WorktreeRoot) ? "default" : "isolation.worktree_root";
+        var problems = WorktreeRoot.Validate(root, repo);
+        checks.Add(new("isolation", "worktree root", problems.Count == 0 ? Level.Ok : Level.Fail,
+            problems.Count == 0 ? $"{root} ({source})" : $"{root} ({source}) is unsafe: {string.Join("; ", problems)}"));
+
+        // Worktrees from runs that were interrupted (or from versions that used the temp directory) stay registered.
+        // They are reported, never moved or deleted automatically.
+        string list;
+        try
+        {
+            list = await new GitCli(runner).RunAsync(repo, ["worktree", "list", "--porcelain"], ct);
+        }
+        catch (GitException)
+        {
+            return checks;
+        }
+
+        var stale = new List<(string Path, bool InTemp)>();
+        string? path = null;
+        foreach (var line in list.Split('\n', StringSplitOptions.TrimEntries))
+        {
+            if (line.StartsWith("worktree ", StringComparison.Ordinal))
+            {
+                path = Path.GetFullPath(line["worktree ".Length..]);
+            }
+            else if (path is not null && line.StartsWith("branch refs/heads/tokonomy/", StringComparison.Ordinal))
+            {
+                stale.Add((path, WorktreeRoot.TempDirectories().Any(t => WorktreeRoot.Overlaps(path, t))));
+            }
+        }
+
+        if (stale.Count == 0)
+        {
+            return checks;
+        }
+
+        var inTemp = stale.Count(x => x.InTemp);
+        if (!remove)
+        {
+            checks.Add(new("isolation", "leftover worktrees", inTemp > 0 ? Level.Warn : Level.Ok,
+                $"{stale.Count} tokonomy worktree(s) still registered ({inTemp} in temp), e.g. {stale[0].Path}. " +
+                "Remove the ones from finished runs with `tokonomy doctor --remove-leftover-worktrees` (do not use plain " +
+                "`git worktree remove --force`: on Windows it follows junctions and deletes what they point to)."));
+            return checks;
+        }
+
+        using var ledger = new SqliteLedger(ledgerPath);
+        var git = new GitCli(runner);
+        foreach (var (worktree, _) in stale)
+        {
+            var runId = Path.GetFileName(worktree.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+            if (ledger.GetRun(runId) is { Status: Core.Model.RunStatus.Running })
+            {
+                checks.Add(new("isolation", worktree, Level.Warn, "run is still marked running; skipped"));
+                continue;
+            }
+
+            var problem = await RunWorkspace.RemoveLeftoverAsync(git, repo, worktree, ct);
+            checks.Add(new("isolation", worktree, problem is null ? Level.Ok : Level.Warn, problem ?? "removed"));
+        }
+
+        return checks;
     }
 
     private async Task<Check> VersionCheck(string area, string name, List<string> cmd, string cwd, string? tested, bool required, CancellationToken ct)

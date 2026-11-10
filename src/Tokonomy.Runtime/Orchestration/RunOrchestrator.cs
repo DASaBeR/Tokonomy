@@ -8,6 +8,7 @@ using Tokonomy.Llm.Providers;
 using Tokonomy.Llm.Proxy;
 using Tokonomy.Runtime.Executors;
 using Tokonomy.Runtime.Gates;
+using Tokonomy.Runtime.Gates.Isolation;
 using Tokonomy.Runtime.Git;
 using Tokonomy.Runtime.Ledger;
 using Tokonomy.Runtime.Process;
@@ -61,6 +62,9 @@ public sealed record RunOutcome
     public required decimal TotalUsd { get; init; }
     public required IReadOnlyList<UnitOutcome> Units { get; init; }
     public string? Error { get; init; }
+
+    /// <summary>The architect's advisory review of the combined diff (only when <c>escalation.final_review</c> is on and the run passed).</summary>
+    public FinalReview? Review { get; init; }
 }
 
 /// <summary>Progress callbacks for the CLI. All methods are optional.</summary>
@@ -80,7 +84,8 @@ public sealed class RunOrchestrator(
     ISupervisor supervisor,
     Func<ExecutorSession, IExecutor>? executorFactory = null,
     IClock? clock = null,
-    IProvider? architect = null)
+    IProvider? architect = null,
+    IGateExecutionProvider? gateProvider = null)
 {
     private readonly IClock _clock = clock ?? SystemClock.Instance;
     private readonly GitCli _git = new(runner);
@@ -97,15 +102,40 @@ public sealed class RunOrchestrator(
         var units = new List<UnitOutcome>();
         var status = RunStatus.Running;
         string? error = null;
+        FinalReview? review = null;
 
         ledger.SetRunStatus(request.RunId, RunStatus.Running);
         using var budget = new BudgetGuard(policy.Budget.MaxUsdPerTask, request.AlreadySpentUsd);
 
+        // Where gates run is settled before anything else exists: an unusable provider stops the run here, before a
+        // worktree or a worker, and nothing ever falls back to running gates on the host.
+        IGateExecutionProvider? provider;
+        try
+        {
+            provider = await ResolveGateProviderAsync(request, observer, ct);
+        }
+        catch (GateIsolationUnavailableException ex)
+        {
+            artifacts.Append("error", new { ex.Message, type = ex.GetType().Name });
+            ledger.FinishRun(request.RunId, RunStatus.Error, _clock.UtcNow);
+            return new RunOutcome
+            {
+                Status = RunStatus.Error,
+                Branch = "",
+                HeadSha = request.BaseSha,
+                TotalUsd = budget.Spent,
+                Units = [],
+                Error = $"gate isolation unavailable: {ex.Message}",
+            };
+        }
+
         observer.Stage("Creating worktree");
-        var workspace = await RunWorkspace.CreateAsync(_git, request.RepoRoot, request.RunId, request.BaseSha, ct, request.WorktreeLocation);
+        var workspace = await RunWorkspace.CreateAsync(_git, request.RepoRoot, request.RunId, request.BaseSha, ct, request.WorktreeLocation, policy.Isolation.WorktreeRoot);
         artifacts.Append("worktree", new { workspace.Path, workspace.Branch, workspace.BaseSha });
 
         MeteringProxy? proxy = null;
+        var watch = new WorkspaceWatch(workspace);
+        string? dependencies = null;
         try
         {
             proxy = await StartProxyAsync(request, budget, observer);
@@ -116,27 +146,37 @@ public sealed class RunOrchestrator(
                 ProxyToken = proxy?.Token ?? "",
                 LogDirectory = artifacts.LogsDirectory,
                 ExtraAllowedEnv = policy.Isolation.WorkerEnvAllow,
+                GateCommands = policy.Gates
+                    .Where(g => g.Type == GateConfig.CommandType && g.Cmd.Count > 0)
+                    .Select(g => string.Join(' ', g.Cmd))
+                    .ToList(),
+                Restrictions = watch.Restrictions,
             };
             var executor = executorFactory?.Invoke(session) ?? new ConfigExecutor(request.ExecutorName, request.Executor, session, runner);
 
-            var gateEnv = EnvironmentBuilder.ForGate([policy.Provider.ApiKeyEnv]);
-            if (!await PrepareAsync(policy, workspace.Path, gateEnv, artifacts, observer, ct))
+            if (policy.Prepare.Count > 0)
             {
-                status = RunStatus.Error;
-                error = "prepare step failed";
-                return Finish();
+                var prepared = await PrepareAsync(request, workspace, provider!, observer, ct);
+                if (!prepared.Ok)
+                {
+                    status = RunStatus.Error;
+                    error = "prepare step failed";
+                    return Finish();
+                }
+
+                dependencies = prepared.Dependencies;
             }
 
-            var gates = request.UseGates
-                ? policy.Gates.Where(g => g.Type == GateConfig.CommandType).Select(g => new CommandGate(g, runner, gateEnv)).ToList()
+            var commandGates = request.UseGates
+                ? policy.Gates.Where(g => g.Type == GateConfig.CommandType).Select(g => new CommandGate(g)).ToList()
                 : [];
+            var gates = new GateSession(provider, request, workspace, dependencies, commandGates, observer);
             var baseline = new Dictionary<string, GateRun>(StringComparer.Ordinal);
-            if (gates.Count > 0)
+            if (commandGates.Count > 0)
             {
-                observer.Stage($"Running {gates.Count} gate(s) on the base commit (baseline)");
-                foreach (var (gate, i) in gates.Select((g, i) => (g, i)))
+                observer.Stage($"Running {commandGates.Count} gate(s) on the base commit (baseline)");
+                foreach (var (gate, run, _) in await gates.RunAllAsync("baseline", i => $"baseline-gate{i}.log", ct))
                 {
-                    var run = await gate.ExecuteAsync(workspace.Path, Path.Combine(artifacts.LogsDirectory, $"baseline-gate{i}.log"), ct);
                     baseline[gate.Name] = run;
                     artifacts.Append("baseline", new { gate = gate.Name, run.Passed, failing = run.FailingTests?.Count });
                     if (!run.Passed)
@@ -146,12 +186,22 @@ public sealed class RunOrchestrator(
                 }
             }
 
+            // Links present now came from the repository, from prepare (e.g. a pnpm install) or from the base commit's own
+            // gates. They are allowed to stay,
+            // but the worker is denied access to the ones that lead outside; any link that appears later is a violation.
+            var escaping = watch.TakeBaseline();
+            if (escaping.Count > 0)
+            {
+                artifacts.Append("links", new { escaping = escaping.Select(l => new { l.RelativePath, l.Target }) });
+                observer.Warning($"{escaping.Count} link(s) in the worktree lead outside it ({string.Join(", ", escaping.Take(3).Select(l => l.RelativePath))}); the worker is denied access to them.");
+            }
+
             var completed = new List<WorkUnit>();
             var locks = new List<LockedRegion>();
             var handoffs = new List<Handoff>();
             foreach (var unit in ContractValidator.Order(request.Contract))
             {
-                var outcome = await RunUnitAsync(request, unit, workspace, executor, gates, baseline, completed, locks, handoffs, budget, observer, ct);
+                var outcome = await RunUnitAsync(request, unit, workspace, watch, executor, gates, baseline, completed, locks, handoffs, budget, observer, ct);
                 units.Add(outcome);
                 if (outcome.Status != "accepted")
                 {
@@ -164,6 +214,7 @@ public sealed class RunOrchestrator(
             }
 
             status = RunStatus.Pass;
+            review = await FinalReviewAsync(request, workspace, units, budget, observer, ct);
             return Finish();
         }
         catch (OperationCanceledException) when (budget.Exhausted && !ct.IsCancellationRequested)
@@ -186,9 +237,15 @@ public sealed class RunOrchestrator(
                 await proxy.DisposeAsync();
             }
 
-            if (!policy.Isolation.KeepWorktree)
+            if (dependencies is not null && WorktreeGuard.DeleteTree(Path.GetDirectoryName(dependencies)!) is { } depsLeft)
             {
-                await workspace.RemoveAsync(CancellationToken.None);
+                observer.Warning(depsLeft);
+            }
+
+            if (!policy.Isolation.KeepWorktree && await workspace.RemoveAsync(CancellationToken.None) is { } leftBehind)
+            {
+                artifacts.Append("cleanup", new { warning = leftBehind });
+                observer.Warning(leftBehind);
             }
 
             if (ct.IsCancellationRequested)
@@ -200,7 +257,7 @@ public sealed class RunOrchestrator(
         RunOutcome Finish()
         {
             ledger.FinishRun(request.RunId, status, _clock.UtcNow);
-            var head = _git.HeadAsync(workspace.Path, CancellationToken.None).GetAwaiter().GetResult();
+            var head = workspace.HeadAsync(CancellationToken.None).GetAwaiter().GetResult();
             artifacts.Append("finished", new { status, error, head });
             return new RunOutcome
             {
@@ -211,12 +268,53 @@ public sealed class RunOrchestrator(
                 TotalUsd = budget.Spent,
                 Units = units,
                 Error = error,
+                Review = review,
             };
         }
     }
 
+    /// <summary>
+    /// One architect call over the combined diff once every unit passed. Advisory: a failed or unreadable review is
+    /// recorded as unavailable and never fails the run.
+    /// </summary>
+    private async Task<FinalReview?> FinalReviewAsync(
+        RunRequest request, RunWorkspace workspace, List<UnitOutcome> units, BudgetGuard budget, IRunObserver observer, CancellationToken ct)
+    {
+        var policy = request.Policy;
+        if (!policy.Escalation.FinalReview || !request.AllowEscalation || architect is null)
+        {
+            return null;
+        }
+
+        var model = request.ArchitectModel ?? policy.Models.Architect;
+        observer.Stage($"Final review: the architect ({model}) reads the combined diff");
+        var diff = await workspace.DiffAsync(request.BaseSha, ct);
+        var prompt = ReviewPrompt.Build(request.Contract, diff.Patch, units.Select(u => (u.UnitId, request.Contract.Units.First(c => c.Id == u.UnitId).Title, u.Status, u.Attempts, u.Reason)).ToList());
+
+        FinalReview review;
+        try
+        {
+            var response = await architect.CompleteAsync(new ProviderRequest(model, ReviewPrompt.System, prompt), ct);
+            RecordArchitectCall(request.RunId, units.Count > 0 ? units[^1].UnitId : "", response, budget);
+            request.Artifacts.WriteLog("final-review.reply.md", response.Text);
+            review = ReviewPrompt.Parse(response.Text, response.Model);
+        }
+        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or System.ClientModel.ClientResultException)
+        {
+            review = new FinalReview(ReviewVerdict.Unavailable, $"the architect call failed: {ex.Message}", [], model);
+        }
+
+        request.Artifacts.Append("review", new { verdict = review.Verdict.ToString(), review.Summary, review.Concerns, review.Model });
+        if (review.Verdict != ReviewVerdict.Approve)
+        {
+            observer.Warning($"Final review: {review.Verdict}. {review.Summary}");
+        }
+
+        return review;
+    }
+
     private async Task<UnitOutcome> RunUnitAsync(
-        RunRequest request, WorkUnit unit, RunWorkspace workspace, IExecutor executor, List<CommandGate> gates,
+        RunRequest request, WorkUnit unit, RunWorkspace workspace, WorkspaceWatch watch, IExecutor executor, GateSession gates,
         Dictionary<string, GateRun> baseline, List<WorkUnit> completed, List<LockedRegion> locks, List<Handoff> handoffs,
         BudgetGuard budget, IRunObserver observer, CancellationToken ct)
     {
@@ -237,9 +335,15 @@ public sealed class RunOrchestrator(
             var brief = BriefWriter.Build(request.Contract, unit, state.Attempts, request.Executor.BriefFile, feedback, completed, handoffs);
             artifacts.WriteLog($"{brief.Label}.brief.md", brief.Body);
 
+            await watch.BeforeAttemptAsync(ct);
             var run = await executor.RunAsync(brief, workspace.Path, request.WorkerModel,
                 TimeSpan.FromSeconds(policy.Escalation.WorkerTimeoutSeconds), linked.Token);
             RecordReportedUsage(request.RunId, unit.Id, run, budget);
+
+            // Before git looks at the worktree (staging a junction is how a link would get into the diff): links,
+            // the .git pointer and, for executors that report their commands, files hidden in ignored paths.
+            run = await InspectAttemptAsync(watch, run, request.Artifacts, brief.Label, ct);
+            var violated = run.Fault is { Kind: WorkerFaultKind.WorkspaceViolation };
 
             var diff = await workspace.DiffAsync(unitStart, ct);
             state.ChangedPaths = diff.ChangedPaths;
@@ -250,7 +354,28 @@ public sealed class RunOrchestrator(
                 artifacts.WriteLog($"{brief.Label}.diff", diff.Patch);
             }
 
-            var (gateResults, gateLogs) = await RunGatesAsync(request, brief.Label, workspace.Path, diff, gates, baseline, locks, linked.Token);
+            // Gates execute code from the worktree; never run them on an attempt that already tried to escape it.
+            List<GateResult> gateResults = [];
+            List<string?> gateLogs = [];
+            if (!violated)
+            {
+                try
+                {
+                    (gateResults, gateLogs) = await RunGatesAsync(request, brief.Label, workspace.Path, diff, gates, baseline, locks, linked.Token);
+                }
+                catch (GateSecurityException ex)
+                {
+                    // The snapshot or the environment's output tried to cross the boundary: same as a workspace violation.
+                    violated = true;
+                    artifacts.Append("violation", new { attempt = brief.Label, detail = ex.Message });
+                    run = run with { Fault = new WorkerFault(WorkerFaultKind.WorkspaceViolation, $"gate environment: {ex.Message}") };
+                }
+            }
+
+            if (!violated && watch.CheckLinks("after the gates ran") is { } gateViolation)
+            {
+                run = run with { Fault = new WorkerFault(WorkerFaultKind.WorkspaceViolation, gateViolation) };
+            }
 
             var decision = supervisor.Decide(state, run, gateResults, policy);
             var takeover = decision.CanTakeOver && request.AllowEscalation && architect is not null &&
@@ -285,6 +410,9 @@ public sealed class RunOrchestrator(
                 attempt = state.Attempts,
                 run.ExitCode,
                 run.TimedOut,
+                fault = run.Fault is null ? null : new { kind = run.Fault.Kind.ToString(), run.Fault.Detail },
+                reported_model = run.ReportedModel,
+                audit = run.Audit,
                 diff_lines = diff.TotalLines,
                 changed = diff.ChangedPaths,
                 gates = gateResults.Select(g => new { g.Gate, g.Status, g.NewFailures }),
@@ -294,7 +422,7 @@ public sealed class RunOrchestrator(
 
             if (takeover)
             {
-                var result = await TakeOverAsync(request, unit, workspace, unitStart, state, decision, diff, gateResults, gates, baseline, locks, handoffs, budget, observer, ct);
+                var result = await TakeOverAsync(request, unit, workspace, watch, unitStart, state, decision, diff, gateResults, gates, baseline, locks, handoffs, budget, observer, ct);
                 observer.TakeoverFinished(unit, result.Success, result.Note);
                 if (result.Success)
                 {
@@ -302,7 +430,7 @@ public sealed class RunOrchestrator(
                     return new UnitOutcome(unit.Id, "accepted", state.Attempts, $"architect takeover: {result.Note}");
                 }
 
-                await workspace.ResetAsync(unitStart, CancellationToken.None);
+                await workspace.ResetAsync(unitStart, CancellationToken.None, watch.KnownLinks);
                 ledger.UpsertUnit(request.RunId, unit.Id, unit.Title, "failed", state.Attempts, state.Takeovers);
                 return new UnitOutcome(unit.Id, "failed", state.Attempts, $"{decision.Reason}; takeover failed: {result.Note}");
             }
@@ -319,16 +447,37 @@ public sealed class RunOrchestrator(
                     continue;
 
                 default:
-                    await workspace.ResetAsync(unitStart, CancellationToken.None);
+                    await workspace.ResetAsync(unitStart, CancellationToken.None, watch.KnownLinks);
                     ledger.UpsertUnit(request.RunId, unit.Id, unit.Title, "failed", state.Attempts, state.Takeovers);
                     return new UnitOutcome(unit.Id, "failed", state.Attempts, decision.Reason);
             }
         }
     }
 
+    /// <summary>Applies the workspace checks to a finished attempt and turns findings into a fault.</summary>
+    private static async Task<RunResult> InspectAttemptAsync(WorkspaceWatch watch, RunResult run, RunArtifacts artifacts, string label, CancellationToken ct)
+    {
+        if (watch.CheckLinks("after the worker ran") is { } violation)
+        {
+            artifacts.Append("violation", new { attempt = label, detail = violation });
+            return run with { Fault = new WorkerFault(WorkerFaultKind.WorkspaceViolation, violation) };
+        }
+
+        // Only executors that report every shell command (an audit) can be judged here: with no commands run, anything
+        // new in ignored paths was written by the worker's file tools on purpose. Others may legitimately create build
+        // output, so they are left alone.
+        if (run.Audit is { Commands.Count: 0 } && await watch.CheckIgnoredAsync(ct) is { } hidden)
+        {
+            artifacts.Append("hidden_files", new { attempt = label, detail = hidden });
+            return run.Fault is null ? run with { Fault = new WorkerFault(WorkerFaultKind.PermissionDenied, hidden) } : run;
+        }
+
+        return run;
+    }
+
     /// <summary>Runs every command gate, then the locked-region check once an earlier takeover created locks.</summary>
     private static async Task<(List<GateResult> Results, List<string?> Logs)> RunGatesAsync(
-        RunRequest request, string label, string workdir, UnitDiff diff, List<CommandGate> gates,
+        RunRequest request, string label, string workdir, UnitDiff diff, GateSession gates,
         Dictionary<string, GateRun> baseline, List<LockedRegion> locks, CancellationToken ct)
     {
         var results = new List<GateResult>();
@@ -338,10 +487,8 @@ public sealed class RunOrchestrator(
             return (results, logs);
         }
 
-        foreach (var (gate, i) in gates.Select((g, i) => (g, i)))
+        foreach (var (gate, gateRun, log) in await gates.RunAllAsync(label, n => $"{label}.gate{n}.log", ct))
         {
-            var log = Path.Combine(request.Artifacts.LogsDirectory, $"{label}.gate{i}.log");
-            var gateRun = await gate.ExecuteAsync(workdir, log, ct);
             results.Add(CommandGate.Evaluate(gateRun, baseline.GetValueOrDefault(gate.Name)));
             logs.Add(log);
         }
@@ -362,8 +509,8 @@ public sealed class RunOrchestrator(
     /// suite re-runs, and on success the edit is locked, a handoff is written and the unit is committed.
     /// </summary>
     private async Task<TakeoverResult> TakeOverAsync(
-        RunRequest request, WorkUnit unit, RunWorkspace workspace, string unitStart, UnitState state, Decision decision,
-        UnitDiff diff, List<GateResult> gateResults, List<CommandGate> gates, Dictionary<string, GateRun> baseline,
+        RunRequest request, WorkUnit unit, RunWorkspace workspace, WorkspaceWatch watch, string unitStart, UnitState state, Decision decision,
+        UnitDiff diff, List<GateResult> gateResults, GateSession gates, Dictionary<string, GateRun> baseline,
         List<LockedRegion> locks, List<Handoff> handoffs, BudgetGuard budget, IRunObserver observer, CancellationToken ct)
     {
         var policy = request.Policy;
@@ -376,10 +523,16 @@ public sealed class RunOrchestrator(
         var files = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var path in diff.ChangedPaths.Concat(unit.Files).Distinct(StringComparer.Ordinal))
         {
-            var full = Path.Combine(workspace.Path, path);
-            if (File.Exists(full) && new FileInfo(full).Length <= 200_000)
+            // Through the guard: this text is sent to the architect, so a link to e.g. ~/.ssh must never be followed.
+            try
             {
-                files[path] = await File.ReadAllTextAsync(full, ct);
+                if (WorktreeGuard.ReadAllText(workspace.Path, path, maxBytes: 200_000) is { } text)
+                {
+                    files[path] = text;
+                }
+            }
+            catch (IOException)
+            {
             }
         }
 
@@ -431,7 +584,22 @@ public sealed class RunOrchestrator(
             artifacts.WriteLog($"{unit.Id}-takeover.diff", newDiff.Patch);
         }
 
-        var (after, afterLogs) = await RunGatesAsync(request, $"{unit.Id}-takeover", workspace.Path, newDiff, gates, baseline, locks, ct);
+        List<GateResult> after;
+        List<string?> afterLogs;
+        try
+        {
+            (after, afterLogs) = await RunGatesAsync(request, $"{unit.Id}-takeover", workspace.Path, newDiff, gates, baseline, locks, ct);
+        }
+        catch (GateSecurityException ex)
+        {
+            return new TakeoverResult(false, $"gate environment violation: {ex.Message}");
+        }
+
+        if (watch.CheckLinks("after the takeover gates ran") is { } violation)
+        {
+            return new TakeoverResult(false, $"workspace violation: {violation}");
+        }
+
         var blocking = after.Where(g => g.Blocking).Select(g => g.Gate).ToList();
         var attemptId = ledger.RecordAttempt(new AttemptRecord
         {
@@ -561,29 +729,170 @@ public sealed class RunOrchestrator(
         return decision;
     }
 
-    private async Task<bool> PrepareAsync(Policy policy, string workdir, Dictionary<string, string> env, RunArtifacts artifacts, IRunObserver observer, CancellationToken ct)
+    /// <summary>
+    /// The provider for this run, or null when the run executes no gate or prepare command. Throws
+    /// <see cref="GateIsolationUnavailableException"/> when none is configured or the configured one cannot run here.
+    /// </summary>
+    private async Task<IGateExecutionProvider?> ResolveGateProviderAsync(RunRequest request, IRunObserver observer, CancellationToken ct)
     {
-        foreach (var (step, i) in policy.Prepare.Select((s, i) => (s, i)))
+        var policy = request.Policy;
+        var needed = policy.Prepare.Count > 0 || (request.UseGates && policy.Gates.Any(g => g.Type == GateConfig.CommandType));
+        if (!needed)
         {
-            observer.Stage($"Prepare: {step.DisplayName}");
-            var outcome = await runner.RunAsync(new ProcessSpec
+            return null;
+        }
+
+        var provider = gateProvider ?? GateExecutionFactory.Create(
+            policy.GateExecution, runner, request.RepoRoot, GateExecutionFactory.Commands(policy), [policy.Provider.ApiKeyEnv], policy.Isolation.WorktreeRoot);
+        var status = await provider.CheckAsync(ct);
+        if (!status.Available)
+        {
+            throw new GateIsolationUnavailableException($"{provider.Name}: {status.Detail}");
+        }
+
+        request.Artifacts.Append("gate_execution", new { provider = provider.Name, isolated = provider.IsIsolated, status.Detail });
+        if (!provider.IsIsolated)
+        {
+            observer.Warning("gate_execution.provider is host-unsafe: gates and prepare steps run code the worker wrote ON THIS MACHINE with your privileges. Use it for development and trusted tasks only.");
+        }
+
+        if (provider is WindowsSandboxProvider sandbox)
+        {
+            foreach (var note in await sandbox.RecoverAsync(includeKept: false, ct))
             {
-                Args = step.Cmd,
-                WorkingDirectory = workdir,
-                Environment = env,
-                ReplaceEnvironment = true,
-                Timeout = TimeSpan.FromSeconds(step.TimeoutSeconds),
-                StdoutFile = Path.Combine(artifacts.LogsDirectory, $"prepare{i}.log"),
-            }, ct);
-            artifacts.Append("prepare", new { step = step.DisplayName, outcome.ExitCode, outcome.TimedOut });
-            if (!outcome.Succeeded)
-            {
-                observer.Warning($"Prepare step '{step.DisplayName}' failed (exit {outcome.ExitCode}): {CommandGate.Tail(outcome.Stderr + outcome.Stdout, 800)}");
-                return false;
+                observer.Warning($"Cleaned up a gate environment left by an earlier run: {note}");
             }
         }
 
-        return true;
+        return provider;
+    }
+
+    /// <summary>
+    /// Runs the prepare steps once, on the base commit, before any worker. With an isolated provider they run in their own
+    /// environment (network per <c>gate_execution.prepare_network</c>) and what they produce comes back as one opaque
+    /// archive that later gate environments unpack; the host never unpacks it. host-unsafe prepares in the worktree.
+    /// </summary>
+    private static async Task<(bool Ok, string? Dependencies)> PrepareAsync(
+        RunRequest request, RunWorkspace workspace, IGateExecutionProvider provider, IRunObserver observer, CancellationToken ct)
+    {
+        var policy = request.Policy;
+        var artifacts = request.Artifacts;
+        var network = policy.GateExecution?.PrepareNetwork == GateExecutionConfig.NetworkFull ? NetworkAccess.Full : NetworkAccess.None;
+        if (provider.IsIsolated)
+        {
+            observer.Stage($"Prepare: starting an isolated environment ({provider.Name}, network {network.ToString().ToLowerInvariant()})");
+        }
+
+        var env = await provider.CreateAsync(new GateEnvironmentRequest
+        {
+            RunId = request.RunId,
+            Label = "prepare",
+            Source = new GateSource(workspace.Path, provider.IsIsolated ? await workspace.SourceFilesAsync(ct) : []),
+            Network = network,
+        }, ct);
+        var failed = false;
+        try
+        {
+            foreach (var (step, i) in policy.Prepare.Select((s, i) => (s, i)))
+            {
+                observer.Stage($"Prepare: {step.DisplayName}");
+                var result = await env.RunAsync(new GateCommand
+                {
+                    Name = step.DisplayName,
+                    Args = step.Cmd,
+                    Timeout = TimeSpan.FromSeconds(step.TimeoutSeconds),
+                    LogFile = Path.Combine(artifacts.LogsDirectory, $"prepare{i}.log"),
+                }, ct);
+                artifacts.Append("prepare", new { step = step.DisplayName, result.ExitCode, termination = result.Termination.ToString(), duration_ms = (long)result.Duration.TotalMilliseconds });
+                if (!result.Succeeded)
+                {
+                    failed = true;
+                    observer.Warning($"Prepare step '{step.DisplayName}' failed ({result.Termination}, exit {result.ExitCode}): {CommandGate.Tail(result.Output, 800)}");
+                    return (false, null);
+                }
+            }
+
+            string? dependencies = null;
+            if (provider.IsIsolated)
+            {
+                var folder = Path.Combine(artifacts.Directory, "deps");
+                Directory.CreateDirectory(folder);
+                dependencies = await env.ExportDependenciesAsync(Path.Combine(folder, "deps.tar"), ct);
+                artifacts.Append("dependencies", new { bytes = dependencies is null ? 0 : new FileInfo(dependencies).Length, startup_ms = (long)env.StartupTime.TotalMilliseconds });
+            }
+
+            return (true, dependencies);
+        }
+        catch
+        {
+            failed = true;
+            throw;
+        }
+        finally
+        {
+            if (await env.DestroyAsync(failed) is { } left)
+            {
+                observer.Warning($"Gate environment cleanup: {left}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// The command gates of a run and where they execute. Every batch (the baseline, each attempt, each takeover check)
+    /// gets a fresh environment built from the worktree's current files and destroyed right after, so nothing one batch
+    /// leaves behind (a background process, a planted file) can influence the next.
+    /// </summary>
+    private sealed class GateSession(
+        IGateExecutionProvider? provider, RunRequest request, RunWorkspace workspace, string? dependencies, List<CommandGate> gates, IRunObserver observer)
+    {
+        public async Task<List<(CommandGate Gate, GateRun Run, string Log)>> RunAllAsync(string label, Func<int, string> logName, CancellationToken ct)
+        {
+            var results = new List<(CommandGate, GateRun, string)>();
+            if (gates.Count == 0 || provider is null)
+            {
+                return results;
+            }
+
+            var env = await provider.CreateAsync(new GateEnvironmentRequest
+            {
+                RunId = request.RunId,
+                Label = label,
+                Source = new GateSource(workspace.Path, provider.IsIsolated ? await workspace.SourceFilesAsync(ct) : []),
+                Network = request.Policy.GateExecution?.NetworkPolicy == GateExecutionConfig.NetworkFull ? NetworkAccess.Full : NetworkAccess.None,
+                Dependencies = dependencies,
+            }, ct);
+            var failed = false;
+            try
+            {
+                if (provider.IsIsolated)
+                {
+                    request.Artifacts.Append("gate_env", new { label, provider = provider.Name, startup_ms = (long)env.StartupTime.TotalMilliseconds });
+                }
+
+                foreach (var (gate, i) in gates.Select((g, i) => (g, i)))
+                {
+                    var log = Path.Combine(request.Artifacts.LogsDirectory, logName(i));
+                    var run = await gate.ExecuteAsync(env, log, ct);
+                    failed |= !run.Passed;
+                    results.Add((gate, run, log));
+                }
+
+                return results;
+            }
+            catch
+            {
+                failed = true;
+                throw;
+            }
+            finally
+            {
+                if (await env.DestroyAsync(failed) is { } left)
+                {
+                    request.Artifacts.Append("cleanup", new { label, warning = left });
+                    observer.Warning($"Gate environment cleanup: {left}");
+                }
+            }
+        }
     }
 
     private async Task<MeteringProxy?> StartProxyAsync(RunRequest request, BudgetGuard budget, IRunObserver observer)

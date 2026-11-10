@@ -109,6 +109,18 @@ public static class Scaffolder
         sb.AppendLine("isolation:");
         sb.AppendLine("  worker_env_allow: []       # extra env var names workers may see (keys are never passed)");
         sb.AppendLine("  keep_worktree: false");
+        sb.AppendLine("  # worktree_root: \"D:/tokonomy-worktrees\"   # default: %LOCALAPPDATA%/tokonomy/worktrees; must not overlap temp, the repo or home");
+        sb.AppendLine();
+        sb.AppendLine("# Gates and prepare steps run code the worker wrote. They run in a disposable Windows Sandbox VM:");
+        sb.AppendLine("# a copy of the source (no .git, no .tokonomy), no network for gates, host toolchains mapped read-only.");
+        sb.AppendLine("# Needs Windows Pro/Enterprise/Education 24H2+ with the Windows Sandbox feature (see docs/config.md).");
+        sb.AppendLine("# host-unsafe runs them on this machine with your privileges; there is no automatic fallback.");
+        sb.AppendLine("gate_execution:");
+        sb.AppendLine("  provider: windows-sandbox     # windows-sandbox | host-unsafe");
+        sb.AppendLine("  network_policy: none          # gates: none | full");
+        sb.AppendLine("  prepare_network: full         # prepare steps (base commit only): none | full");
+        sb.AppendLine("  resource_limits: { memory_mb: 4096 }");
+        sb.AppendLine("  toolchains: []                # default: the folders of the gate commands' executables, e.g. [\"C:/Program Files/dotnet\"]");
         return sb.ToString();
     }
 
@@ -218,17 +230,33 @@ public static class Scaffolder
 
           antigravity:
             # Antigravity CLI (`agy`) on your own Antigravity login: no API key, no proxy. Run `agy models` for ids such as
-            # gemini-3.8-flash-low. Tokens come from its JSON output; cost is unknown and recorded as estimated.
-            # Headless against agy 1.5.3 works (`-p`, `--model`, `--output-format json`), BUT headless mode cannot prompt and
-            # auto-denies shell commands, so a worker that must run one (even to read its brief) makes no changes. Allow the
-            # permission you are comfortable with (agy `permissions.allow` in settings.json, or --dangerously-skip-permissions,
-            # which gives the worker the same trust as OpenCode's bash=allow) before relying on this adapter.
-            cmd: ["agy", "-p", "{prompt}", "--output-format", "json", "--mode", "accept-edits"]
+            # gemini-3.8-flash-medium. Tokens come from its JSON output; cost is unknown and recorded as estimated.
+            # `agy` is found on PATH, then in ~/.gemini/bin (where the installer puts it on Windows).
+            #
+            # Headless mode cannot prompt, so permissions are given up front and never with --dangerously-skip-permissions:
+            #  * No edit mode. `permissions` below becomes a per-attempt --settings file ({settings_file}, written outside the
+            #    worktree): read_file/write_file on the worktree only, plus one literal command(...) rule per allowed command.
+            #    agy 1.5.3 matches command rules literally (no prefix, no wildcards, regex characters are NOT interpreted).
+            #  * stream-json lets Tokonomy see the model the session really used, every shell command and every refused call.
+            #    The run is failed (never accepted) on a model mismatch, a denied or out-of-allowlist command, a non-zero exit
+            #    or an error status. Nothing falls back to another model.
+            #  * Worktrees live outside temp by default (agy lets any run read and write temp); temp is denied too.
+            #  * No shell commands by default: a test command runs code the worker wrote (docs/threat-model.md, T16).
+            cmd: ["agy", "-p", "{prompt}", "--output-format", "stream-json", "--settings", "{settings_file}", "--sandbox"]
             model_args: ["--model", "{model}"]
             brief_file: AGENTS.md
             version_cmd: ["agy", "--version"]
             tested_version: "1.5.3"
             usage_format: agy-json
+            verify_model: true
+            permissions:
+              commands: []                # extra exact command lines, e.g. ["python -m unittest"]
+              allow_gate_commands: false  # true lets the worker run the gates itself, which runs code it wrote: see threat-model T16
+              scope_files_to_worktree: true
+              deny_temp_writes: true      # only effective when the worktree is outside temp
+              deny_temp_reads: true       # same: agy lets any run read and write temp unless denied
+              allow: []                   # raw extra rules, e.g. "read_url(docs.python.org)"
+              deny: []                    # raw extra rules; deny always beats allow
             capabilities:
               headless: true
               model_override: true

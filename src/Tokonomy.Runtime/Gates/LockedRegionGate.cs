@@ -1,5 +1,6 @@
 using Tokonomy.Core.Model;
 using Tokonomy.Core.Takeover;
+using Tokonomy.Runtime.Git;
 
 namespace Tokonomy.Runtime.Gates;
 

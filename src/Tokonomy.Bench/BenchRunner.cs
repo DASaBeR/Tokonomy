@@ -3,6 +3,7 @@ using Tokonomy.Core.Config;
 using Tokonomy.Core.Model;
 using Tokonomy.Runtime.Config;
 using Tokonomy.Runtime.Executors;
+using Tokonomy.Runtime.Gates.Isolation;
 using Tokonomy.Runtime.Git;
 using Tokonomy.Runtime.Ledger;
 using Tokonomy.Runtime.Orchestration;
@@ -96,6 +97,7 @@ public sealed class BenchRunner(
         Gates = policy.Gates,
         Escalation = policy.Escalation,
         Isolation = policy.Isolation,
+        GateExecution = policy.GateExecution,
         Budget = new BudgetConfig
         {
             MaxUsdPerTask = capUsd,
@@ -174,7 +176,9 @@ public sealed class BenchRunner(
 
             status = outcome.Status;
             note = outcome.Error;
-            (accepted, var acceptanceNote) = await AcceptAsync(taskset, task, clone, outcome.Branch, artifacts, ct);
+            (accepted, var acceptanceNote) = outcome.Branch.Length == 0
+                ? (false, "acceptance not run: the run never created a branch")
+                : await AcceptAsync(taskset, task, clone, outcome.Branch, policy, runId, artifacts, ct);
             note = string.Join("; ", new[] { note, acceptanceNote }.Where(s => !string.IsNullOrEmpty(s)));
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
@@ -204,8 +208,13 @@ public sealed class BenchRunner(
         };
     }
 
-    /// <summary>Checks out the run branch, overlays the hidden acceptance files and runs the acceptance command.</summary>
-    private async Task<(bool Accepted, string? Note)> AcceptAsync(Taskset taskset, BenchTask task, string clone, string branch, RunArtifacts artifacts, CancellationToken ct)
+    /// <summary>
+    /// Checks out the run branch, overlays the hidden acceptance files and runs the acceptance command through the
+    /// configured gate provider: the acceptance tests exercise code the worker wrote, so they get the same isolation
+    /// (and the same refusal to fall back to the host) as gates.
+    /// </summary>
+    private async Task<(bool Accepted, string? Note)> AcceptAsync(
+        Taskset taskset, BenchTask task, string clone, string branch, Policy policy, string runId, RunArtifacts artifacts, CancellationToken ct)
     {
         await _git.RunAsync(clone, ["checkout", "--quiet", "--force", branch], ct);
         if (task.Acceptance.Files is { } files)
@@ -213,23 +222,47 @@ public sealed class BenchRunner(
             CopyDirectory(taskset.Resolve(files), clone);
         }
 
+        IGateExecutionProvider provider;
         try
         {
-            var outcome = await runner.RunAsync(new ProcessSpec
+            provider = GateExecutionFactory.Create(policy.GateExecution, runner, clone, [task.Acceptance.Cmd], [policy.Provider.ApiKeyEnv], policy.Isolation.WorktreeRoot);
+            var status = await provider.CheckAsync(ct);
+            if (!status.Available)
             {
-                Args = task.Acceptance.Cmd,
-                WorkingDirectory = clone,
-                Environment = EnvironmentBuilder.ForGate([]),
-                ReplaceEnvironment = true,
-                Timeout = TimeSpan.FromSeconds(task.Acceptance.TimeoutSeconds),
-                StdoutFile = Path.Combine(artifacts.LogsDirectory, "acceptance.log"),
-            }, ct);
-            artifacts.Append("acceptance", new { outcome.ExitCode, outcome.TimedOut });
-            return (outcome.Succeeded, outcome.Succeeded ? null : $"acceptance failed (exit {outcome.ExitCode})");
+                return (false, $"acceptance not run: {provider.Name}: {status.Detail}");
+            }
         }
-        catch (ExecutableNotFoundException ex)
+        catch (GateIsolationUnavailableException ex)
         {
-            return (false, ex.Message);
+            return (false, $"acceptance not run: {ex.Message}");
+        }
+
+        var source = new GateSource(clone, provider.IsIsolated ? await RunWorkspace.SourceFilesAsync(_git, clone, ct) : []);
+        var env = await provider.CreateAsync(new GateEnvironmentRequest { RunId = runId, Label = "acceptance", Source = source }, ct);
+        try
+        {
+            var result = await env.RunAsync(new GateCommand
+            {
+                Name = "acceptance",
+                Args = task.Acceptance.Cmd,
+                Timeout = TimeSpan.FromSeconds(task.Acceptance.TimeoutSeconds),
+                LogFile = Path.Combine(artifacts.LogsDirectory, "acceptance.log"),
+            }, ct);
+            artifacts.Append("acceptance", new { result.ExitCode, termination = result.Termination.ToString(), provider = provider.Name });
+            return result.Termination switch
+            {
+                GateTermination.NotFound => (false, result.Output),
+                _ when result.Succeeded => (true, null),
+                _ => (false, $"acceptance failed ({result.Termination}, exit {result.ExitCode})"),
+            };
+        }
+        catch (GateSecurityException ex)
+        {
+            return (false, $"acceptance rejected: {ex.Message}");
+        }
+        finally
+        {
+            await env.DestroyAsync();
         }
     }
 

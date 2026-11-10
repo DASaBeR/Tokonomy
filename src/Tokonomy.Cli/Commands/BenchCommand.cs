@@ -5,6 +5,7 @@ using Spectre.Console.Cli;
 using Tokonomy.Bench;
 using Tokonomy.Cli.Infrastructure;
 using Tokonomy.Core.Abstractions;
+using Tokonomy.Core.Config;
 using Tokonomy.Core.Model;
 using Tokonomy.Core.Supervision;
 using Tokonomy.Runtime.Config;
@@ -109,7 +110,10 @@ public sealed class BenchCommand(IAnsiConsole console, IProcessRunner runner, Se
 
         // A model without a price makes every call cost $0 in the ledger, which silently disables the spending caps.
         var used = new List<string>();
-        if (strategies.Any(s => s.UsesArchitectPlan || s.WorkerIsStrong))
+        // A claude-cli architect reports its own (estimated) cost, so only a strong model that does the work through the
+        // metering proxy needs a price.
+        var architectMetered = config.Policy.ArchitectProvider.Kind != ArchitectProviderConfig.ClaudeCliKind;
+        if (strategies.Any(s => s.WorkerIsStrong || (s.UsesArchitectPlan && architectMetered)))
         {
             used.Add(models.Architect);
         }

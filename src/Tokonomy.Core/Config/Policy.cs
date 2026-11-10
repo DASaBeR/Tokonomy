@@ -14,6 +14,70 @@ public sealed class Policy
     public EscalationConfig Escalation { get; set; } = new();
     public BudgetConfig Budget { get; set; } = new();
     public IsolationConfig Isolation { get; set; } = new();
+
+    /// <summary>
+    /// Where gates and prepare steps run. Null (section absent) is not a default: a run that has to execute a gate
+    /// refuses to start until a provider is chosen, so code a worker wrote never runs on the host by accident.
+    /// </summary>
+    public GateExecutionConfig? GateExecution { get; set; }
+}
+
+/// <summary>
+/// <c>gate_execution</c> in policy.yaml. Gate commands run code from the worktree (tests, build scripts, package lifecycle
+/// scripts), which is code a worker wrote, so they run inside an isolated environment unless explicitly told otherwise.
+/// </summary>
+public sealed class GateExecutionConfig
+{
+    public const string WindowsSandboxProvider = "windows-sandbox";
+    public const string HostUnsafeProvider = "host-unsafe";
+    public const string NetworkNone = "none";
+    public const string NetworkFull = "full";
+    public const string CleanupAlways = "always";
+    public const string CleanupKeepOnFailure = "keep-on-failure";
+
+    /// <summary><c>windows-sandbox</c> or <c>host-unsafe</c> (development and tests only: gates run with your privileges).</summary>
+    public string Provider { get; set; } = "";
+
+    /// <summary>Network for gate commands: <c>none</c> (default) or <c>full</c>.</summary>
+    public string NetworkPolicy { get; set; } = NetworkNone;
+
+    /// <summary>Network for <c>prepare</c> steps, which run once on the base commit before any worker: <c>full</c> (default) or <c>none</c>.</summary>
+    public string PrepareNetwork { get; set; } = NetworkFull;
+
+    /// <summary>How long an environment may take to boot and accept commands.</summary>
+    public int StartupTimeoutSeconds { get; set; } = 180;
+
+    public GateResourceLimits ResourceLimits { get; set; } = new();
+    public GateArtifactLimits ArtifactLimits { get; set; } = new();
+
+    /// <summary><c>always</c> (default) or <c>keep-on-failure</c>: keep the host-side folders of a failed batch for inspection. The environment itself is always destroyed.</summary>
+    public string CleanupPolicy { get; set; } = CleanupAlways;
+
+    /// <summary>
+    /// Host folders mapped read-only into the environment and put on its PATH (for example <c>C:/Program Files/dotnet</c>).
+    /// Empty: derived from the gate and prepare commands. Folders under your profile, temp or the repository are refused.
+    /// </summary>
+    public List<string> Toolchains { get; set; } = [];
+}
+
+public sealed class GateResourceLimits
+{
+    public int MemoryMb { get; set; } = 4096;
+}
+
+public sealed class GateArtifactLimits
+{
+    /// <summary>Largest source snapshot sent into the environment.</summary>
+    public int MaxSnapshotMb { get; set; } = 512;
+
+    /// <summary>Largest dependency archive a prepare step may produce.</summary>
+    public int MaxDependenciesMb { get; set; } = 4096;
+
+    /// <summary>Largest gate log kept per command (the tail is kept).</summary>
+    public int MaxLogKb { get; set; } = 1024;
+
+    /// <summary>Largest test report collected per command.</summary>
+    public int MaxReportMb { get; set; } = 16;
 }
 
 public sealed class IsolationConfig
@@ -23,6 +87,13 @@ public sealed class IsolationConfig
 
     /// <summary>Keep the run worktree on disk after the run (the run branch is always kept).</summary>
     public bool KeepWorktree { get; set; }
+
+    /// <summary>
+    /// Directory that holds run worktrees (default: the system temp directory). Set it outside temp for agents that treat
+    /// temp as writable scratch space (Antigravity): otherwise a worker can write into every other run's worktree.
+    /// A relative path is resolved against the repository root.
+    /// </summary>
+    public string? WorktreeRoot { get; set; }
 }
 
 public sealed class ModelsConfig
@@ -80,7 +151,7 @@ public sealed class GateConfig
 
     public int TimeoutSeconds { get; set; } = 900;
 
-    /// <summary>Declares that this gate needs network access.</summary>
+    /// <summary>Declares that this gate needs network access. Enforced through <c>gate_execution.network_policy</c>, never per gate.</summary>
     public bool Network { get; set; }
 
     public string DisplayName => Name ?? (Cmd.Count > 0 ? string.Join(' ', Cmd) : Type);
@@ -96,6 +167,12 @@ public sealed class EscalationConfig
     public int MaxDiffLines { get; set; } = 400;
     public bool ReviewOnNewDependency { get; set; } = true;
     public int WorkerTimeoutSeconds { get; set; } = 1200;
+
+    /// <summary>
+    /// After every unit passed, ask the architect once to review the combined diff. Advisory: it is recorded and shown,
+    /// but never changes the run status (gates outrank opinions). Costs one architect call per run.
+    /// </summary>
+    public bool FinalReview { get; set; }
 }
 
 public sealed class BudgetConfig

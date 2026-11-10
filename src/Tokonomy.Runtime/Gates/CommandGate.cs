@@ -1,54 +1,57 @@
 using Tokonomy.Core.Config;
 using Tokonomy.Core.Model;
-using Tokonomy.Runtime.Process;
+using Tokonomy.Runtime.Gates.Isolation;
 
 namespace Tokonomy.Runtime.Gates;
 
 /// <summary>Raw outcome of one gate execution, before comparison with the baseline.</summary>
 public sealed record GateRun(string Gate, bool Passed, bool TimedOut, IReadOnlySet<string>? FailingTests, string OutputTail);
 
-/// <summary>Runs a command gate and compares it with the base-commit baseline.</summary>
-public sealed class CommandGate(GateConfig config, IProcessRunner runner, IReadOnlyDictionary<string, string> environment)
+/// <summary>
+/// Runs a command gate in a gate environment (see <see cref="IGateExecutionProvider"/>) and compares it with the
+/// base-commit baseline. The gate never touches the process API itself: where the command runs is the provider's job.
+/// </summary>
+public sealed class CommandGate(GateConfig config)
 {
     public const int FeedbackChars = 6000;
 
     public string Name => config.DisplayName;
 
-    public async Task<GateRun> ExecuteAsync(string workdir, string? logFile, CancellationToken ct)
+    public async Task<GateRun> ExecuteAsync(IGateEnvironment environment, string? logFile, CancellationToken ct)
     {
-        var reportPath = config.Report is null ? null : Path.Combine(workdir, config.Report);
-        if (reportPath is not null && File.Exists(reportPath))
-        {
-            File.Delete(reportPath);
-        }
-
-        ProcessOutcome outcome;
+        ArgumentNullException.ThrowIfNull(environment);
+        var reportCopy = config.Report is null
+            ? null
+            : logFile is not null ? logFile + ".report" : Path.Combine(Path.GetTempPath(), $"tokonomy-report-{Guid.NewGuid():N}.xml");
         try
         {
-            outcome = await runner.RunAsync(new ProcessSpec
+            var result = await environment.RunAsync(new GateCommand
             {
+                Name = Name,
                 Args = config.Cmd,
-                WorkingDirectory = workdir,
-                Environment = environment,
-                ReplaceEnvironment = true,
                 Timeout = TimeSpan.FromSeconds(config.TimeoutSeconds),
-                StdoutFile = logFile,
-                MaxCaptureChars = 64 * 1024,
+                ReportPath = config.Report,
+                LogFile = logFile,
+                ReportDestination = reportCopy,
             }, ct);
-        }
-        catch (ExecutableNotFoundException ex)
-        {
-            return new GateRun(Name, false, false, null, ex.Message);
-        }
 
-        var failing = reportPath is null ? null : TestReportParser.TryParseFailures(reportPath);
-        var output = (outcome.Stdout + "\n" + outcome.Stderr).Trim();
-        if (outcome.TimedOut)
-        {
-            output += $"\n[tokonomy] gate timed out after {config.TimeoutSeconds}s";
-        }
+            var failing = result.ReportFile is null ? null : TestReportParser.TryParseFailures(result.ReportFile);
+            var output = result.Output;
+            var timedOut = result.Termination == GateTermination.TimedOut;
+            if (timedOut)
+            {
+                output += $"\n[tokonomy] gate timed out after {config.TimeoutSeconds}s";
+            }
 
-        return new GateRun(Name, outcome.Succeeded, outcome.TimedOut, failing, Tail(output, FeedbackChars));
+            return new GateRun(Name, result.Succeeded, timedOut, failing, Tail(output, FeedbackChars));
+        }
+        finally
+        {
+            if (logFile is null && reportCopy is not null && File.Exists(reportCopy))
+            {
+                File.Delete(reportCopy);
+            }
+        }
     }
 
     /// <summary>

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Tokonomy.Core.Abstractions;
+using Tokonomy.Core.Model;
 using Tokonomy.Runtime.Executors;
 using Tokonomy.Runtime.Process;
 
@@ -104,16 +105,85 @@ public sealed class ClaudeCliProvider(IProcessRunner runner, string command = "c
             }
 
             var usage = ClaudeUsageParser.Parse(root.GetRawText());
+
+            // The model that answered must be the model that was asked for. Claude Code can fall back to another model
+            // (overload, plan limits); that must surface as an error, never as an answer attributed to the requested model.
+            if (ModelProblem(requestedModel, usage) is { } problem)
+            {
+                throw new InvalidOperationException(problem);
+            }
+
             if (usage.Count == 0)
             {
                 return new ProviderResponse(text, requestedModel, 0, 0, 0, null, Estimated: true);
             }
 
-            var main = usage.OrderByDescending(u => u.InputTokens + u.OutputTokens).First();
+            // Label the call with the model that answered (not an auxiliary helper); totals still cover every model used.
+            var main = Answering(requestedModel, usage) ?? usage.OrderByDescending(u => u.InputTokens + u.OutputTokens).First();
             decimal? usd = usage.All(u => u.Usd is not null) ? usage.Sum(u => u.Usd!.Value) : null;
             return new ProviderResponse(
                 text, main.Model, usage.Sum(u => u.InputTokens), usage.Sum(u => u.OutputTokens), usage.Sum(u => u.CachedTokens), usd, Estimated: true);
         }
+    }
+
+    /// <summary>
+    /// Null when the answering model matches the request. A full model id must be reported and must match exactly (after
+    /// dropping a context suffix like <c>[1m]</c> or a date stamp); an alias such as <c>opus</c> matches any model of that family.
+    /// </summary>
+    internal static string? ModelProblem(string requested, IReadOnlyList<WorkerUsage> usage)
+    {
+        if (string.IsNullOrWhiteSpace(requested))
+        {
+            return null;
+        }
+
+        var named = usage.Where(u => !string.IsNullOrWhiteSpace(u.Model) && u.Model != "unknown").ToList();
+        if (named.Count == 0)
+        {
+            return IsFullId(requested)
+                ? $"Claude Code did not report which model answered; cannot verify the requested model '{requested}'."
+                : null;
+        }
+
+        // Claude Code also makes small auxiliary calls to a cheaper model on every request, so the model with the most
+        // tokens is not necessarily the one that answered. What matters is that the requested model produced output.
+        if (Answering(requested, usage) is not null)
+        {
+            return null;
+        }
+
+        var produced = named.Where(u => u.OutputTokens > 0).Select(u => u.Model).DefaultIfEmpty("no model").ToList();
+        return $"Requested model '{requested}' but Claude Code answered with {string.Join(", ", produced.Select(m => $"'{m}'"))}. Not falling back silently.";
+    }
+
+    /// <summary>The usage entry of the requested model, when it produced output; else null.</summary>
+    internal static WorkerUsage? Answering(string requested, IReadOnlyList<WorkerUsage> usage) =>
+        string.IsNullOrWhiteSpace(requested)
+            ? null
+            : usage.Where(u => u.OutputTokens > 0 && !string.IsNullOrWhiteSpace(u.Model) && ModelMatches(requested, u.Model))
+                .OrderByDescending(u => u.OutputTokens)
+                .FirstOrDefault();
+
+    internal static bool ModelMatches(string requested, string actual)
+    {
+        var r = NormalizeModel(requested);
+        var a = NormalizeModel(actual);
+        return string.Equals(r, a, StringComparison.OrdinalIgnoreCase) ||
+               (!IsFullId(requested) && a.Contains(r, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsFullId(string model) => model.TrimStart().StartsWith("claude-", StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeModel(string model)
+    {
+        var m = model.Trim();
+        var bracket = m.IndexOf('[');
+        if (bracket >= 0)
+        {
+            m = m[..bracket];
+        }
+
+        return System.Text.RegularExpressions.Regex.Replace(m, @"-\d{8}$", "");
     }
 
     private static string Tail(string s)

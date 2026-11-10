@@ -1,5 +1,5 @@
-using System.Text;
 using Tokonomy.Core.Takeover;
+using Tokonomy.Runtime.Git;
 
 namespace Tokonomy.Runtime.Takeover;
 
@@ -9,7 +9,8 @@ public sealed record ApplyResult(bool Ok, IReadOnlyList<string> Files, IReadOnly
 /// Applies search/replace edits to a worktree. All-or-nothing: every block is checked first and nothing is written
 /// unless all of them apply. A SEARCH must match exactly once; if it matches nowhere, a second try ignores trailing
 /// whitespace and line-ending differences (still requiring exactly one match). Edits may not leave the worktree or
-/// touch <c>.git</c> / <c>.tokonomy</c>.
+/// touch <c>.git</c> / <c>.tokonomy</c>. All file access goes through <see cref="WorktreeGuard"/>, so an edit can never
+/// be written (or a file read for it) through a symlink, junction or hard link planted in the worktree.
 /// </summary>
 public static class EditApplier
 {
@@ -38,10 +39,14 @@ public static class EditApplier
                 continue;
             }
 
-            var full = Path.GetFullPath(Path.Combine(root, relative));
-            if (!full.StartsWith(root + Path.DirectorySeparatorChar, PathComparison))
+            string full;
+            try
             {
-                errors.Add($"{edit.Path}: path is outside the repository");
+                full = WorktreeGuard.ResolveInside(root, relative);
+            }
+            catch (WorktreeEscapeException ex)
+            {
+                errors.Add($"{edit.Path}: {ex.Message}");
                 continue;
             }
 
@@ -52,7 +57,17 @@ public static class EditApplier
                 continue;
             }
 
-            var current = pending.TryGetValue(full, out var staged) ? staged : (File.Exists(full) ? File.ReadAllText(full) : null);
+            string? current;
+            try
+            {
+                current = pending.TryGetValue(full, out var staged) ? staged : WorktreeGuard.ReadAllText(root, relative);
+            }
+            catch (IOException ex)
+            {
+                errors.Add($"{relative}: {ex.Message}");
+                continue;
+            }
+
             if (current is null)
             {
                 errors.Add($"{relative}: file not found (use an empty SEARCH to create a file)");
@@ -75,10 +90,22 @@ public static class EditApplier
             return new ApplyResult(false, [], errors);
         }
 
-        foreach (var (path, content) in pending)
+        // Re-validate every target right before writing: nothing is written if any of them became a link meanwhile.
+        try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, content, new UTF8Encoding(false));
+            foreach (var path in pending.Keys)
+            {
+                WorktreeGuard.ResolveInside(root, Path.GetRelativePath(root, path));
+            }
+
+            foreach (var (path, content) in pending)
+            {
+                WorktreeGuard.WriteAllText(root, Path.GetRelativePath(root, path), content);
+            }
+        }
+        catch (IOException ex)
+        {
+            return new ApplyResult(false, [], [ex.Message]);
         }
 
         return new ApplyResult(true, files.Distinct(StringComparer.Ordinal).ToList(), []);

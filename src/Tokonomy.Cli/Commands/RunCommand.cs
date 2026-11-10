@@ -132,6 +132,16 @@ public sealed class RunCommand(IAnsiConsole console, IProcessRunner runner, Serv
             console.MarkupLine($"Worktree: {Markup.Escape(outcome.WorktreePath)}");
         }
 
+        if (outcome.Review is { } review)
+        {
+            var reviewColor = review.Verdict == Tokonomy.Core.Model.ReviewVerdict.Approve ? "green" : "yellow";
+            console.MarkupLine($"Architect review (advisory): [{reviewColor}]{review.Verdict}[/] {Markup.Escape(review.Summary)}");
+            foreach (var concern in review.Concerns)
+            {
+                console.MarkupLine($"  - {Markup.Escape(concern)}");
+            }
+        }
+
         console.MarkupLine($"Details: tokonomy report {runId}");
         return outcome.Status == RunStatus.Pass ? ExitCodes.Ok : ExitCodes.Failed;
     }

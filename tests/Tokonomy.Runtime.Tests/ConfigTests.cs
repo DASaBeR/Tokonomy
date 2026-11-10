@@ -197,3 +197,98 @@ public class ConfigLoaderTests
         Assert.Equal(Path.Combine(tmp.Path, ".tokonomy"), ConfigLoader.FindConfigDirectory(nested));
     }
 }
+
+public class GateExecutionValidationTests
+{
+    [Fact]
+    public void Scaffolded_policy_isolates_gates_in_windows_sandbox_by_default()
+    {
+        using var tmp = new TempDir();
+        tmp.File("pyproject.toml", "[project]\nname='x'\n");
+
+        var config = ConfigLoader.Load(Scaffolder.Init(tmp.Path, force: false).ConfigDirectory);
+
+        Assert.Equal(GateExecutionConfig.WindowsSandboxProvider, config.Policy.GateExecution?.Provider);
+        Assert.Equal(GateExecutionConfig.NetworkNone, config.Policy.GateExecution!.NetworkPolicy);
+    }
+
+    [Fact]
+    public void A_policy_with_gates_but_no_gate_execution_is_warned_about()
+    {
+        var issues = ConfigLoader.Validate(new Policy { Gates = [new GateConfig { Cmd = ["pytest"] }] }, "policy.yaml").ToList();
+
+        Assert.Contains(issues, i => i.Severity == Severity.Warning && i.Message.Contains("gate_execution is not set", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("docker", "not supported")]
+    [InlineData("", "is required")]
+    public void An_unknown_or_empty_provider_is_an_error(string provider, string message)
+    {
+        var issues = ConfigLoader.Validate(new Policy { GateExecution = new() { Provider = provider } }, "policy.yaml");
+
+        Assert.Contains(issues, i => i.Severity == Severity.Error && i.Message.Contains(message, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Host_unsafe_and_full_network_are_flagged()
+    {
+        var issues = ConfigLoader.Validate(new Policy { GateExecution = new() { Provider = "host-unsafe", NetworkPolicy = "full" } }, "policy.yaml").ToList();
+
+        Assert.Contains(issues, i => i.Severity == Severity.Warning && i.Message.Contains("host-unsafe", StringComparison.Ordinal));
+        Assert.Contains(issues, i => i.Severity == Severity.Warning && i.Message.Contains("network_policy is full", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Bad_values_are_errors()
+    {
+        var policy = new Policy
+        {
+            GateExecution = new()
+            {
+                Provider = "windows-sandbox",
+                NetworkPolicy = "some",
+                CleanupPolicy = "never",
+                ResourceLimits = { MemoryMb = 0 },
+                Toolchains = ["relative/dotnet"],
+            },
+        };
+
+        var errors = ConfigLoader.Validate(policy, "policy.yaml").Where(i => i.Severity == Severity.Error).Select(i => i.Message).ToList();
+
+        Assert.Contains(errors, m => m.Contains("network_policy", StringComparison.Ordinal));
+        Assert.Contains(errors, m => m.Contains("cleanup_policy", StringComparison.Ordinal));
+        Assert.Contains(errors, m => m.Contains("memory_mb", StringComparison.Ordinal));
+        Assert.Contains(errors, m => m.Contains("absolute path", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void The_yaml_keys_load()
+    {
+        using var tmp = new TempDir();
+        var dir = Scaffolder.Init(tmp.Path, force: false).ConfigDirectory;
+        var path = Path.Combine(dir, "policy.yaml");
+        var yaml = File.ReadAllText(path);
+        var start = yaml.IndexOf("gate_execution:", StringComparison.Ordinal);
+        File.WriteAllText(path, yaml[..start] + """
+            gate_execution:
+              provider: windows-sandbox
+              network_policy: none
+              prepare_network: none
+              startup_timeout_seconds: 240
+              resource_limits: { memory_mb: 8192 }
+              artifact_limits: { max_snapshot_mb: 100, max_dependencies_mb: 900, max_log_kb: 512, max_report_mb: 4 }
+              cleanup_policy: keep-on-failure
+              toolchains: ["C:/Program Files/dotnet"]
+            """);
+
+        var g = ConfigLoader.Load(dir).Policy.GateExecution!;
+
+        Assert.Equal(240, g.StartupTimeoutSeconds);
+        Assert.Equal(8192, g.ResourceLimits.MemoryMb);
+        Assert.Equal(900, g.ArtifactLimits.MaxDependenciesMb);
+        Assert.Equal("keep-on-failure", g.CleanupPolicy);
+        Assert.Equal("none", g.PrepareNetwork);
+        Assert.Equal(["C:/Program Files/dotnet"], g.Toolchains);
+    }
+}

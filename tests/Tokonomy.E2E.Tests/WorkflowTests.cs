@@ -40,6 +40,8 @@ public sealed class WorkflowTests : IDisposable
               worker: cheap-model
             executors:
               default: fake
+            gate_execution:
+              provider: host-unsafe
             gates:
               - {"{"} name: has-feature, cmd: {Shell.YamlArray(Shell.FileContains("app.txt", "feature"))} {"}"}
             """);

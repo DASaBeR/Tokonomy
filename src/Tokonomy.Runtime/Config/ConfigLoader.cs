@@ -164,6 +164,22 @@ public static class ConfigLoader
             }
         }
 
+        if (!string.IsNullOrWhiteSpace(policy.Isolation.WorktreeRoot))
+        {
+            // policy.yaml lives in <repo>/.tokonomy/, so the repository is two levels up.
+            var repo = Path.GetDirectoryName(Path.GetDirectoryName(Path.GetFullPath(file)));
+            var root = Git.WorktreeRoot.Effective(policy.Isolation.WorktreeRoot, repo ?? Directory.GetCurrentDirectory());
+            foreach (var problem in Git.WorktreeRoot.Validate(root, repo))
+            {
+                yield return new(Severity.Error, file, null, $"isolation.worktree_root: {problem}.");
+            }
+        }
+
+        foreach (var issue in ValidateGateExecution(policy, file))
+        {
+            yield return issue;
+        }
+
         var e = policy.Escalation;
         if (e.MaxRetriesPerUnit < 0)
         {
@@ -199,6 +215,81 @@ public static class ConfigLoader
         if (b.MaxArchitectTokenShare is <= 0 or > 1)
         {
             yield return new(Severity.Error, file, null, "budget.max_architect_token_share must be in (0, 1].");
+        }
+    }
+
+    private static IEnumerable<ConfigIssue> ValidateGateExecution(Policy policy, string file)
+    {
+        var runsCommands = policy.Prepare.Count > 0 || policy.Gates.Any(g => g.Type == GateConfig.CommandType);
+        if (policy.GateExecution is not { } g)
+        {
+            if (runsCommands)
+            {
+                yield return new(Severity.Warning, file, null,
+                    "gate_execution is not set; `run` and `bench` refuse to execute gates and prepare steps until gate_execution.provider is windows-sandbox or host-unsafe.");
+            }
+
+            yield break;
+        }
+
+        switch (g.Provider)
+        {
+            case GateExecutionConfig.WindowsSandboxProvider:
+                break;
+            case GateExecutionConfig.HostUnsafeProvider:
+                yield return new(Severity.Warning, file, null,
+                    "gate_execution.provider is host-unsafe: gates run code the worker wrote on this machine with your privileges (development and trusted tasks only).");
+                break;
+            case "":
+                yield return new(Severity.Error, file, null, "gate_execution.provider is required: windows-sandbox or host-unsafe.");
+                break;
+            default:
+                yield return new(Severity.Error, file, null,
+                    $"gate_execution.provider '{g.Provider}' is not supported; use '{GateExecutionConfig.WindowsSandboxProvider}' or '{GateExecutionConfig.HostUnsafeProvider}'.");
+                break;
+        }
+
+        foreach (var (key, value) in new[] { ("network_policy", g.NetworkPolicy), ("prepare_network", g.PrepareNetwork) })
+        {
+            if (value is not (GateExecutionConfig.NetworkNone or GateExecutionConfig.NetworkFull))
+            {
+                yield return new(Severity.Error, file, null, $"gate_execution.{key} '{value}' must be 'none' or 'full'.");
+            }
+        }
+
+        if (g.NetworkPolicy == GateExecutionConfig.NetworkFull)
+        {
+            yield return new(Severity.Warning, file, null,
+                "gate_execution.network_policy is full: code under test can reach the internet, your LAN and services on this machine's network.");
+        }
+
+        if (g.CleanupPolicy is not (GateExecutionConfig.CleanupAlways or GateExecutionConfig.CleanupKeepOnFailure))
+        {
+            yield return new(Severity.Error, file, null, $"gate_execution.cleanup_policy '{g.CleanupPolicy}' must be 'always' or 'keep-on-failure'.");
+        }
+
+        var limits = new (string Key, int Value)[]
+        {
+            ("startup_timeout_seconds", g.StartupTimeoutSeconds),
+            ("resource_limits.memory_mb", g.ResourceLimits.MemoryMb),
+            ("artifact_limits.max_snapshot_mb", g.ArtifactLimits.MaxSnapshotMb),
+            ("artifact_limits.max_dependencies_mb", g.ArtifactLimits.MaxDependenciesMb),
+            ("artifact_limits.max_log_kb", g.ArtifactLimits.MaxLogKb),
+            ("artifact_limits.max_report_mb", g.ArtifactLimits.MaxReportMb),
+        };
+        foreach (var (key, value) in limits.Where(l => l.Value <= 0))
+        {
+            yield return new(Severity.Error, file, null, $"gate_execution.{key} must be positive.");
+        }
+
+        if (g.ResourceLimits.MemoryMb is > 0 and < 1024)
+        {
+            yield return new(Severity.Warning, file, null, "gate_execution.resource_limits.memory_mb below 1024 is unlikely to boot Windows Sandbox.");
+        }
+
+        foreach (var toolchain in g.Toolchains.Where(t => !Path.IsPathFullyQualified(Environment.ExpandEnvironmentVariables(t))))
+        {
+            yield return new(Severity.Error, file, null, $"gate_execution.toolchains: '{toolchain}' must be an absolute path.");
         }
     }
 

@@ -137,6 +137,8 @@ public static class BriefWriter
             sb.AppendLine(gate.Output);
         }
 
-        return sb.ToString();
+        // Gate output comes from code the worker may have written and goes straight back to the model: a test that
+        // prints a credential file must not deliver it. (Shape-based, so it is a mitigation, not a guarantee.)
+        return Tokonomy.Runtime.Ledger.Redactor.Redact(sb.ToString());
     }
 }

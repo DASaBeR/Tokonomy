@@ -125,6 +125,72 @@ public sealed class ClaudeCliProviderTests
     }
 
     [Fact]
+    public async Task A_different_answering_model_is_an_error_not_a_silent_fallback()
+    {
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new ClaudeCliProvider(new FakeRunner(Ok(Result))).CompleteAsync(new ProviderRequest("claude-sonnet-5-5", "s", "u"), default));
+        Assert.Contains("claude-sonnet-5-5", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("claude-opus-5-5", ex.Message, StringComparison.Ordinal);
+    }
+
+    // Captured from the real CLI: every request also spends a few tokens on a cheaper helper model.
+    private const string WithHelper =
+        """{"type":"result","is_error":false,"result":"pong","modelUsage":{"claude-haiku-5-5":{"inputTokens":1174,"outputTokens":14,"cacheReadInputTokens":0,"cacheCreationInputTokens":0,"costUSD":0.0001244},"claude-opus-5-5":{"inputTokens":2,"outputTokens":4,"cacheReadInputTokens":0,"cacheCreationInputTokens":899,"costUSD":0.00728}}}""";
+
+    [Theory]
+    [InlineData("claude-opus-5-5")]
+    [InlineData("opus")]
+    public async Task A_cheap_helper_call_with_more_tokens_does_not_look_like_a_fallback(string requested)
+    {
+        var response = await new ClaudeCliProvider(new FakeRunner(Ok(WithHelper)))
+            .CompleteAsync(new ProviderRequest(requested, "s", "u"), default);
+
+        Assert.Equal("pong", response.Text);
+        Assert.Equal("claude-opus-5-5", response.Model);   // labelled with the model that answered, not the helper
+        Assert.Equal(0.0001244m + 0.00728m, response.Usd);  // but the helper's cost still counts
+    }
+
+    [Fact]
+    public async Task A_helper_alone_means_the_requested_model_never_answered()
+    {
+        const string onlyHelper =
+            """{"type":"result","is_error":false,"result":"x","modelUsage":{"claude-haiku-5-5":{"inputTokens":10,"outputTokens":5,"costUSD":0.0001},"claude-opus-5-5":{"inputTokens":3,"outputTokens":0,"costUSD":0.0}}}""";
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new ClaudeCliProvider(new FakeRunner(Ok(onlyHelper))).CompleteAsync(new ProviderRequest("claude-opus-5-5", "s", "u"), default));
+        Assert.Contains("claude-haiku-5-5", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task The_exact_full_model_id_is_accepted()
+    {
+        var response = await new ClaudeCliProvider(new FakeRunner(Ok(Result)))
+            .CompleteAsync(new ProviderRequest("claude-opus-5-5", "s", "u"), default);
+        Assert.Equal("claude-opus-5-5", response.Model);
+    }
+
+    [Fact]
+    public async Task A_full_model_id_that_cannot_be_verified_is_refused()
+    {
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new ClaudeCliProvider(new FakeRunner(Ok("""{"is_error":false,"result":"hi"}""")))
+                .CompleteAsync(new ProviderRequest("claude-opus-5-5", "s", "u"), default));
+    }
+
+    [Theory]
+    [InlineData("claude-opus-5-5", "claude-opus-5-5", true)]
+    [InlineData("claude-opus-5-5", "Claude-Opus-5-5", true)]
+    [InlineData("claude-opus-5-5", "claude-opus-5-5[1m]", true)]
+    [InlineData("claude-opus-5-5", "claude-opus-5-5-20261101", true)]
+    [InlineData("claude-opus-5-5", "claude-opus-4-1", false)]
+    [InlineData("claude-opus-5-5", "claude-sonnet-5-5", false)]
+    [InlineData("claude-opus-5", "claude-opus-5-5", false)]   // a full id is never a prefix
+    [InlineData("opus", "claude-opus-5-5", true)]             // an alias means "that family"
+    [InlineData("opus", "claude-sonnet-5-5", false)]
+    public void Model_matching(string requested, string actual, bool expected) =>
+        Assert.Equal(expected, ClaudeCliProvider.ModelMatches(requested, actual));
+
+    [Fact]
     public void Config_rejects_an_unknown_architect_provider_kind()
     {
         var policy = new Policy { ArchitectProvider = { Kind = "carrier-pigeon" } };

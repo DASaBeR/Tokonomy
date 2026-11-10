@@ -39,7 +39,7 @@ public static partial class EnvironmentBuilder
         var env = new Dictionary<string, string>(KeyComparer);
         foreach (var (key, value) in source)
         {
-            if (allowed.Contains(key) && !LooksSecret(key))
+            if (allowed.Contains(key) && !LooksSecret(key) && !LooksSecretValue(value))
             {
                 env[key] = value;
             }
@@ -59,7 +59,7 @@ public static partial class EnvironmentBuilder
         var env = new Dictionary<string, string>(KeyComparer);
         foreach (var (key, value) in Snapshot(parent))
         {
-            if (!remove.Contains(key) && !LooksSecret(key))
+            if (!remove.Contains(key) && !LooksSecret(key) && !LooksSecretValue(value))
             {
                 env[key] = value;
             }
@@ -69,6 +69,12 @@ public static partial class EnvironmentBuilder
     }
 
     public static bool LooksSecret(string name) => SecretName().IsMatch(name);
+
+    /// <summary>
+    /// A value carrying credentials whatever its name: a URL with <c>user:password@</c> (proxy settings, database URLs)
+    /// or a connection string with a password. Such values are dropped even from allowlisted names.
+    /// </summary>
+    public static bool LooksSecretValue(string value) => SecretValue().IsMatch(value);
 
     private static StringComparer KeyComparer => OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
@@ -87,6 +93,14 @@ public static partial class EnvironmentBuilder
         return list;
     }
 
-    [GeneratedRegex(@"(API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|PRIVATE_KEY|ACCESS_KEY|AUTH)", RegexOptions.IgnoreCase)]
+    // Credentials by name, plus handles that grant access without being a secret themselves: an SSH or GPG agent socket
+    // lets any child process sign or authenticate as the user (e.g. push to GitHub).
+    [GeneratedRegex(
+        @"(API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|(^|_)PASS($|_)|CREDENTIAL|PRIVATE_KEY|ACCESS_KEY|AUTH|COOKIE|SESSION|" +
+        @"DATABASE_URL|CONNECTION_?STRING|(^|_)DSN$|SSH_AUTH_SOCK|SSH_AGENT|GPG_AGENT|GNUPGHOME|KEYCHAIN|_SOCK$)",
+        RegexOptions.IgnoreCase)]
     private static partial Regex SecretName();
+
+    [GeneratedRegex(@"[a-z][a-z0-9+.\-]*://[^/\s:@]+:[^/\s@]+@|(^|;)\s*(password|pwd)\s*=", RegexOptions.IgnoreCase)]
+    private static partial Regex SecretValue();
 }

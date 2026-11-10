@@ -23,6 +23,64 @@ public sealed record RunResult
 
     /// <summary>LLM usage the executor itself reported (see <c>usage_format</c>); empty when it reports none.</summary>
     public IReadOnlyList<WorkerUsage> Usage { get; init; } = [];
+
+    /// <summary>
+    /// Set when the executor ran but the run cannot be trusted as a finished implementation: a non-zero exit, an error
+    /// status, a tool call the permission policy auto-denied, or a different model than the one requested.
+    /// The supervisor never accepts a faulted run, whatever the gates say.
+    /// </summary>
+    public WorkerFault? Fault { get; init; }
+
+    /// <summary>The model the executor says it actually used, when it reports one.</summary>
+    public string? ReportedModel { get; init; }
+
+    /// <summary>Execution metadata the executor reported (conversation id, shell commands run, denied actions).</summary>
+    public ExecutorAudit? Audit { get; init; }
+}
+
+public enum WorkerFaultKind
+{
+    /// <summary>The process exited with a non-zero code.</summary>
+    ProcessFailed,
+
+    /// <summary>The process exited 0 but its own result says it failed (error status).</summary>
+    ReportedError,
+
+    /// <summary>A tool call was auto-denied because headless mode cannot prompt; the session ended early.</summary>
+    PermissionDenied,
+
+    /// <summary>The executor used a different model than requested. Never retried and never papered over.</summary>
+    ModelMismatch,
+
+    /// <summary>No parsable result at all: nothing proves the run completed.</summary>
+    NoResult,
+
+    /// <summary>
+    /// The worktree was tampered with in a way no legitimate edit needs: a symlink, junction or hard link appeared, the
+    /// <c>.git</c> pointer was changed, or a file Tokonomy manages was replaced. Never retried and never taken over.
+    /// </summary>
+    WorkspaceViolation,
+}
+
+public sealed record WorkerFault(WorkerFaultKind Kind, string Detail)
+{
+    public override string ToString() => $"{Kind}: {Detail}";
+}
+
+/// <summary>What an executor reported about one run, kept for the audit trail.</summary>
+public sealed record ExecutorAudit
+{
+    public string? ConversationId { get; init; }
+    public string? Status { get; init; }
+
+    /// <summary>Shell commands the agent actually ran (its own tool calls, in order).</summary>
+    public IReadOnlyList<string> Commands { get; init; } = [];
+
+    /// <summary>Tool calls the permission policy refused, e.g. <c>command: python -c ...</c>.</summary>
+    public IReadOnlyList<string> Denied { get; init; } = [];
+
+    /// <summary>Isolation caveats that applied to this run (for example "temp directory writable").</summary>
+    public IReadOnlyList<string> Notes { get; init; } = [];
 }
 
 /// <summary>Tokens and cost an executor reported for one model during an attempt. <c>Usd</c> is null when unknown.</summary>
@@ -47,6 +105,21 @@ public sealed record GateResult
 
     public bool Blocking => Status == GateStatus.Failed;
 }
+
+public enum ReviewVerdict
+{
+    Approve,
+    Concerns,
+
+    /// <summary>The review could not be obtained (architect call failed or the reply was unreadable).</summary>
+    Unavailable,
+}
+
+/// <summary>
+/// The architect's read of the combined diff after every unit passed its gates. Advisory only: gates outrank opinions,
+/// so a review never turns a passing run into a failing one; it surfaces concerns for the human who merges.
+/// </summary>
+public sealed record FinalReview(ReviewVerdict Verdict, string Summary, IReadOnlyList<string> Concerns, string Model = "");
 
 public enum DecisionKind
 {
@@ -76,10 +149,13 @@ public enum TakeoverTrigger
 
     /// <summary>The diff adds a dependency: a human decision.</summary>
     NewDependency,
+
+    /// <summary>The worker run itself faulted (crash, error status, denied tool call) on every attempt.</summary>
+    WorkerFault,
 }
 
 public sealed record Decision(DecisionKind Kind, string Reason, TakeoverTrigger Trigger = TakeoverTrigger.None)
 {
     /// <summary>True when an architect edit can fix the problem (as opposed to needing a human).</summary>
-    public bool CanTakeOver => Kind == DecisionKind.Takeover && Trigger is TakeoverTrigger.GateFailures or TakeoverTrigger.NoChanges or TakeoverTrigger.Timeout;
+    public bool CanTakeOver => Kind == DecisionKind.Takeover && Trigger is TakeoverTrigger.GateFailures or TakeoverTrigger.NoChanges or TakeoverTrigger.Timeout or TakeoverTrigger.WorkerFault;
 }
