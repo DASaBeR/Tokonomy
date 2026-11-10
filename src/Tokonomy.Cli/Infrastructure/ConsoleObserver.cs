@@ -9,6 +9,21 @@ namespace Tokonomy.Cli.Infrastructure;
 internal sealed class ConsoleObserver(IAnsiConsole console, Contract? contract = null) : IRunObserver, IDisposable
 {
     private readonly Working _working = new(console);
+    private long _tokens;
+    private decimal _spent;
+    private bool _any;
+
+    private string Live => _any ? $" · {Ui.Money(_spent, false)} · {Tokens(_tokens)} tokens" : "";
+
+    private static string Tokens(long n) => n >= 1000 ? $"{n / 1000.0:0.#}k" : n.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
+    public void Usage(LlmRole role, string model, long inputTokens, long outputTokens, decimal usd, decimal totalUsd)
+    {
+        _tokens += inputTokens + outputTokens;
+        _spent = totalUsd;
+        _any = true;
+        _working.Extra = () => Live;
+    }
 
     public void Stage(string message)
     {
@@ -51,7 +66,7 @@ internal sealed class ConsoleObserver(IAnsiConsole console, Contract? contract =
             _ => ("✗", "red", "failed"),
         };
         var how = run.TimedOut ? "timed out" : $"{diff.ChangedPaths.Count} file(s), {diff.TotalLines} line(s)";
-        console.MarkupLine($"  [{color}]{mark}[/] attempt {attempt}: {how}{gateText}  [{color}]{verdict}[/]");
+        console.MarkupLine($"  [{color}]{mark}[/] attempt {attempt}: {how}{gateText}  [{color}]{verdict}[/]{(_any ? $"  [grey]{Markup.Escape(Live.TrimStart(' ', '·'))}[/]" : "")}");
         if (decision.Kind != DecisionKind.Accept)
         {
             console.MarkupLine($"    [grey]{Markup.Escape(Ui.Shorten(decision.Reason, 200))}[/]");

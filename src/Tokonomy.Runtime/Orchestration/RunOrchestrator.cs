@@ -77,6 +77,9 @@ public interface IRunObserver
     void AttemptFinished(WorkUnit unit, int attempt, RunResult run, UnitDiff diff, IReadOnlyList<GateResult> gates, Decision decision) { }
     void Warning(string message) { }
     void TakeoverFinished(WorkUnit unit, bool success, string note) { }
+
+    /// <summary>One model call was billed. <paramref name="totalUsd"/> is the run's spend so far (including earlier planning cost).</summary>
+    void Usage(LlmRole role, string model, long inputTokens, long outputTokens, decimal usd, decimal totalUsd) { }
 }
 
 /// <summary>PLAN is done by the caller. This runs PREPARE → (EXECUTE → GATE → DECIDE)* per unit → LEDGER.</summary>
@@ -94,11 +97,13 @@ public sealed class RunOrchestrator(
 
     // Unit currently executing, so metered worker calls (reported on proxy threads) are attributed to it.
     private volatile string? _currentUnit;
+    private volatile IRunObserver? _usageObserver;
 
     public async Task<RunOutcome> RunAsync(RunRequest request, IRunObserver? observer, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(request);
         observer ??= new NullObserver();
+        _usageObserver = observer;
         var policy = request.Policy;
         var artifacts = request.Artifacts;
         var units = new List<UnitOutcome>();
@@ -702,6 +707,19 @@ public sealed class RunOrchestrator(
                 Source = CostSource.Estimated,
             });
             budget.Add(usd);
+            NotifyUsage(LlmRole.Worker, usage.Model, usage.InputTokens + usage.CachedTokens, usage.OutputTokens, usd, budget);
+        }
+    }
+
+    private void NotifyUsage(LlmRole role, string model, long input, long output, decimal usd, BudgetGuard budget)
+    {
+        try
+        {
+            _usageObserver?.Usage(role, model, input, output, usd, budget.Spent);
+        }
+        catch
+        {
+            // A display problem must never break a run (this can be called from the metering proxy's thread).
         }
     }
 
@@ -720,6 +738,7 @@ public sealed class RunOrchestrator(
             Source = response.Usd is null || response.Estimated ? CostSource.Estimated : CostSource.Metered,
         });
         budget.Add(response.Usd ?? 0);
+        NotifyUsage(LlmRole.Architect, response.Model, response.InputTokens, response.OutputTokens, response.Usd ?? 0, budget);
     }
 
     /// <summary>Applies strategy limits on top of the supervisor's policy decision, for escalations that are not taken.</summary>
@@ -980,6 +999,7 @@ public sealed class RunOrchestrator(
                     Source = estimated ? CostSource.Estimated : CostSource.Metered,
                 });
                 budget.Add(usage.Usd ?? 0);
+                NotifyUsage(LlmRole.Worker, usage.Model, usage.InputTokens, usage.OutputTokens, usage.Usd ?? 0, budget);
             },
             () => budget.Exhausted);
     }

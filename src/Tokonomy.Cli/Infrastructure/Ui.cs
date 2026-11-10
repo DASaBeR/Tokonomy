@@ -171,6 +171,9 @@ internal sealed class Working(IAnsiConsole console) : IDisposable
     private Task? _task;
     private volatile string _text = "";
 
+    /// <summary>Extra live text shown after the elapsed time, e.g. the running cost.</summary>
+    public Func<string>? Extra { get; set; }
+
     public void Start(string text)
     {
         Stop();
@@ -186,7 +189,7 @@ internal sealed class Working(IAnsiConsole console) : IDisposable
         {
             while (!stop.IsCancellationRequested)
             {
-                ctx.Status($"{Markup.Escape(_text)} [grey]{Ui.Duration(watch.Elapsed)}[/]");
+                ctx.Status($"{Markup.Escape(_text)} [grey]{Ui.Duration(watch.Elapsed)}{Markup.Escape(Extra?.Invoke() ?? "")}[/]");
                 try
                 {
                     await Task.Delay(300, stop.Token);
