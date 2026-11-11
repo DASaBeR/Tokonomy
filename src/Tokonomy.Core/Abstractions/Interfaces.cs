@@ -30,6 +30,9 @@ public sealed class UnitState
     public IReadOnlyList<string> ChangedPaths { get; set; } = [];
     public int DiffLines { get; set; }
     public bool AddedDependency { get; set; }
+
+    /// <summary>The packages behind <see cref="AddedDependency"/> that are not pre-approved, for the message shown to the user.</summary>
+    public IReadOnlyList<string> AddedDependencyNames { get; set; } = [];
 }
 
 /// <summary>Chat access to the architect model. Implemented over an OpenAI-compatible endpoint or the Claude Code CLI.</summary>

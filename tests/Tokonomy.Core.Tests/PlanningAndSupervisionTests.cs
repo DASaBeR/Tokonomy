@@ -142,6 +142,19 @@ public class SupervisorTests
     }
 
     [Fact]
+    public void The_stop_names_the_packages_that_need_a_decision()
+    {
+        var state = State();
+        state.AddedDependency = true;
+        state.AddedDependencyNames = ["xunit", "Newtonsoft.Json"];
+
+        var decision = Sut.Decide(state, Ok, [], Policy());
+
+        Assert.Equal(TakeoverTrigger.NewDependency, decision.Trigger);
+        Assert.Contains("xunit, Newtonsoft.Json", decision.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Timeout_triggers_takeover() =>
         Assert.Equal(DecisionKind.Takeover, Sut.Decide(State(), Ok with { TimedOut = true }, [], Policy()).Kind);
 

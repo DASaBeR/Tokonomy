@@ -68,7 +68,8 @@ public sealed class Supervisor : ISupervisor
 
         if (unit.AddedDependency && esc.ReviewOnNewDependency)
         {
-            return new(DecisionKind.Takeover, "a new dependency was added", TakeoverTrigger.NewDependency);
+            var named = unit.AddedDependencyNames.Count > 0 ? $": {string.Join(", ", unit.AddedDependencyNames.Take(8))}" : "";
+            return new(DecisionKind.Takeover, $"a new dependency was added{named}", TakeoverTrigger.NewDependency);
         }
 
         if (run.TimedOut)

@@ -40,6 +40,7 @@ escalation:
   protected_paths: ["src/auth/**", "migrations/**"]   # .tokonomy/** is always protected
   max_diff_lines: 400          # larger diffs are rejected and the unit is split
   review_on_new_dependency: true
+  allowed_dependencies: ["xunit", "xunit.runner.visualstudio", "Microsoft.NET.Test.Sdk"]   # approved in advance; a trailing * matches a prefix
   worker_timeout_seconds: 1200
   final_review: false                  # one advisory architect review of the combined diff after every unit passed
 
@@ -67,7 +68,7 @@ Checked in order after every attempt; the first match decides.
 |---|---|---|
 | 1 | Diff larger than `max_diff_lines` | Split (the unit is mis-sized) |
 | 2 | Diff touches `.tokonomy/**` or a `protected_paths` glob | Takeover |
-| 3 | New dependency and `review_on_new_dependency` | Takeover |
+| 3 | New dependency (not listed in `allowed_dependencies`) and `review_on_new_dependency` | Takeover (a human decision, so the run stops and names the packages) |
 | 4 | Worker timed out | Takeover |
 | 5 | No changes | Retry, or Takeover at the limit |
 | 6 | A gate has new failures | Retry with gate output as feedback, or Takeover at the limit |

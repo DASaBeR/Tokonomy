@@ -4,9 +4,11 @@ using System.Text;
 
 namespace Tokonomy.Runtime.Git;
 
-public sealed record UnitDiff(IReadOnlyList<string> ChangedPaths, int AddedLines, int DeletedLines, string Patch, bool AddedDependency)
+public sealed record UnitDiff(IReadOnlyList<string> ChangedPaths, int AddedLines, int DeletedLines, string Patch, DependencyDetector.Change Dependencies)
 {
     public int TotalLines => AddedLines + DeletedLines;
+
+    public bool AddedDependency => Dependencies.Any;
 }
 
 /// <summary>A configured worktree location that is not safe to use.</summary>
@@ -156,8 +158,8 @@ public sealed class RunWorkspace
         }
 
         var patch = paths.Count == 0 ? "" : await Git(["diff", "--cached", "--no-renames", since], ct);
-        var addedDependency = await DependencyDetector.DetectAsync(paths, patch, p => ShowAsync(since, p, ct), p => ReadWorktreeFile(p));
-        return new UnitDiff(paths, added, deleted, patch, addedDependency);
+        var dependencies = await DependencyDetector.FindAsync(paths, patch, p => ShowAsync(since, p, ct), p => ReadWorktreeFile(p));
+        return new UnitDiff(paths, added, deleted, patch, dependencies);
     }
 
     public async Task<string> CommitAsync(string message, CancellationToken ct)

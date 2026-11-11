@@ -70,6 +70,74 @@ public class RunWorkspaceTests
     }
 }
 
+public class DependencyNamesTests
+{
+    private static Task<DependencyDetector.Change> Find(string file, params string[] addedLines) =>
+        DependencyDetector.FindAsync([file], $"+++ b/{file}\n" + string.Join("", addedLines.Select(l => "+" + l + "\n")),
+            _ => Task.FromResult<string?>(null), _ => null);
+
+    [Fact]
+    public async Task Names_dotnet_packages_and_ignores_project_references()
+    {
+        var change = await Find("tests/T.csproj",
+            "    <PackageReference Include=\"xunit\" Version=\"2.9.2\" />",
+            "    <PackageReference Include=\"Microsoft.NET.Test.Sdk\" Version=\"17.12.0\" />",
+            "    <ProjectReference Include=\"..\\src\\Core.csproj\" />");
+
+        Assert.Equal(["xunit", "Microsoft.NET.Test.Sdk"], change.Names);
+        Assert.False(change.Unnamed);
+    }
+
+    [Fact]
+    public async Task A_package_line_without_a_name_counts_as_unnamed_never_as_approved()
+    {
+        var change = await Find("App.csproj", "    <PackageReference Version=\"1.0\"");
+
+        Assert.True(change.Unnamed);
+        Assert.True(change.Unapproved(["*"]).Any);
+    }
+
+    [Theory]
+    [InlineData("requirements.txt", "requests==2.32.0", "requests")]
+    [InlineData("pyproject.toml", "    \"httpx>=0.27\",", "httpx")]
+    public async Task Names_python_packages(string file, string line, string expected) =>
+        Assert.Equal([expected], (await Find(file, line)).Names);
+
+    [Fact]
+    public async Task Lockfiles_and_unparsed_manifests_are_unnamed()
+    {
+        Assert.True((await Find("poetry.lock", "anything")).Unnamed);
+        Assert.True((await Find("go.mod", "\tgithub.com/pkg/errors v0.9.1")).Unnamed);
+    }
+
+    [Fact]
+    public async Task Names_added_npm_packages_only()
+    {
+        var change = await DependencyDetector.FindAsync(["package.json"], "",
+            _ => Task.FromResult<string?>("""{ "dependencies": { "a": "1" } }"""),
+            _ => """{ "dependencies": { "a": "2", "left-pad": "1" } }""");
+
+        Assert.Equal(["left-pad"], change.Names);
+    }
+
+    [Fact]
+    public void Approved_packages_are_removed_exactly_ignoring_case_or_by_prefix()
+    {
+        var change = new DependencyDetector.Change(["xunit", "XUnit.Runner.VisualStudio", "Microsoft.NET.Test.Sdk", "Newtonsoft.Json"], false);
+
+        Assert.Equal(["Newtonsoft.Json"], change.Unapproved(["XUNIT", "xunit.*", "Microsoft.*"]).Names);
+        Assert.False(new DependencyDetector.Change(["xunit"], false).Unapproved(["xunit"]).Any);
+    }
+
+    [Fact]
+    public void An_allow_list_never_covers_a_change_that_has_no_package_name()
+    {
+        var change = new DependencyDetector.Change(["xunit"], Unnamed: true);
+
+        Assert.True(change.Unapproved(["xunit", "*"]).Any);
+    }
+}
+
 public class DependencyDetectorTests
 {
     private static Task<bool> Detect(string file, string addedLine) =>

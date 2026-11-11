@@ -146,6 +146,7 @@ public static class Scaffolder
         sb.AppendLine("  protected_paths: []        # e.g. [\"src/auth/**\", \"migrations/**\"]");
         sb.AppendLine("  max_diff_lines: 400        # larger diffs are rejected and the unit is split");
         sb.AppendLine("  review_on_new_dependency: true");
+        sb.AppendLine("  allowed_dependencies: []   # packages you approve in advance, e.g. [xunit, \"Microsoft.*\"]; a trailing * matches a prefix");
         sb.AppendLine("  worker_timeout_seconds: 1200");
         sb.AppendLine();
         sb.AppendLine("budget:");

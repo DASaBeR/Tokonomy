@@ -370,7 +370,9 @@ public sealed class RunOrchestrator(
             var diff = await workspace.DiffAsync(unitStart, ct);
             state.ChangedPaths = diff.ChangedPaths;
             state.DiffLines = diff.TotalLines;
-            state.AddedDependency = diff.AddedDependency;
+            var unapproved = diff.Dependencies.Unapproved(policy.Escalation.AllowedDependencies);
+            state.AddedDependency = unapproved.Any;
+            state.AddedDependencyNames = unapproved.Unnamed ? [.. unapproved.Names, "(a lockfile or manifest change with no package name)"] : unapproved.Names;
             if (diff.Patch.Length > 0)
             {
                 artifacts.WriteLog($"{brief.Label}.diff", diff.Patch);
@@ -766,7 +768,10 @@ public sealed class RunOrchestrator(
 
             if (!decision.CanTakeOver)
             {
-                return new Decision(DecisionKind.Fail, $"{decision.Reason}; this needs a human decision, not an architect edit");
+                var approve = decision.Trigger == TakeoverTrigger.NewDependency
+                    ? "; approve packages in advance with escalation.allowed_dependencies in .tokonomy/policy.yaml"
+                    : "";
+                return new Decision(DecisionKind.Fail, $"{decision.Reason}; this needs a human decision, not an architect edit{approve}");
             }
 
             var why = !architectAvailable ? "no architect provider" : "takeover limit reached for this unit";

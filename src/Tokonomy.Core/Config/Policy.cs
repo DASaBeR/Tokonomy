@@ -224,6 +224,13 @@ public sealed class EscalationConfig
     public List<string> ProtectedPaths { get; set; } = [];
     public int MaxDiffLines { get; set; } = 400;
     public bool ReviewOnNewDependency { get; set; } = true;
+
+    /// <summary>
+    /// Packages the user approves in advance, so adding them does not stop a unit for review: an exact name
+    /// (<c>xunit</c>) or a prefix ending in <c>*</c> (<c>Microsoft.*</c>, <c>@types/*</c>). Names are compared ignoring case.
+    /// A dependency change that cannot be tied to a package name (a lockfile, <c>go.mod</c>, ...) is never covered by this.
+    /// </summary>
+    public List<string> AllowedDependencies { get; set; } = [];
     public int WorkerTimeoutSeconds { get; set; } = 1200;
 
     /// <summary>
