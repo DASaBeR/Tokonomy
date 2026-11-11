@@ -12,9 +12,10 @@ namespace Tokonomy.Runtime.Providers;
 /// written to a file. Provider keys are scrubbed from the child environment, so the login Codex holds decides who is billed.
 /// Tokens come from the JSON event stream; cost is never reported, so it is recorded as estimated.
 /// </summary>
-public sealed class CodexCliProvider(IProcessRunner runner, string command = "codex", TimeSpan? timeout = null) : IProvider
+public sealed class CodexCliProvider(IProcessRunner runner, string command = "codex", TimeSpan? timeout = null, TimeSpan? idleTimeout = null) : IProvider
 {
-    private readonly TimeSpan _timeout = timeout ?? TimeSpan.FromMinutes(10);
+    private readonly TimeSpan _timeout = timeout ?? ArchitectTimeouts.Default;
+    private readonly TimeSpan _idle = idleTimeout ?? ArchitectTimeouts.Idle;
 
     public async Task<ProviderResponse> CompleteAsync(ProviderRequest request, CancellationToken ct)
     {
@@ -48,7 +49,7 @@ public sealed class CodexCliProvider(IProcessRunner runner, string command = "co
                 prompt.AppendLine().AppendLine("Answer with a single JSON object only, without a code fence. Do not run commands.");
             }
 
-            var outcome = await runner.RunAsync(new ProcessSpec
+            var outcome = await StreamedProcessCall.RunAsync(runner, new ProcessSpec
             {
                 Args = args,
                 WorkingDirectory = workDir,
@@ -57,7 +58,7 @@ public sealed class CodexCliProvider(IProcessRunner runner, string command = "co
                 Timeout = _timeout,
                 Proxy = ProxySettings.Current.ForProvider("codex"),
                 StdinText = prompt.ToString(),
-            }, ct);
+            }, request, StreamedChars, "Codex", _idle, ct);
 
             if (outcome.TimedOut)
             {
@@ -80,6 +81,33 @@ public sealed class CodexCliProvider(IProcessRunner runner, string command = "co
             {
             }
         }
+    }
+
+    /// <summary>
+    /// Characters of text in one <c>--json</c> event line. Codex reports whole items (a message, its reasoning) rather than
+    /// deltas, so progress moves in steps; every line still counts as proof the connection is alive.
+    /// </summary>
+    internal static int StreamedChars(string line)
+    {
+        if (!line.Contains("item.completed", StringComparison.Ordinal))
+        {
+            return 0;
+        }
+
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(line);
+            if (doc.RootElement.TryGetProperty("item", out var item) &&
+                item.TryGetProperty("text", out var text) && text.ValueKind == System.Text.Json.JsonValueKind.String)
+            {
+                return text.GetString()!.Length;
+            }
+        }
+        catch (System.Text.Json.JsonException)
+        {
+        }
+
+        return 0;
     }
 
     internal static ProviderResponse Parse(int exitCode, string stdout, string stderr, string answerFileText, string requestedModel)

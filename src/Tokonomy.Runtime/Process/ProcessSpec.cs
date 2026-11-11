@@ -15,6 +15,15 @@ public sealed record ProcessSpec
     public TimeSpan? Timeout { get; init; }
 
     /// <summary>
+    /// Ends the process when it prints nothing (stdout or stderr) for this long, even if <see cref="Timeout"/> has not
+    /// passed. For a call that streams its answer, silence means a dead connection, not a slow model.
+    /// </summary>
+    public TimeSpan? IdleTimeout { get; init; }
+
+    /// <summary>Called with each complete stdout line as it arrives (on a background thread). Must not throw.</summary>
+    public Action<string>? OnStdoutLine { get; init; }
+
+    /// <summary>
     /// The proxy settings for this process (already narrowed to its connection, see <c>ProxySettings.ForProvider</c>).
     /// Unset: the user's proxy as it applies to "other" tools such as git and the gates.
     /// </summary>
@@ -38,6 +47,9 @@ public sealed record ProcessOutcome
 {
     public required int ExitCode { get; init; }
     public required bool TimedOut { get; init; }
+
+    /// <summary>The process was ended because it went silent for <see cref="ProcessSpec.IdleTimeout"/> (also reported as <see cref="TimedOut"/>).</summary>
+    public bool IdledOut { get; init; }
     public required TimeSpan Duration { get; init; }
     public required string Stdout { get; init; }
     public required string Stderr { get; init; }

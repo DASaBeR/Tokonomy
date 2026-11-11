@@ -79,9 +79,27 @@ internal static class ClarifyPrompt
     }
 }
 
-/// <summary>Shows a spinner around each architect call, so a question prompt between two calls is never inside a spinner.</summary>
+/// <summary>
+/// Shows a spinner around each architect call, so a question prompt between two calls is never inside a spinner. When the
+/// provider streams its answer, the spinner also shows how much has been written so far.
+/// </summary>
 internal sealed class SpinningProvider(IProvider inner, IAnsiConsole console, string text) : IProvider
 {
-    public Task<ProviderResponse> CompleteAsync(ProviderRequest request, CancellationToken ct) =>
-        Ui.SpinAsync(console, text, () => inner.CompleteAsync(request, ct));
+    public Task<ProviderResponse> CompleteAsync(ProviderRequest request, CancellationToken ct)
+    {
+        ProviderProgress? latest = null;
+        return Ui.SpinAsync(console, text,
+            () => inner.CompleteAsync(request with { OnProgress = p => Volatile.Write(ref latest, p) }, ct),
+            () => Describe(Volatile.Read(ref latest)));
+    }
+
+    internal static string? Describe(ProviderProgress? p) => p switch
+    {
+        null => null,
+        { Retrying: true, OutputChars: 0 } => "connection stalled, asking again",
+        { Retrying: true } => $"asking again · ~{Tokens(p.ApproxTokens)} tokens written",
+        _ => $"~{Tokens(p.ApproxTokens)} tokens written",
+    };
+
+    private static string Tokens(long n) => n >= 1000 ? (n / 1000.0).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture) + "k" : n.ToString(System.Globalization.CultureInfo.InvariantCulture);
 }

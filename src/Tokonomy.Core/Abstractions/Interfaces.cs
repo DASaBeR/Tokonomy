@@ -38,7 +38,18 @@ public interface IProvider
     Task<ProviderResponse> CompleteAsync(ProviderRequest request, CancellationToken ct);
 }
 
-public sealed record ProviderRequest(string Model, string System, string User, bool JsonOutput = false);
+public sealed record ProviderRequest(string Model, string System, string User, bool JsonOutput = false)
+{
+    /// <summary>Optional live progress from a provider that streams its answer (the Claude Code CLI does). Called on a background thread.</summary>
+    public Action<ProviderProgress>? OnProgress { get; init; }
+}
+
+/// <summary>What a streaming provider has produced so far. <see cref="Retrying"/> is true while it redoes a call whose connection went silent.</summary>
+public sealed record ProviderProgress(long OutputChars, bool Retrying = false)
+{
+    /// <summary>A rough token count (about 4 characters each), enough for a progress display.</summary>
+    public long ApproxTokens => OutputChars / 4;
+}
 
 /// <summary>A completed architect call. <see cref="Usd"/> is null when the model has no configured price.</summary>
 public sealed record ProviderResponse(

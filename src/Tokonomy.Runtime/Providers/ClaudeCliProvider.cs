@@ -12,12 +12,15 @@ namespace Tokonomy.Runtime.Providers;
 /// the system prompt from a file and the user prompt on stdin (so size and quoting never hit the command line).
 /// Anthropic variables are removed from the child environment so a stray API key cannot switch it to API billing.
 /// Cost and tokens come from Claude Code's JSON result and are always reported as estimated.
+/// The answer is streamed (<c>stream-json</c>): that gives live progress, and a call that goes silent (a dead connection,
+/// for example through a stalled proxy) is ended after <see cref="ArchitectTimeouts.Idle"/> and asked once more.
 /// </summary>
-public sealed class ClaudeCliProvider(IProcessRunner runner, string command = "claude", TimeSpan? timeout = null) : IProvider
+public sealed class ClaudeCliProvider(IProcessRunner runner, string command = "claude", TimeSpan? timeout = null, TimeSpan? idleTimeout = null) : IProvider
 {
     private static readonly string[] StrippedVariables = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"];
 
-    private readonly TimeSpan _timeout = timeout ?? TimeSpan.FromMinutes(10);
+    private readonly TimeSpan _timeout = timeout ?? ArchitectTimeouts.Default;
+    private readonly TimeSpan _idle = idleTimeout ?? ArchitectTimeouts.Idle;
 
     public async Task<ProviderResponse> CompleteAsync(ProviderRequest request, CancellationToken ct)
     {
@@ -31,7 +34,8 @@ public sealed class ClaudeCliProvider(IProcessRunner runner, string command = "c
 
             var args = new List<string>
             {
-                command, "-p", "--output-format", "json", "--no-session-persistence", "--disable-slash-commands",
+                command, "-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+                "--no-session-persistence", "--disable-slash-commands",
                 // No tools, no MCP servers and no user/project settings: the architect only writes text, and every tool
                 // definition or settings source Claude Code loads would be billed as input on each call (~35k tokens).
                 "--tools", "", "--strict-mcp-config", "--setting-sources", "",
@@ -44,7 +48,7 @@ public sealed class ClaudeCliProvider(IProcessRunner runner, string command = "c
 
             var proxy = ProxySettings.Current.ForProvider("claude");
             var env = EnvironmentBuilder.ForGate(StrippedVariables, null, proxy);
-            var outcome = await runner.RunAsync(new ProcessSpec
+            var outcome = await StreamedProcessCall.RunAsync(runner, new ProcessSpec
             {
                 Args = args,
                 WorkingDirectory = workDir,
@@ -53,7 +57,7 @@ public sealed class ClaudeCliProvider(IProcessRunner runner, string command = "c
                 Timeout = _timeout,
                 Proxy = proxy,
                 StdinText = request.User,
-            }, ct);
+            }, request, StreamedChars, "Claude Code", _idle, ct);
 
             if (outcome.TimedOut)
             {
@@ -75,6 +79,36 @@ public sealed class ClaudeCliProvider(IProcessRunner runner, string command = "c
             {
             }
         }
+    }
+
+    /// <summary>Characters of text or thinking carried by one stream-json line (0 for every other kind of line).</summary>
+    internal static int StreamedChars(string line)
+    {
+        if (!line.Contains("content_block_delta", StringComparison.Ordinal))
+        {
+            return 0;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(line);
+            if (doc.RootElement.TryGetProperty("event", out var ev) &&
+                ev.TryGetProperty("delta", out var delta))
+            {
+                foreach (var field in (ReadOnlySpan<string>)["text", "thinking"])
+                {
+                    if (delta.TryGetProperty(field, out var value) && value.ValueKind == JsonValueKind.String)
+                    {
+                        return value.GetString()!.Length;
+                    }
+                }
+            }
+        }
+        catch (JsonException)
+        {
+        }
+
+        return 0;
     }
 
     internal static ProviderResponse Parse(int exitCode, string stdout, string stderr, string requestedModel)

@@ -13,13 +13,14 @@ namespace Tokonomy.Runtime.Providers;
 /// stdin). The session may read that folder and nothing else: no writes, no commands, no other paths. The model that
 /// answered is checked against the one asked for, and a refused call or an error status fails the call instead of returning text.
 /// </summary>
-public sealed class AgyCliProvider(IProcessRunner runner, string command = "agy", TimeSpan? timeout = null, string? scratchRoot = null) : IProvider
+public sealed class AgyCliProvider(IProcessRunner runner, string command = "agy", TimeSpan? timeout = null, string? scratchRoot = null, TimeSpan? idleTimeout = null) : IProvider
 {
     private const string Instruction =
         "Read the file PROMPT.md in the current directory and do exactly what it says. Use no tool other than reading that file. " +
         "Reply with only the requested answer, with no preamble.";
 
-    private readonly TimeSpan _timeout = timeout ?? TimeSpan.FromMinutes(10);
+    private readonly TimeSpan _timeout = timeout ?? ArchitectTimeouts.Default;
+    private readonly TimeSpan _idle = idleTimeout ?? ArchitectTimeouts.Idle;
 
     public async Task<ProviderResponse> CompleteAsync(ProviderRequest request, CancellationToken ct)
     {
@@ -61,7 +62,7 @@ public sealed class AgyCliProvider(IProcessRunner runner, string command = "agy"
                 args.AddRange(["--model", request.Model]);
             }
 
-            var outcome = await runner.RunAsync(new ProcessSpec
+            var outcome = await StreamedProcessCall.RunAsync(runner, new ProcessSpec
             {
                 Args = args,
                 WorkingDirectory = workDir,
@@ -69,7 +70,7 @@ public sealed class AgyCliProvider(IProcessRunner runner, string command = "agy"
                 ReplaceEnvironment = true,
                 Timeout = _timeout,
                 Proxy = ProxySettings.Current.ForProvider("antigravity"),
-            }, ct);
+            }, request, StreamedChars, "Antigravity", _idle, ct);
 
             if (outcome.TimedOut)
             {
@@ -91,6 +92,30 @@ public sealed class AgyCliProvider(IProcessRunner runner, string command = "agy"
             {
             }
         }
+    }
+
+    /// <summary>Characters of answer text in one stream-json line: <c>step_update.text_delta</c> of the model's response.</summary>
+    internal static int StreamedChars(string line)
+    {
+        if (!line.Contains("text_delta", StringComparison.Ordinal))
+        {
+            return 0;
+        }
+
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(line);
+            if (doc.RootElement.TryGetProperty("step_update", out var step) &&
+                step.TryGetProperty("text_delta", out var delta) && delta.ValueKind == System.Text.Json.JsonValueKind.String)
+            {
+                return delta.GetString()!.Length;
+            }
+        }
+        catch (System.Text.Json.JsonException)
+        {
+        }
+
+        return 0;
     }
 
     internal static ProviderResponse Parse(int exitCode, string stdout, string stderr, string requestedModel)

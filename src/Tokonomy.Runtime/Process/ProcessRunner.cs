@@ -45,8 +45,10 @@ public sealed class ProcessRunner : IProcessRunner
 
         process.StandardInput.Close();
 
-        var stdout = new StreamCapture(spec.MaxCaptureChars, spec.StdoutFile, spec.MaxFileBytes);
-        var stderr = new StreamCapture(spec.MaxCaptureChars, spec.StderrFile, spec.MaxFileBytes);
+        long lastActivity = System.Environment.TickCount64;
+        void Touch() => Interlocked.Exchange(ref lastActivity, System.Environment.TickCount64);
+        var stdout = new StreamCapture(spec.MaxCaptureChars, spec.StdoutFile, spec.MaxFileBytes, Touch, spec.OnStdoutLine);
+        var stderr = new StreamCapture(spec.MaxCaptureChars, spec.StderrFile, spec.MaxFileBytes, Touch, null);
         var stdoutTask = stdout.PumpAsync(process.StandardOutput);
         var stderrTask = stderr.PumpAsync(process.StandardError);
 
@@ -54,6 +56,29 @@ public sealed class ProcessRunner : IProcessRunner
         using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
 
         var timedOut = false;
+        var idledOut = false;
+        using var idleStop = new CancellationTokenSource();
+        var idleMonitor = spec.IdleTimeout is { } idle
+            ? Task.Run(async () =>
+            {
+                try
+                {
+                    while (true)
+                    {
+                        await Task.Delay(500, idleStop.Token);
+                        if (System.Environment.TickCount64 - Interlocked.Read(ref lastActivity) >= idle.TotalMilliseconds)
+                        {
+                            idledOut = true;
+                            await timeoutCts.CancelAsync();
+                            return;
+                        }
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }, idleStop.Token)
+            : Task.CompletedTask;
         try
         {
             await process.WaitForExitAsync(linked.Token);
@@ -73,6 +98,8 @@ public sealed class ProcessRunner : IProcessRunner
             timedOut = true;
         }
 
+        await idleStop.CancelAsync();
+        await idleMonitor;
         await DrainAsync(stdoutTask, stderrTask);
         stopwatch.Stop();
         stdout.Dispose();
@@ -82,6 +109,7 @@ public sealed class ProcessRunner : IProcessRunner
         {
             ExitCode = timedOut ? -1 : process.ExitCode,
             TimedOut = timedOut,
+            IdledOut = idledOut && timedOut,
             Duration = stopwatch.Elapsed,
             Stdout = stdout.Text,
             Stderr = stderr.Text,
@@ -165,8 +193,10 @@ public sealed class ProcessRunner : IProcessRunner
         await Task.WhenAny(Task.WhenAll(a, b), Task.Delay(DrainGrace));
     }
 
-    private sealed class StreamCapture(int maxChars, string? filePath, long maxFileBytes) : IDisposable
+    private sealed class StreamCapture(int maxChars, string? filePath, long maxFileBytes, Action? onActivity, Action<string>? onLine) : IDisposable
     {
+        private readonly StringBuilder _line = new();
+
         private readonly StringBuilder _buffer = new();
         private readonly Lock _gate = new();
         private StreamWriter? _file;
@@ -198,6 +228,8 @@ public sealed class ProcessRunner : IProcessRunner
             int read;
             while ((read = await reader.ReadAsync(chunk.AsMemory())) > 0)
             {
+                onActivity?.Invoke();
+                EmitLines(chunk, read);
                 lock (_gate)
                 {
                     if (_disposed)
@@ -218,6 +250,46 @@ public sealed class ProcessRunner : IProcessRunner
                         _fileBytes += read;
                     }
                 }
+            }
+
+            if (_line.Length > 0)
+            {
+                Deliver(); // the last line may have no trailing newline
+            }
+        }
+
+        /// <summary>Splits the stream into lines for <c>onLine</c>. Only the pump task calls this, so no lock is needed.</summary>
+        private void EmitLines(char[] chunk, int read)
+        {
+            if (onLine is null)
+            {
+                return;
+            }
+
+            for (var i = 0; i < read; i++)
+            {
+                if (chunk[i] == '\n')
+                {
+                    Deliver();
+                }
+                else if (chunk[i] != '\r')
+                {
+                    _line.Append(chunk[i]);
+                }
+            }
+        }
+
+        private void Deliver()
+        {
+            var text = _line.ToString();
+            _line.Clear();
+            try
+            {
+                onLine!(text);
+            }
+            catch (Exception)
+            {
+                // A faulty listener must never break the capture.
             }
         }
 

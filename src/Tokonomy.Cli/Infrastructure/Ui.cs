@@ -112,8 +112,11 @@ internal static class Ui
     public static string Duration(TimeSpan t) =>
         t.TotalHours >= 1 ? $"{(int)t.TotalHours}h {t.Minutes}m" : t.TotalMinutes >= 1 ? $"{(int)t.TotalMinutes}m {t.Seconds}s" : $"{t.Seconds}s";
 
-    /// <summary>Runs <paramref name="work"/> behind a spinner (a plain line when the console is not interactive).</summary>
-    public static async Task<T> SpinAsync<T>(IAnsiConsole console, string text, Func<Task<T>> work)
+    /// <summary>
+    /// Runs <paramref name="work"/> behind a spinner (a plain line when the console is not interactive). <paramref name="detail"/>
+    /// is read every half second and shown after the elapsed time, for live progress such as tokens written so far.
+    /// </summary>
+    public static async Task<T> SpinAsync<T>(IAnsiConsole console, string text, Func<Task<T>> work, Func<string?>? detail = null)
     {
         if (!IsInteractive(console))
         {
@@ -129,7 +132,8 @@ internal static class Ui
             {
                 while (!timer.IsCancellationRequested)
                 {
-                    ctx.Status($"{Markup.Escape(text)} [grey]{Duration(watch.Elapsed)}[/]");
+                    var extra = detail?.Invoke();
+                    ctx.Status($"{Markup.Escape(text)} [grey]{Duration(watch.Elapsed)}{(string.IsNullOrEmpty(extra) ? "" : " · " + Markup.Escape(extra))}[/]");
                     await Task.Delay(500, CancellationToken.None);
                 }
             });

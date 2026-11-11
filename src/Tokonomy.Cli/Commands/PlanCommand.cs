@@ -122,14 +122,14 @@ public sealed partial class PlanCommand(IAnsiConsole console, IProcessRunner run
             if (canAsk)
             {
                 // Questions are prompts, which cannot run inside a spinner, so each architect call spins on its own.
-                var spinning = new SpinningProvider(provider!, console, $"{models.Architect} is planning (usually 30-90 seconds)");
+                var spinning = new SpinningProvider(provider!, console, $"{models.Architect} is planning (a few minutes; a big project can take 10+)");
                 planned = await TaskPlanning.PlanAsync(strategy, settings.Task, config.RepoRoot, baseSha, runId, spinning, models.Architect, ledger, git, cancellationToken,
                     config.Policy.Acceptance, ClarifyPrompt.For(console));
             }
             else
             {
                 planned = strategy.UsesArchitectPlan && !settings.Json
-                    ? await Ui.SpinAsync(console, $"{models.Architect} is planning (usually 30-90 seconds)", () =>
+                    ? await Ui.SpinAsync(console, $"{models.Architect} is planning (a few minutes; a big project can take 10+)", () =>
                         TaskPlanning.PlanAsync(strategy, settings.Task, config.RepoRoot, baseSha, runId, provider, models.Architect, ledger, git, cancellationToken, config.Policy.Acceptance))
                     : await TaskPlanning.PlanAsync(strategy, settings.Task, config.RepoRoot, baseSha, runId, provider, models.Architect, ledger, git, cancellationToken, config.Policy.Acceptance);
             }

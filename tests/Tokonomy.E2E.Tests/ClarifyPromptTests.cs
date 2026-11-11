@@ -1,5 +1,6 @@
 using Spectre.Console.Testing;
 using Tokonomy.Cli.Infrastructure;
+using Tokonomy.Core.Abstractions;
 using Tokonomy.Core.Planning;
 
 namespace Tokonomy.E2E.Tests;
@@ -84,5 +85,18 @@ public class ClarifyPromptTests
         console.Input.PushKey(ConsoleKey.Enter);    // skip text
 
         Assert.Contains("No preference", Answer(console, new ClarifyingQuestion("Q1", "Features?", ["A", "B"], ["A"], Multi: true)), StringComparison.Ordinal);
+    }
+}
+
+public class SpinningProviderTests
+{
+    [Fact]
+    public void Describes_progress_for_the_spinner()
+    {
+        Assert.Null(SpinningProvider.Describe(null));
+        Assert.Equal("~250 tokens written", SpinningProvider.Describe(new ProviderProgress(1000)));
+        Assert.Equal("~6.2k tokens written", SpinningProvider.Describe(new ProviderProgress(24_800)));
+        Assert.Equal("connection stalled, asking again", SpinningProvider.Describe(new ProviderProgress(0, Retrying: true)));
+        Assert.Equal("asking again · ~250 tokens written", SpinningProvider.Describe(new ProviderProgress(1000, Retrying: true)));
     }
 }

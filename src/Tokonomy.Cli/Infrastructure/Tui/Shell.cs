@@ -164,7 +164,7 @@ internal sealed class Shell(IAnsiConsole console, Func<string[], Task<int>> runC
 
     private Task<string[]?> AskTask(string command)
     {
-        var task = console.Prompt(new TextPrompt<string>("[bold]Describe the task:[/]").AllowEmpty());
+        var task = Ui.ReadTask(console, "[bold]Describe the task:[/]", allowEmpty: true);
         return Task.FromResult<string[]?>(string.IsNullOrWhiteSpace(task) ? null : [command, task]);
     }
 
@@ -188,7 +188,7 @@ internal sealed class Shell(IAnsiConsole console, Func<string[], Task<int>> runC
     private Task<string[]?> AskFreeText()
     {
         console.MarkupLine(SlashHint);
-        var text = console.Prompt(new TextPrompt<string>("[aqua]›[/]").AllowEmpty()).Trim();
+        var text = Ui.ReadTask(console, "[aqua]›[/]", allowEmpty: true);
         if (text.Length == 0)
         {
             _backed = true;
