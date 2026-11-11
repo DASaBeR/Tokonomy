@@ -20,6 +20,10 @@ public sealed class RunSettings : CommonSettings
     [Description("Execute a previously generated plan. Defaults to the most recent unexecuted plan.")]
     public string? Plan { get; init; }
 
+    [CommandOption("--again")]
+    [Description("With --plan: run a plan that was already executed (for example after a failed run) as a new run, without planning again.")]
+    public bool Again { get; init; }
+
     [CommandOption("--keep-worktree")]
     [Description("Keep the run worktree on disk for inspection (the run branch is always kept).")]
     public bool KeepWorktree { get; init; }
@@ -37,6 +41,25 @@ public sealed class RunCommand(IAnsiConsole console, IProcessRunner runner, Serv
 
         var (code, _) = await RunPlanAsync(config, settings, quietHeader: false, cancellationToken);
         return code;
+    }
+
+    /// <summary>A new, not yet executed run that carries the saved plan (contract, tests and base commit) of <paramref name="source"/>.</summary>
+    private static string CopyPlanToNewRun(Tokonomy.Runtime.Config.TokonomyConfig config, SqliteLedger ledger, RunRecord source)
+    {
+        var plan = RunArtifacts.LoadPlan(new RunArtifacts(config.ConfigDirectory, source.Id).PlanPath);
+        var newId = RunArtifacts.NewRunId(DateTimeOffset.UtcNow);
+        ledger.StartRun(new RunRecord
+        {
+            Id = newId,
+            Strategy = source.Strategy,
+            TaskId = source.TaskId,
+            Repo = source.Repo,
+            BaseSha = plan.BaseSha,
+            Status = RunStatus.Planned,
+            Started = DateTimeOffset.UtcNow,
+        });
+        new RunArtifacts(config.ConfigDirectory, newId).SavePlan(plan with { RunId = newId, Created = DateTimeOffset.UtcNow });
+        return newId;
     }
 
     /// <summary>Executes a saved plan. Returns the exit code and the outcome (null when the run could not start).</summary>
@@ -60,8 +83,17 @@ public sealed class RunCommand(IAnsiConsole console, IProcessRunner runner, Serv
 
         if (record.Status != RunStatus.Planned)
         {
-            Output.Error(console, $"Run '{runId}' was already executed ({record.Status}). Create a new plan.");
-            return (ExitCodes.Usage, null);
+            if (!settings.Again)
+            {
+                Output.Error(console, $"Run '{runId}' was already executed ({record.Status}). Create a new plan, or run the same plan again with `tokonomy run --plan {runId} --again` (no new planning cost).");
+                return (ExitCodes.Usage, null);
+            }
+
+            // A run is a one-off record (its branch, worktree and ledger rows), so "again" is a fresh run of the same plan.
+            var again = CopyPlanToNewRun(config, ledger, record);
+            Ui.Note(console, $"Running the plan of {runId} again as {again}. Planning cost stays with the original run.");
+            runId = again;
+            record = ledger.GetRun(runId)!;
         }
 
         var policy = config.Policy;

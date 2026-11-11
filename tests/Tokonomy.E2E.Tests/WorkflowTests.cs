@@ -88,6 +88,36 @@ public sealed class WorkflowTests : IDisposable
     }
 
     [Fact]
+    public async Task An_executed_plan_can_be_run_again_as_a_new_run_without_planning_again()
+    {
+        WriteConfig();
+        var executor = new FakeExecutor(FakeExecutor.Write("app.txt", "feature!\n"), FakeExecutor.Write("app.txt", "feature!\n"));
+        var services = new Services { ExecutorFactory = _ => executor };
+
+        var (planExit, planOut) = await Cli(services, "plan", "Add the feature", "--strategy", "1b", "--json", "--config", ConfigDir);
+        Assert.True(planExit == 0, planOut);
+        var planId = System.Text.Json.JsonDocument.Parse(planOut).RootElement.GetProperty("run_id").GetString()!;
+
+        var (firstExit, firstOut) = await Cli(services, "run", "--plan", planId, "--config", ConfigDir);
+        Assert.True(firstExit == 0, firstOut);
+
+        var (blockedExit, blockedOut) = await Cli(services, "run", "--plan", planId, "--config", ConfigDir);
+        Assert.Equal(2, blockedExit);
+        Assert.Contains("already executed", blockedOut, StringComparison.Ordinal);
+        Assert.Contains("--again", blockedOut, StringComparison.Ordinal);
+
+        var (againExit, againOut) = await Cli(services, "run", "--plan", planId, "--again", "--config", ConfigDir);
+        Assert.True(againExit == 0, againOut);
+        Assert.Contains("again as", againOut, StringComparison.Ordinal);
+        Assert.Contains("PASS", againOut, StringComparison.Ordinal);
+
+        var (_, reportOut) = await Cli(services, "report", "--json", "--config", ConfigDir);
+        var runs = System.Text.Json.JsonDocument.Parse(reportOut).RootElement.EnumerateArray().Select(r => r.GetProperty("id").GetString()).ToList();
+        Assert.Equal(2, runs.Count);
+        Assert.Contains(planId, runs);
+    }
+
+    [Fact]
     public async Task Bench_judges_by_hidden_acceptance_and_reports_cost_per_success()
     {
         WriteConfig();
