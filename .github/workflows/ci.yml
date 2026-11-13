@@ -46,8 +46,7 @@ jobs:
           ns = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
           for f in glob.glob("TestResults/*.trx"):
               for r in ET.parse(f).getroot().iterfind(".//t:UnitTestResult[@outcome='Failed']", ns):
-                  msg = r.findtext(".//t:Message", default="", namespaces=ns).strip().replace("
-", " | ")[:400]
+                  msg = r.findtext(".//t:Message", default="", namespaces=ns).strip().replace(chr(10), " | ")[:400]
                   print(f"::error title=FAILED {r.get('testName')}::{msg}")
 
       - name: Upload test results
