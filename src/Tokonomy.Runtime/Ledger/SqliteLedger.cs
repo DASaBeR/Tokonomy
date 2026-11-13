@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Tokonomy.Core.Model;
 
@@ -17,6 +18,13 @@ public interface ILedger
     void RecordBenchResult(BenchResultRecord result);
     IReadOnlyList<BenchResultRecord> ListBenchResults(string benchId);
     void RecordEvent(string runId, DateTimeOffset ts, string kind, string payloadJson);
+    void RecordIntervention(InterventionRecord intervention);
+    void RecordPlanRevision(string runId, Tokonomy.Core.Planning.PlanRevision revision);
+    void RecordUnitReview(UnitReviewRecord review);
+    RunStats GetStats(string runId);
+    IReadOnlyList<AttemptRecord> ListAttempts(string runId);
+    IReadOnlyList<InterventionRecord> ListInterventions(string runId);
+    IReadOnlyList<PlanRevisionRecord> ListPlanRevisions(string runId);
     RunRecord? GetRun(string runId);
     IReadOnlyList<RunRecord> ListRuns(int limit);
     RunSummary? GetSummary(string runId);
@@ -113,6 +121,48 @@ public sealed class SqliteLedger : ILedger, IDisposable
             note TEXT
         );
         CREATE INDEX ix_bench_results_bench ON bench_results(bench_id);
+        """,
+        """
+        ALTER TABLE llm_calls ADD COLUMN purpose TEXT;
+        CREATE TABLE plan_revisions(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL REFERENCES runs(id),
+            revision INTEGER NOT NULL,
+            ts TEXT NOT NULL,
+            source TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            trigger TEXT,
+            changes_json TEXT NOT NULL,
+            requires_approval INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX ix_plan_revisions_run ON plan_revisions(run_id);
+        CREATE TABLE interventions(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL REFERENCES runs(id),
+            unit_id TEXT NOT NULL,
+            ts TEXT NOT NULL,
+            trigger TEXT NOT NULL,
+            level INTEGER NOT NULL,
+            root_cause TEXT,
+            diagnosis TEXT,
+            action TEXT,
+            outcome TEXT NOT NULL,
+            plan_revision INTEGER,
+            evidence_json TEXT NOT NULL DEFAULT '[]',
+            usd_micros INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE INDEX ix_interventions_run ON interventions(run_id);
+        CREATE TABLE unit_reviews(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id TEXT NOT NULL REFERENCES runs(id),
+            unit_id TEXT NOT NULL,
+            ts TEXT NOT NULL,
+            verdict TEXT NOT NULL,
+            summary TEXT,
+            why TEXT,
+            findings_json TEXT NOT NULL DEFAULT '[]'
+        );
+        CREATE INDEX ix_unit_reviews_run ON unit_reviews(run_id);
         """,
     ];
 
@@ -248,7 +298,8 @@ public sealed class SqliteLedger : ILedger, IDisposable
             models.Add(new ModelUsage(rows.GetString(1), rows.GetInt32(2), rows.GetInt64(3), rows.GetInt64(4), rows.GetInt64(5), FromMicros(rows.GetInt64(6))));
         }
 
-        return list.Select(r => byRun.TryGetValue(r.RunId, out var m) ? r with { Models = m } : r).ToList();
+        rows.Close();
+        return list.Select(r => (byRun.TryGetValue(r.RunId, out var m) ? r with { Models = m } : r) with { Stats = GetStats(r.RunId) }).ToList();
     }
 
     public void RecordLlmCall(LlmCallRecord call)
@@ -256,12 +307,12 @@ public sealed class SqliteLedger : ILedger, IDisposable
         ArgumentNullException.ThrowIfNull(call);
         Execute(
             """
-            INSERT INTO llm_calls(run_id, unit_id, role, model, input_tokens, output_tokens, cached_tokens, usd_micros, source)
-            VALUES($run, $unit, $role, $model, $in, $out, $cached, $usd, $src)
+            INSERT INTO llm_calls(run_id, unit_id, role, model, input_tokens, output_tokens, cached_tokens, usd_micros, source, purpose)
+            VALUES($run, $unit, $role, $model, $in, $out, $cached, $usd, $src, $purpose)
             """,
             ("$run", call.RunId), ("$unit", call.UnitId), ("$role", call.Role.ToString()), ("$model", call.Model),
             ("$in", call.InputTokens), ("$out", call.OutputTokens), ("$cached", call.CachedTokens),
-            ("$usd", ToMicros(call.Usd)), ("$src", call.Source.ToString()));
+            ("$usd", ToMicros(call.Usd)), ("$src", call.Source.ToString()), ("$purpose", call.Purpose));
 
         if (call.Source == CostSource.Estimated)
         {
@@ -272,6 +323,213 @@ public sealed class SqliteLedger : ILedger, IDisposable
     public void RecordEvent(string runId, DateTimeOffset ts, string kind, string payloadJson) =>
         Execute("INSERT INTO events(run_id, ts, kind, payload_json) VALUES($r, $ts, $k, $p)",
             ("$r", runId), ("$ts", Iso(ts)), ("$k", kind), ("$p", payloadJson));
+
+    public void RecordIntervention(InterventionRecord intervention)
+    {
+        ArgumentNullException.ThrowIfNull(intervention);
+        Execute(
+            """
+            INSERT INTO interventions(run_id, unit_id, ts, trigger, level, root_cause, diagnosis, action, outcome, plan_revision, evidence_json, usd_micros)
+            VALUES($r, $u, $ts, $t, $l, $rc, $d, $a, $o, $pr, $e, $usd)
+            """,
+            ("$r", intervention.RunId), ("$u", intervention.UnitId), ("$ts", Iso(intervention.At)), ("$t", intervention.Trigger),
+            ("$l", intervention.Level), ("$rc", intervention.RootCause), ("$d", intervention.Diagnosis), ("$a", intervention.Action),
+            ("$o", intervention.Outcome), ("$pr", intervention.PlanRevision), ("$e", JsonSerializer.Serialize(intervention.Evidence)),
+            ("$usd", ToMicros(intervention.Usd)));
+    }
+
+    public void RecordPlanRevision(string runId, Tokonomy.Core.Planning.PlanRevision revision)
+    {
+        ArgumentNullException.ThrowIfNull(revision);
+        Execute(
+            """
+            INSERT INTO plan_revisions(run_id, revision, ts, source, reason, trigger, changes_json, requires_approval)
+            VALUES($r, $n, $ts, $s, $why, $t, $c, $h)
+            """,
+            ("$r", runId), ("$n", revision.Number), ("$ts", Iso(revision.At)), ("$s", revision.Source), ("$why", revision.Reason),
+            ("$t", revision.Trigger), ("$c", JsonSerializer.Serialize(revision.Changes)), ("$h", revision.RequiresHumanApproval ? 1 : 0));
+    }
+
+    public void RecordUnitReview(UnitReviewRecord review)
+    {
+        ArgumentNullException.ThrowIfNull(review);
+        Execute(
+            "INSERT INTO unit_reviews(run_id, unit_id, ts, verdict, summary, why, findings_json) VALUES($r, $u, $ts, $v, $s, $w, $f)",
+            ("$r", review.RunId), ("$u", review.UnitId), ("$ts", Iso(review.At)), ("$v", review.Verdict.ToString()), ("$s", review.Summary),
+            ("$w", review.Why), ("$f", JsonSerializer.Serialize(review.Findings)));
+    }
+
+    public RunStats GetStats(string runId)
+    {
+        long Count(string sql) => Convert.ToInt64(ScalarWith(sql, ("$id", runId)) ?? 0L, CultureInfo.InvariantCulture);
+        var accepted = (int)Count("SELECT COUNT(*) FROM units WHERE run_id = $id AND status = 'accepted'");
+        var workerAttempts = (int)Count("SELECT COUNT(*) FROM attempts WHERE run_id = $id AND executor <> 'architect'");
+        var unitsTried = (int)Count("SELECT COUNT(DISTINCT unit_id) FROM attempts WHERE run_id = $id AND executor <> 'architect'");
+        var takenOverUnits = (int)Count("SELECT COUNT(DISTINCT unit_id) FROM attempts WHERE run_id = $id AND executor = 'architect' AND reason LIKE 'takeover%' AND decision = 'Accept'");
+        var findings = 0;
+        var changeRequests = 0;
+        using (var cmd = Command("SELECT verdict, findings_json FROM unit_reviews WHERE run_id = $id", ("$id", runId)))
+        using (var reader = cmd.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                changeRequests += reader.GetString(0) == nameof(UnitReviewVerdict.RequestChanges) ? 1 : 0;
+                var list = JsonSerializer.Deserialize<List<ReviewFinding>>(reader.GetString(1)) ?? [];
+                findings += list.Count(f => f.High);
+            }
+        }
+
+        var lessons = 0;
+        using (var cmd = Command("SELECT changes_json FROM plan_revisions WHERE run_id = $id", ("$id", runId)))
+        using (var reader = cmd.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                var changes = JsonSerializer.Deserialize<List<Tokonomy.Core.Planning.PlanChange>>(reader.GetString(0)) ?? [];
+                lessons += changes.Count(c => c.Op == Tokonomy.Core.Planning.PlanOps.AddLesson);
+            }
+        }
+
+        var byPurpose = new Dictionary<string, decimal>(StringComparer.Ordinal);
+        using (var cmd = Command(
+                   "SELECT role, COALESCE(purpose, CASE role WHEN 'Worker' THEN 'work' ELSE 'unspecified' END), SUM(usd_micros) FROM llm_calls WHERE run_id = $id GROUP BY 1, 2",
+                   ("$id", runId)))
+        using (var reader = cmd.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                byPurpose[$"{reader.GetString(0).ToLowerInvariant()}:{reader.GetString(1)}"] = FromMicros(reader.GetInt64(2));
+            }
+        }
+
+        int? unplanned = null;
+        string? judge = null;
+        List<string> concerns = [];
+        if (ScalarWith("SELECT payload_json FROM events WHERE run_id = $id AND kind = 'bench_quality' ORDER BY id DESC LIMIT 1", ("$id", runId)) is string quality)
+        {
+            using var doc = JsonDocument.Parse(quality);
+            var root = doc.RootElement;
+            unplanned = root.TryGetProperty("unplanned", out var u) && u.ValueKind == JsonValueKind.Number ? u.GetInt32() : null;
+            judge = root.TryGetProperty("judge", out var j) && j.ValueKind == JsonValueKind.String ? j.GetString() : null;
+            if (root.TryGetProperty("concerns", out var c) && c.ValueKind == JsonValueKind.Array)
+            {
+                concerns = c.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!).ToList();
+            }
+        }
+
+        return new RunStats
+        {
+            BlockerReports = (int)Count("SELECT COUNT(*) FROM events WHERE run_id = $id AND kind = 'worker_report' AND payload_json LIKE '%\"needs_architect\":true%'"),
+            FailedTakeovers = (int)Count("SELECT COUNT(*) FROM attempts WHERE run_id = $id AND executor = 'architect' AND reason LIKE 'takeover%' AND decision <> 'Accept'"),
+            Splits = (int)Count("SELECT COUNT(*) FROM interventions WHERE run_id = $id AND outcome = 'split'"),
+            SupervisedTakeovers = (int)Count("SELECT COUNT(*) FROM interventions WHERE run_id = $id AND level = 3"),
+            Lessons = lessons,
+            UsdByPurpose = byPurpose,
+            UnplannedChanges = unplanned,
+            JudgeVerdict = judge,
+            JudgeConcerns = concerns,
+            Units = (int)Count("SELECT COUNT(*) FROM units WHERE run_id = $id"),
+            UnitsAccepted = accepted,
+            UnitsAcceptedWithoutTakeover = Math.Max(0, accepted - takenOverUnits),
+            WorkerAttempts = workerAttempts,
+            WorkerRetries = Math.Max(0, workerAttempts - unitsTried),
+            Takeovers = (int)Count("SELECT COUNT(*) FROM attempts WHERE run_id = $id AND executor = 'architect' AND reason LIKE 'takeover%'"),
+            Interventions = (int)Count("SELECT COUNT(*) FROM interventions WHERE run_id = $id"),
+            InstructionCorrections = (int)Count("SELECT COUNT(*) FROM interventions WHERE run_id = $id AND level = 1"),
+            GuidedCorrections = (int)Count("SELECT COUNT(*) FROM interventions WHERE run_id = $id AND level = 2"),
+            PlanRevisions = (int)Count("SELECT COUNT(*) FROM plan_revisions WHERE run_id = $id"),
+            ReviewChangeRequests = changeRequests,
+            ArchitecturalViolations = findings,
+            RepeatedMistakes = (int)Count("SELECT COUNT(*) FROM gate_results g JOIN attempts a ON a.id = g.attempt_id WHERE a.run_id = $id AND g.gate = 'lessons' AND g.status = 'Failed'"),
+            HumanDecisions = (int)Count("SELECT COUNT(*) FROM interventions WHERE run_id = $id AND outcome = 'human'"),
+        };
+    }
+
+    public IReadOnlyList<AttemptRecord> ListAttempts(string runId)
+    {
+        using var cmd = Command(
+            "SELECT unit_id, n, executor, model, exit_code, duration_ms, diff_lines, decision, reason FROM attempts WHERE run_id = $id ORDER BY id",
+            ("$id", runId));
+        using var reader = cmd.ExecuteReader();
+        var list = new List<AttemptRecord>();
+        while (reader.Read())
+        {
+            list.Add(new AttemptRecord
+            {
+                RunId = runId,
+                UnitId = reader.GetString(0),
+                Number = reader.GetInt32(1),
+                Executor = reader.GetString(2),
+                Model = reader.IsDBNull(3) ? null : reader.GetString(3),
+                ExitCode = reader.IsDBNull(4) ? 0 : reader.GetInt32(4),
+                Duration = TimeSpan.FromMilliseconds(reader.IsDBNull(5) ? 0 : reader.GetInt64(5)),
+                DiffLines = reader.IsDBNull(6) ? 0 : reader.GetInt32(6),
+                Decision = Enum.TryParse<DecisionKind>(reader.IsDBNull(7) ? "" : reader.GetString(7), out var d) ? d : DecisionKind.Fail,
+                Reason = reader.IsDBNull(8) ? "" : reader.GetString(8),
+            });
+        }
+
+        return list;
+    }
+
+    public IReadOnlyList<InterventionRecord> ListInterventions(string runId)
+    {
+        using var cmd = Command(
+            "SELECT unit_id, ts, trigger, level, root_cause, diagnosis, action, outcome, plan_revision, evidence_json, usd_micros FROM interventions WHERE run_id = $id ORDER BY id",
+            ("$id", runId));
+        using var reader = cmd.ExecuteReader();
+        var list = new List<InterventionRecord>();
+        while (reader.Read())
+        {
+            list.Add(new InterventionRecord
+            {
+                RunId = runId,
+                UnitId = reader.GetString(0),
+                At = DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture),
+                Trigger = reader.GetString(2),
+                Level = reader.GetInt32(3),
+                RootCause = reader.IsDBNull(4) ? "" : reader.GetString(4),
+                Diagnosis = reader.IsDBNull(5) ? "" : reader.GetString(5),
+                Action = reader.IsDBNull(6) ? "" : reader.GetString(6),
+                Outcome = reader.GetString(7),
+                PlanRevision = reader.IsDBNull(8) ? null : reader.GetInt32(8),
+                Evidence = JsonSerializer.Deserialize<List<string>>(reader.GetString(9)) ?? [],
+                Usd = FromMicros(reader.GetInt64(10)),
+            });
+        }
+
+        return list;
+    }
+
+    public IReadOnlyList<PlanRevisionRecord> ListPlanRevisions(string runId)
+    {
+        using var cmd = Command("SELECT revision, ts, source, reason, trigger, changes_json, requires_approval FROM plan_revisions WHERE run_id = $id ORDER BY id", ("$id", runId));
+        using var reader = cmd.ExecuteReader();
+        var list = new List<PlanRevisionRecord>();
+        while (reader.Read())
+        {
+            var changes = JsonSerializer.Deserialize<List<Tokonomy.Core.Planning.PlanChange>>(reader.GetString(5)) ?? [];
+            list.Add(new PlanRevisionRecord(runId, reader.GetInt32(0), DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture),
+                reader.GetString(2), reader.GetString(3), reader.IsDBNull(4) ? null : reader.GetString(4), changes.Count, reader.GetInt64(6) == 1));
+        }
+
+        return list;
+    }
+
+    public IReadOnlyList<UnitReviewRecord> ListUnitReviews(string runId)
+    {
+        using var cmd = Command("SELECT unit_id, ts, verdict, summary, why, findings_json FROM unit_reviews WHERE run_id = $id ORDER BY id", ("$id", runId));
+        using var reader = cmd.ExecuteReader();
+        var list = new List<UnitReviewRecord>();
+        while (reader.Read())
+        {
+            list.Add(new UnitReviewRecord(runId, reader.GetString(0), DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture),
+                Enum.Parse<UnitReviewVerdict>(reader.GetString(2)), reader.IsDBNull(3) ? "" : reader.GetString(3), reader.IsDBNull(4) ? "" : reader.GetString(4),
+                JsonSerializer.Deserialize<List<ReviewFinding>>(reader.GetString(5)) ?? []));
+        }
+
+        return list;
+    }
 
     public RunRecord? GetRun(string runId) => QueryRuns("WHERE r.id = $id", 1, ("$id", runId)) is [var run, ..] ? run : null;
 
@@ -304,7 +562,33 @@ public sealed class SqliteLedger : ILedger, IDisposable
                 reader.GetInt64(5) == 1));
         }
 
-        return new RunSummary { Run = run, Tiers = tiers };
+        reader.Close();
+        using var byPurpose = Command(
+            """
+            SELECT role, COALESCE(purpose, CASE role WHEN 'Worker' THEN 'work' ELSE 'unspecified' END), COUNT(*), SUM(input_tokens), SUM(output_tokens),
+                   SUM(usd_micros), MAX(source = 'Estimated')
+            FROM llm_calls WHERE run_id = $id GROUP BY 1, 2 ORDER BY 1, 6 DESC
+            """,
+            ("$id", runId));
+        using var rows = byPurpose.ExecuteReader();
+        var purposes = new List<PurposeTotals>();
+        while (rows.Read())
+        {
+            purposes.Add(new PurposeTotals(Enum.Parse<LlmRole>(rows.GetString(0)), rows.GetString(1), rows.GetInt32(2), rows.GetInt64(3),
+                rows.GetInt64(4), FromMicros(rows.GetInt64(5)), rows.GetInt64(6) == 1));
+        }
+
+        rows.Close();
+        return new RunSummary
+        {
+            Run = run,
+            Tiers = tiers,
+            Purposes = purposes,
+            Stats = GetStats(runId),
+            Interventions = ListInterventions(runId),
+            Revisions = ListPlanRevisions(runId),
+            Reviews = ListUnitReviews(runId),
+        };
     }
 
     public void Dispose() => _connection.Dispose();
@@ -379,6 +663,12 @@ public sealed class SqliteLedger : ILedger, IDisposable
     {
         using var cmd = Command(sql, args);
         cmd.ExecuteNonQuery();
+    }
+
+    private object? ScalarWith(string sql, params (string, object?)[] args)
+    {
+        using var cmd = Command(sql, args);
+        return cmd.ExecuteScalar();
     }
 
     private object? Scalar(string sql)

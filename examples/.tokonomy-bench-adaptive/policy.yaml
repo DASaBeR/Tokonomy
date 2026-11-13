@@ -1,0 +1,59 @@
+# Live benchmark config (2026-11-13): Strategy 4 vs 5 on examples/tasks-adaptive.yaml.
+# Current planner (blueprint + critique + inspection).
+# Benchmark config: Claude Opus (Claude Code subscription) as architect/supervisor, Gemini 3.8 Flash high
+# (Antigravity subscription) as worker. No API keys. Costs are API-equivalent estimates, see prices.yaml.
+# Tokonomy policy. Docs: docs/config.md
+# LLMs produce content; this file makes decisions.
+
+models:
+  architect: "claude-opus-5-5"   # strong model: plans, takes over hard units, reviews, writes the tests
+  worker: "gemini-3.8-flash-high"      # cheap model that writes the code
+
+# The strong model runs on your Claude Code login: no API key.
+architect_provider: { kind: claude-cli }
+
+executors:
+  default: antigravity
+  strong: claude-code-sub   # runs the strong model when it does the work itself (benchmark strategies 1 and 1b)
+
+# Run once per run in the fresh worktree, before the baseline (network allowed).
+prepare: []   # e.g. [{ name: deps, cmd: ["pip", "install", "-e", "."] }]
+
+# Gates are argument arrays, never shell strings. They run on the base commit first;
+# only failures that are new relative to that baseline block a unit.
+gates:
+  # The visible test suite of the fixture (the hidden acceptance tests are separate; see the taskset).
+  - { name: unittest, cmd: ["python", "-m", "unittest", "discover", "-s", "tests", "-t", "."], timeout_seconds: 120 }
+  - { type: locked_regions }
+
+escalation:
+  max_retries_per_unit: 2    # failed attempts on a unit before escalation
+  max_takeovers_per_unit: 1  # architect takeovers allowed per unit (0 disables takeover)
+  protected_paths: []        # e.g. ["src/auth/**", "migrations/**"]
+  max_diff_lines: 400        # larger diffs are rejected and the unit is split
+  review_on_new_dependency: true
+  worker_timeout_seconds: 1200
+
+planning: { blueprint: true, critique: true, max_revision_rounds: 1, inspect_files: true }
+supervision: { max_interventions_per_unit: 2, max_interventions_per_run: 6 }
+review: { mode: risk }
+
+budget:
+  max_usd_per_task: 8.00     # hard abort per trial (API-equivalent estimate; subscriptions, nothing billed per token)
+  max_architect_token_share: 0.30
+
+isolation:
+  worker_env_allow: []       # extra env var names workers may see (keys are never passed)
+  keep_worktree: false
+  # worktree_root: "D:/tokonomy-worktrees"   # default: %LOCALAPPDATA%/tokonomy/worktrees; must not overlap temp, the repo or home
+
+# Gates and prepare steps run code the worker wrote. They run in a disposable Windows Sandbox VM:
+# a copy of the source (no .git, no .tokonomy), no network for gates, host toolchains mapped read-only.
+# Needs Windows Pro/Enterprise/Education 24H2+ with the Windows Sandbox feature (see docs/config.md).
+# host-unsafe runs them on this machine with your privileges; there is no automatic fallback.
+gate_execution:
+  provider: windows-sandbox     # windows-sandbox | host-unsafe
+  network_policy: none          # gates: none | full
+  prepare_network: full         # prepare steps (base commit only): none | full
+  resource_limits: { memory_mb: 4096 }
+  toolchains: []                # default: the folders of the gate commands' executables, e.g. ["C:/Program Files/dotnet"]

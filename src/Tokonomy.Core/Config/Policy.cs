@@ -19,6 +19,16 @@ public sealed class Policy
     /// <summary>Architect-written acceptance tests. Off unless <c>acceptance.cmd</c> is set.</summary>
     public AcceptanceConfig Acceptance { get; set; } = new();
     public EscalationConfig Escalation { get; set; } = new();
+
+    /// <summary>How the architect plans: blueprint detail, self-review and targeted file inspection.</summary>
+    public PlanningConfig Planning { get; set; } = new();
+
+    /// <summary>Adaptive supervision (strategy 5): architect interventions, plan revisions, decomposition and recovery.</summary>
+    public SupervisionConfig Supervision { get; set; } = new();
+
+    /// <summary>Per-unit architectural review (strategy 5). Complements the gates; never overrides a failed gate.</summary>
+    public ReviewConfig Review { get; set; } = new();
+
     public BudgetConfig Budget { get; set; } = new();
     public IsolationConfig Isolation { get; set; } = new();
 
@@ -245,4 +255,82 @@ public sealed class BudgetConfig
     public decimal MaxUsdPerTask { get; set; } = 3.00m;
     public decimal? MaxUsdPerRun { get; set; }
     public double MaxArchitectTokenShare { get; set; } = 0.30;
+}
+
+/// <summary><c>planning</c> in policy.yaml. Applies to every strategy that uses an architect plan (3, 4, 5).</summary>
+public sealed class PlanningConfig
+{
+    /// <summary>Ask for an engineering blueprint (analysis, architecture, decisions, detailed units). Off: the original short contract.</summary>
+    public bool Blueprint { get; set; } = true;
+
+    /// <summary>A second architect call critiques the plan before it is shown; a plan it rejects is revised.</summary>
+    public bool Critique { get; set; } = true;
+
+    /// <summary>Revisions after the deterministic quality check or the critique. 0 shows the first plan as is.</summary>
+    public int MaxRevisionRounds { get; set; } = 1;
+
+    /// <summary>The architect may ask once to read specific repository files (read-only, tracked files only) before it plans.</summary>
+    public bool InspectFiles { get; set; } = true;
+
+    public int MaxInspectFiles { get; set; } = 12;
+
+    /// <summary>Upper bound on the repository context sent to the architect, in characters.</summary>
+    public int MaxContextChars { get; set; } = 60_000;
+}
+
+/// <summary><c>supervision</c> in policy.yaml. Used by strategy 5 (adaptive supervision) only.</summary>
+public sealed class SupervisionConfig
+{
+    /// <summary>Architect interventions (diagnosis plus correction) allowed per unit.</summary>
+    public int MaxInterventionsPerUnit { get; set; } = 2;
+
+    /// <summary>Architect interventions allowed per run, across all units.</summary>
+    public int MaxInterventionsPerRun { get; set; } = 6;
+
+    /// <summary>Call the architect as soon as the same gate failure repeats, instead of spending the remaining retries.</summary>
+    public bool EarlyOnRepeatedFailure { get; set; } = true;
+
+    /// <summary>After a failed takeover, reset the unit and let the worker resume with the architect's diagnosis (if interventions remain).</summary>
+    public bool ResumeAfterFailedTakeover { get; set; } = true;
+
+    /// <summary>Oversized units the architect may split into smaller ones per run. A unit made by a split is never split again.</summary>
+    public int MaxSplitsPerRun { get; set; } = 2;
+
+    /// <summary>Plan revisions allowed per run, a guard against revision loops.</summary>
+    public int MaxPlanRevisions { get; set; } = 20;
+
+    /// <summary>Read the worker's structured report (<c>tokonomy-report.json</c>) and act on blockers.</summary>
+    public bool WorkerReports { get; set; } = true;
+}
+
+/// <summary><c>review</c> in policy.yaml: the architect reviews a unit's diff after its gates passed (strategy 5).</summary>
+public sealed class ReviewConfig
+{
+    public const string Off = "off";
+    public const string Risk = "risk";
+    public const string Always = "always";
+    public const string OnUnavailableAccept = "accept";
+    public const string OnUnavailableFail = "fail";
+
+    /// <summary><c>off</c>, <c>risk</c> (default: high-risk units and units with warning signs) or <c>always</c>.</summary>
+    public string Mode { get; set; } = Risk;
+
+    /// <summary>How many times a review may send a unit back to the worker before the unit escalates.</summary>
+    public int MaxChangeRequestsPerUnit { get; set; } = 1;
+
+    /// <summary>When the review cannot be obtained: <c>accept</c> (on the gates, with a warning) or <c>fail</c>.</summary>
+    public string OnUnavailable { get; set; } = OnUnavailableAccept;
+
+    /// <summary>In <c>risk</c> mode, a medium-risk unit is reviewed when its diff is at least this many lines.</summary>
+    public int MediumRiskDiffLines { get; set; } = 150;
+
+    /// <summary>
+    /// Units the architect completed itself (L2, L3 or a takeover) after their gates passed: <c>risk</c> (default: only
+    /// high-risk units, edits outside the plan, or large edits), <c>always</c> or <c>off</c>. The review is a separate call
+    /// with a fresh context that is told it did not write the change.
+    /// </summary>
+    public string ArchitectChanges { get; set; } = Risk;
+
+    /// <summary>Optional different model for reviewing architect-written changes (default: <c>models.architect</c>).</summary>
+    public string? ArchitectReviewModel { get; set; }
 }

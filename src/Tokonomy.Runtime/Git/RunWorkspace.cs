@@ -92,6 +92,92 @@ public sealed class RunWorkspace
         return new RunWorkspace(git, repoRoot, path, branch, baseSha, gitDir, gitLink);
     }
 
+    /// <summary>
+    /// For <c>run --resume</c>: a fresh worktree on the run's EXISTING branch, at its tip (the last verified commit).
+    /// A worktree a crashed run left behind is never reused: whatever it holds that was not committed (unverified work
+    /// of the interrupted unit) is saved as a patch under <paramref name="salvageDirectory"/> first, then the old
+    /// worktree is removed the same safe way as any leftover.
+    /// </summary>
+    /// <returns>The workspace and the path of the salvaged patch, if anything was salvaged.</returns>
+    public static async Task<(RunWorkspace Workspace, string? Salvaged)> ReattachAsync(
+        GitCli git, string repoRoot, string runId, string baseSha, string salvageDirectory, CancellationToken ct, string? location = null, string? root = null)
+    {
+        ArgumentNullException.ThrowIfNull(git);
+        var path = System.IO.Path.GetFullPath(location ?? DefaultLocation(repoRoot, runId, root));
+        var branch = $"tokonomy/{runId}";
+        if ((await git.RunAsync(repoRoot, ["rev-parse", "--verify", "--quiet", $"refs/heads/{branch}"], ct, allowFailure: true)).Trim().Length == 0)
+        {
+            throw new GitException($"the run branch {branch} does not exist; nothing to resume");
+        }
+
+        string? salvaged = null;
+        if (Directory.Exists(path) || File.Exists(path))
+        {
+            salvaged = await SalvageAsync(git, repoRoot, runId, path, salvageDirectory, ct);
+            if (await RemoveLeftoverAsync(git, repoRoot, path, ct) is { } stuck)
+            {
+                throw new GitException($"the interrupted run's worktree could not be removed safely: {stuck}");
+            }
+        }
+
+        await git.RunAsync(repoRoot, ["worktree", "prune"], ct, allowFailure: true);
+        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(path)!);
+        if (WorktreeGuard.IsLink(System.IO.Path.GetDirectoryName(path)!))
+        {
+            throw new UnsafeWorktreeRootException($"Refusing to create a worktree under {System.IO.Path.GetDirectoryName(path)}: it is a link.");
+        }
+
+        await git.RunAsync(repoRoot, ["worktree", "add", "--quiet", path, branch], ct);
+        var gitDir = System.IO.Path.GetFullPath((await git.RunAsync(path, ["rev-parse", "--absolute-git-dir"], ct)).Trim());
+        var gitLink = await File.ReadAllTextAsync(System.IO.Path.Combine(path, ".git"), ct);
+        return (new RunWorkspace(git, repoRoot, path, branch, baseSha, gitDir, gitLink), salvaged);
+    }
+
+    /// <summary>
+    /// Saves the uncommitted changes of a leftover worktree as a patch, read through the repository's own record of
+    /// that worktree (never the worktree's possibly rewritten <c>.git</c> pointer). Returns the patch path, or null when
+    /// there was nothing to save or the worktree is not one git knows.
+    /// </summary>
+    private static async Task<string?> SalvageAsync(GitCli git, string repoRoot, string runId, string path, string salvageDirectory, CancellationToken ct)
+    {
+        var common = (await git.RunAsync(repoRoot, ["rev-parse", "--path-format=absolute", "--git-common-dir"], ct)).Trim();
+        var adminDir = System.IO.Path.Combine(common, "worktrees", runId);
+        if (!Directory.Exists(adminDir) || !Directory.Exists(path) || WorktreeGuard.FindLinks(path).Count > 0)
+        {
+            return null;
+        }
+
+        List<string> wt = ["--git-dir=" + adminDir, "--work-tree=" + path];
+        await git.RunAsync(path, [.. wt, "add", "-A", "--", ".", .. ExcludedPathspecs], ct, allowFailure: true);
+        var patch = await git.RunAsync(path, [.. wt, "diff", "--cached", "--binary", "HEAD"], ct, allowFailure: true);
+        if (patch.Trim().Length == 0)
+        {
+            return null;
+        }
+
+        Directory.CreateDirectory(salvageDirectory);
+        var file = System.IO.Path.Combine(salvageDirectory, $"interrupted-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}.patch");
+        await File.WriteAllTextAsync(file, patch, ct);
+        return file;
+    }
+
+    /// <summary>The run branch's commits after <paramref name="since"/>, oldest first, as (sha, subject).</summary>
+    public async Task<IReadOnlyList<(string Sha, string Subject)>> CommitsSinceAsync(string since, CancellationToken ct) =>
+        (await Git(["log", "--reverse", "--format=%H%x09%s", $"{since}..HEAD"], ct))
+        .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+        .Select(l => l.TrimEnd('\r').Split('\t', 2))
+        .Select(p => (p[0], p.Length > 1 ? p[1] : ""))
+        .ToList();
+
+    /// <summary>Checks out <paramref name="sha"/> detached (the branch pointer does not move); <see cref="ReturnToBranchAsync"/> goes back.</summary>
+    public Task CheckoutDetachedAsync(string sha, CancellationToken ct) => Git(["checkout", "--quiet", "--force", "--detach", sha], ct);
+
+    public async Task ReturnToBranchAsync(CancellationToken ct)
+    {
+        await Git(["checkout", "--quiet", "--force", Branch], ct);
+        await Git(["clean", "-fdq", "-e", ".tokonomy/tmp"], ct);
+    }
+
     /// <summary>Runs git against this worktree only, never trusting the worktree's <c>.git</c> pointer.</summary>
     private Task<string> Git(IEnumerable<string> args, CancellationToken ct, bool allowFailure = false) =>
         _git.RunAsync(Path, ["--git-dir=" + _gitDir, "--work-tree=" + Path, .. args], ct, allowFailure);

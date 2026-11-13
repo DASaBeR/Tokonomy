@@ -93,5 +93,77 @@ internal sealed class ConsoleObserver(IAnsiConsole console, Contract? contract =
             : $"  [red]✗ the architect could not fix it[/] [grey]{Markup.Escape(Ui.Shorten(note, 160))}[/]");
     }
 
+    public void WorkerReported(WorkUnit unit, Tokonomy.Core.Supervision.WorkerReport report)
+    {
+        if (report.Status == Tokonomy.Core.Supervision.WorkerReportStatus.Completed && !report.DecisionRequired && report.Discoveries.Count == 0)
+        {
+            return;
+        }
+
+        _working.Stop();
+        console.MarkupLine($"    [blue]worker reports[/] [grey]{Markup.Escape(Ui.Shorten(report.Summary, 200))}[/]");
+    }
+
+    public void SupervisionStarted(WorkUnit unit, Tokonomy.Core.Supervision.SupervisionRequest request)
+    {
+        _working.Stop();
+        console.MarkupLine($"  [blue]» architect supervising {Markup.Escape(unit.Id)}[/] [grey]({Markup.Escape(RunOrchestrator.TriggerName(request.Trigger))}: {Markup.Escape(Ui.Shorten(request.Reason, 160))})[/]");
+        _working.Start($"{unit.Id}: the architect is diagnosing");
+    }
+
+    public void InterventionFinished(WorkUnit unit, InterventionRecord intervention)
+    {
+        _working.Stop();
+        var level = intervention.Level switch
+        {
+            0 when intervention.Outcome == "split" => "split",
+            0 => "no action",
+            1 => "L1 instruction correction",
+            2 => "L2 guided correction",
+            3 => "L3 takeover",
+            _ => "no usable decision",
+        };
+        var color = intervention.Outcome switch
+        {
+            "accepted" or "resumed" or "split" => "blue",
+            "human" or "failed" => "red",
+            _ => "grey",
+        };
+        console.MarkupLine($"    [{color}]{Markup.Escape(level)} → {Markup.Escape(intervention.Outcome)}[/]" +
+                           (intervention.PlanRevision is { } r ? $" [grey](plan revision {r})[/]" : ""));
+        if (intervention.Diagnosis.Length > 0)
+        {
+            console.MarkupLine($"    [grey]found: {Markup.Escape(Ui.Shorten(intervention.Diagnosis, 220))}[/]");
+        }
+
+        if (intervention.Action.Length > 0)
+        {
+            console.MarkupLine($"    [grey]did: {Markup.Escape(Ui.Shorten(intervention.Action, 220))}[/]");
+        }
+    }
+
+    public void PlanUpdated(Tokonomy.Core.Planning.PlanRevision revision)
+    {
+        _working.Stop();
+        var units = revision.Changes.Select(c => c.UnitId).OfType<string>().Distinct(StringComparer.Ordinal).ToList();
+        console.MarkupLine($"    [blue]plan updated → revision {revision.Number}[/] [grey]({revision.Changes.Count} change(s){(units.Count > 0 ? " to " + Markup.Escape(string.Join(", ", units.Take(6))) : "")}; {Markup.Escape(revision.Source)})[/]");
+    }
+
+    public void ReviewFinished(WorkUnit unit, UnitReview review, string why)
+    {
+        _working.Stop();
+        var color = review.Verdict switch
+        {
+            UnitReviewVerdict.Approve => "green",
+            UnitReviewVerdict.ApproveWithWarnings or UnitReviewVerdict.Unavailable => "yellow",
+            _ => "red",
+        };
+        console.MarkupLine($"  [{color}]architect review: {Markup.Escape(review.Verdict.ToString())}[/] [grey]{Markup.Escape(Ui.Shorten(review.Summary, 160))}[/]");
+        foreach (var finding in review.Findings.Take(3))
+        {
+            console.MarkupLine($"    [grey]- {Markup.Escape(Ui.Shorten(finding.ToString(), 200))}[/]");
+        }
+    }
+
     public void Dispose() => _working.Dispose();
 }

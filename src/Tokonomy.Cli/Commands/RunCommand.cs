@@ -24,6 +24,10 @@ public sealed class RunSettings : CommonSettings
     [Description("With --plan: run a plan that was already executed (for example after a failed run) as a new run, without planning again.")]
     public bool Again { get; init; }
 
+    [CommandOption("--resume <RUN_ID>")]
+    [Description("Continue an interrupted run (crash, Ctrl+C, closed terminal) on its own branch: completed units are kept and checked, the interrupted unit restarts from its last verified commit.")]
+    public string? Resume { get; init; }
+
     [CommandOption("--keep-worktree")]
     [Description("Keep the run worktree on disk for inspection (the run branch is always kept).")]
     public bool KeepWorktree { get; init; }
@@ -62,12 +66,86 @@ public sealed class RunCommand(IAnsiConsole console, IProcessRunner runner, Serv
         return newId;
     }
 
+    /// <summary>
+    /// Checks that a run is resumable and loads its saved state, keeping load errors (a corrupt or truncated file) for
+    /// the orchestrator's reconciliation to judge rather than failing here. Returns an error message or the request.
+    /// </summary>
+    internal static (string? Problem, ResumeRequest? Request) PrepareResume(Tokonomy.Runtime.Config.TokonomyConfig config, SqliteLedger ledger, string runId)
+    {
+        var record = ledger.GetRun(runId);
+        if (record is null)
+        {
+            return ($"Run '{runId}' not found.", null);
+        }
+
+        switch (record.Status)
+        {
+            case RunStatus.Planned:
+                return ($"Run '{runId}' never started; run it with `tokonomy run --plan {runId}`.", null);
+            case RunStatus.Pass:
+                return ($"Run '{runId}' already passed; there is nothing to resume.", null);
+            case RunStatus.Fail:
+                return ($"Run '{runId}' failed on a verdict (a unit failed its gates or its escalation), not an interruption. Run the plan again with `tokonomy run --plan {runId} --again`.", null);
+            case RunStatus.AbortedBudget when record.TotalUsd >= config.Policy.Budget.MaxUsdPerTask:
+                return ($"Run '{runId}' stopped at its budget (${record.TotalUsd:0.00} spent of budget.max_usd_per_task ${config.Policy.Budget.MaxUsdPerTask:0.00}). Raise the budget first if you want to resume it.", null);
+        }
+
+        var artifacts = new RunArtifacts(config.ConfigDirectory, runId);
+        if (!File.Exists(artifacts.PlanPath))
+        {
+            return ($"Run '{runId}' has no saved plan ({artifacts.PlanPath}).", null);
+        }
+
+        Tokonomy.Core.Planning.PlanState? planState = null;
+        string? planError = null;
+        try
+        {
+            planState = artifacts.LoadPlanState();
+        }
+        catch (Exception ex) when (ex is System.Text.Json.JsonException or IOException or NotSupportedException)
+        {
+            planError = ex.Message;
+        }
+
+        RunState? runState = null;
+        string? runError = null;
+        try
+        {
+            runState = artifacts.LoadRunState();
+        }
+        catch (Exception ex) when (ex is System.Text.Json.JsonException or IOException or NotSupportedException)
+        {
+            runError = ex.Message;
+        }
+
+        return (null, new ResumeRequest { PlanState = planState, PlanStateError = planError, RunState = runState, RunStateError = runError });
+    }
+
     /// <summary>Executes a saved plan. Returns the exit code and the outcome (null when the run could not start).</summary>
     internal async Task<(int Exit, RunOutcome? Outcome)> RunPlanAsync(
         Tokonomy.Runtime.Config.TokonomyConfig config, RunSettings settings, bool quietHeader, CancellationToken cancellationToken)
     {
         using var ledger = new SqliteLedger(config.LedgerPath);
-        var runId = settings.Plan ?? ledger.ListRuns(100).FirstOrDefault(r => r.Status == RunStatus.Planned)?.Id;
+        if (settings.Resume is not null && (settings.Plan is not null || settings.Again))
+        {
+            Output.Error(console, "--resume cannot be combined with --plan or --again.");
+            return (ExitCodes.Usage, null);
+        }
+
+        ResumeRequest? resume = null;
+        if (settings.Resume is { } resumeId)
+        {
+            var (problem, request) = PrepareResume(config, ledger, resumeId);
+            if (problem is not null)
+            {
+                Output.Error(console, problem);
+                return (ExitCodes.Usage, null);
+            }
+
+            resume = request;
+        }
+
+        var runId = settings.Resume ?? settings.Plan ?? ledger.ListRuns(100).FirstOrDefault(r => r.Status == RunStatus.Planned)?.Id;
         if (runId is null)
         {
             Output.Error(console, "No unexecuted plan found. Run `tokonomy plan \"<task>\"` first.");
@@ -81,7 +159,7 @@ public sealed class RunCommand(IAnsiConsole console, IProcessRunner runner, Serv
             return (ExitCodes.Usage, null);
         }
 
-        if (record.Status != RunStatus.Planned)
+        if (record.Status != RunStatus.Planned && resume is null)
         {
             if (!settings.Again)
             {
@@ -115,6 +193,10 @@ public sealed class RunCommand(IAnsiConsole console, IProcessRunner runner, Serv
         }
 
         Ui.Note(console, $"strategy {strategy.Id} ({strategy.Description}) · executor {executorName} · worker {(strategy.WorkerIsStrong ? policy.Models.Architect : policy.Models.Worker)}");
+        if (plan.Readiness is { } readiness && readiness != Tokonomy.Core.Planning.PlanReadiness.Ready)
+        {
+            Output.Warn(console, $"This plan was {Ui.Readiness(readiness)} when it was made ({plan.Issues.Count(i => !i.StartsWith("(advice)", StringComparison.Ordinal))} issue(s)); the gates still decide every unit.");
+        }
         IProvider? architect = null;
         if (strategy.AllowEscalation)
         {
@@ -147,10 +229,12 @@ public sealed class RunCommand(IAnsiConsole console, IProcessRunner runner, Serv
                 WorkerModel = strategy.WorkerIsStrong ? policy.Models.Architect : policy.Models.Worker,
                 UseGates = strategy.UseGates,
                 AllowEscalation = strategy.AllowEscalation,
+                AdaptiveSupervision = strategy.AdaptiveSupervision,
                 MaxAttempts = strategy.MaxAttempts,
                 Prices = Services.LoadPrices(config),
                 UpstreamKey = key,
                 AlreadySpentUsd = record.TotalUsd,
+                Resume = resume,
             }, observer, cancellationToken);
         }
         catch (GitException ex)
@@ -172,6 +256,11 @@ public sealed class RunCommand(IAnsiConsole console, IProcessRunner runner, Serv
         if (outcome.WorktreePath is not null)
         {
             Ui.Note(console, $"worktree kept at {outcome.WorktreePath}");
+        }
+
+        if (outcome.Interventions > 0 || outcome.PlanRevision > 1)
+        {
+            Ui.Note(console, $"architect interventions: {outcome.Interventions} · plan revision {outcome.PlanRevision} · lessons {outcome.Lessons}  (details: tokonomy report {runId})");
         }
 
         if (outcome.Review is { } review)

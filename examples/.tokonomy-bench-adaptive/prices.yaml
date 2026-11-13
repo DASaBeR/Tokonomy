@@ -1,0 +1,16 @@
+# USD per million tokens. Both models run on subscriptions, so nothing is billed per token; these are
+# API-EQUIVALENT figures that make cost per successful task comparable. Read the results as "what this would
+# cost on a metered API", not as money spent.
+#
+# gemini-3.8-flash-high: Antigravity reports tokens but no cost. Priced like google/gemini-3.8-flash on
+# OpenRouter (0.825 in / 4.125 out, cache read 0.0825) on 2026-11-10; the "high" thinking effort changes how many
+# tokens are used, not the rate. Antigravity's own token counts include thinking tokens in the output.
+#
+# claude-opus-5-5: not listed on purpose. Claude Code reports its own API-equivalent cost for every call, and
+# Tokonomy uses that figure for the architect and for Opus working alone.
+
+models:
+  gemini-3.8-flash-high:
+    input: 0.825
+    cached_input: 0.0825
+    output: 4.125

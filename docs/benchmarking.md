@@ -16,9 +16,48 @@ A cheap run that fails is not a saving: its cost is still in the numerator.
 | 1b | Strong model + gates + retry | How much do gates and retries alone help? |
 | 2 | Cheap model, single shot | How far does cheap get alone? |
 | 3 | Architect plan + cheap worker, no gates | Does the split help by itself? |
-| 4 | Architect plan + cheap worker + gates + supervision | Does the full approach earn its complexity? |
+| 4 | Architect plan + cheap worker + gates + supervision (takeover) | Does the full approach earn its complexity? |
+| 5 | Strategy 4 + adaptive supervision and architectural review | Does keeping the strong model in charge during the run pay for its extra calls? |
 
 The decision after M3 compares **4 vs 1b** (the architect/worker split's own value) and **4 vs 1** (overall). Strategy 4 includes architect takeover (see [config.md](config.md#architect-takeover-strategy-4)); results recorded before takeover existed are not comparable with later ones.
+
+**5 vs 4** isolates adaptive supervision (worker reports, L1-L3 interventions, plan revisions and lessons, splitting,
+recovery, risk-based review; see [adaptive-supervision.md](adaptive-supervision.md)). Both use the same planner, so the
+planning improvements (blueprint, critique, file inspection) affect strategies 3, 4 and 5 alike. Plans made after the
+planner change are not comparable with older strategy 3/4 results.
+
+### Fair comparison options
+
+- `--share-plans` (paired design): every strategy that uses an architect plan executes the **same** plan for a given task
+  and repeat. The plan is made once, by the first such trial, and its cost is charged to every trial that uses it (each
+  would have had to plan alone). Differences then come from execution, not from planner variance. The cost-by-purpose
+  table records the shared plan once.
+- `--judge`: after each trial an independent architect call reviews the final diff against the **task alone** (not the
+  plan), with the same prompt for every strategy. It is told the task may contain wrong assumptions, so working around
+  one is not penalised. Its verdict is stored as an event and never charged to the trial.
+- Every bench writes `runs/<bench-id>.manifest.json` (models, provider kinds, executor and CLI versions, Tokonomy
+  version, git commit and a hash of uncommitted changes, policy sections, prompt hashes, task prompt hashes) and
+  `runs/<bench-id>.json` (every trial with its ledger-derived statistics) next to the Markdown report.
+- *Unplanned changes* counts files the final branch changed that no unit of the final plan named (tests excluded), for
+  every strategy with a plan.
+- A trial that ended because of the environment (provider outage, usage limit, sandbox) is marked *infra* in the trial
+  table. It still counts as a failed trial; re-run it rather than drop it.
+
+### Supervision metrics
+
+Next to cost and pass rate, the report has a **Supervision** table per strategy, read from the ledger of each trial:
+units accepted, the share accepted **without an architect takeover**, worker retries, takeovers, interventions (L1 /
+L2), plan revisions, review change requests, architectural violations (high-severity review findings), **repeated
+mistakes** (failures of the `lessons` check: a corrected mistake made again) and human decisions. `tokonomy report
+<run-id>` shows the same per run, with architect spend split by purpose.
+
+### Tasks that exercise supervision
+
+`examples/tasks-adaptive.yaml` holds verified shop-demo tasks whose prompt carries one deliberately **wrong assumption**
+(a helper, module or file that does not exist). The hidden acceptance tests and reference solutions are the original
+ones, so each task stays achievable. They are meant to provoke plan grounding, worker blocker reports, architect
+diagnosis of its own plan error, plan revision and lessons. Combine them with `examples/tasks-extreme.yaml` for repeated
+implementation failures. Neither has been calibrated against real models yet.
 
 ## Writing a taskset
 

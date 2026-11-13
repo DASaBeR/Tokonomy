@@ -22,7 +22,7 @@ public sealed class BenchSettings : CommonSettings
     public string Taskset { get; init; } = "";
 
     [CommandOption("--strategies <LIST>")]
-    [Description("Comma-separated strategies: 1, 1b, 2, 3, 4.")]
+    [Description("Comma-separated strategies: 1, 1b, 2, 3, 4, 5.")]
     [DefaultValue("1,1b,2")]
     public string Strategies { get; init; } = "1,1b,2";
 
@@ -47,12 +47,20 @@ public sealed class BenchSettings : CommonSettings
     [Description("Stop starting trials once this much has been spent in total. Each trial is also capped at what remains.")]
     public decimal? MaxUsd { get; init; }
 
+    [CommandOption("--share-plans")]
+    [Description("Paired comparison: strategies that use an architect plan run the same plan per task and repeat (planning cost is charged to each).")]
+    public bool SharePlans { get; init; }
+
+    [CommandOption("--judge")]
+    [Description("After each trial, an independent architect call judges the final diff against the task (not charged to the trial).")]
+    public bool Judge { get; init; }
+
     [CommandOption("--dry-run")]
     [Description("Show the trial matrix and budget ceiling without running anything.")]
     public bool DryRun { get; init; }
 }
 
-public sealed class BenchCommand(IAnsiConsole console, IProcessRunner runner, Services services) : AsyncCommand<BenchSettings>
+public sealed partial class BenchCommand(IAnsiConsole console, IProcessRunner runner, Services services) : AsyncCommand<BenchSettings>
 {
     public override async Task<int> ExecuteAsync(CommandContext context, BenchSettings settings, CancellationToken cancellationToken)
     {
@@ -167,6 +175,9 @@ public sealed class BenchCommand(IAnsiConsole console, IProcessRunner runner, Se
             Repeat = settings.Repeat,
             TaskFilter = settings.Tasks,
             MaxUsd = settings.MaxUsd,
+            SharePlans = settings.SharePlans,
+            Judge = settings.Judge,
+            Environment = await DescribeEnvironmentAsync(config, cancellationToken),
         }, prices, key, new ConsoleBenchObserver(console), cancellationToken);
 
         var results = ledger.ListBenchResults(benchId);
@@ -174,6 +185,9 @@ public sealed class BenchCommand(IAnsiConsole console, IProcessRunner runner, Se
         var reportPath = Path.Combine(config.ConfigDirectory, "runs", benchId + ".md");
         Directory.CreateDirectory(Path.GetDirectoryName(reportPath)!);
         await File.WriteAllTextAsync(reportPath, markdown, cancellationToken);
+        // Raw per-trial data (with the ledger-derived statistics) for re-analysis.
+        await File.WriteAllTextAsync(Path.ChangeExtension(reportPath, ".json"),
+            System.Text.Json.JsonSerializer.Serialize(new { bench_id = benchId, results }, RunArtifacts.JsonOptions), cancellationToken);
 
         if (settings.Json)
         {
@@ -185,6 +199,55 @@ public sealed class BenchCommand(IAnsiConsole console, IProcessRunner runner, Se
         console.Write(new Text(markdown));
         console.MarkupLine($"Report saved to {Markup.Escape(reportPath)}");
         return ExitCodes.Ok;
+    }
+}
+
+public sealed partial class BenchCommand
+{
+    /// <summary>Versions of the tools a trial depends on, for the manifest. A tool that cannot be queried is recorded as such.</summary>
+    private async Task<Dictionary<string, string>> DescribeEnvironmentAsync(TokonomyConfig config, CancellationToken ct)
+    {
+        var env = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["tokonomy"] = typeof(BenchCommand).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+                .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion ?? "dev",
+            ["os"] = System.Runtime.InteropServices.RuntimeInformation.OSDescription,
+        };
+        var executors = new[] { config.Policy.Executors.Default, config.Policy.Executors.Strong }.OfType<string>().Distinct();
+        foreach (var name in executors)
+        {
+            if (config.Executors.Executors.TryGetValue(name, out var e) && e.VersionCmd.Count > 0)
+            {
+                env[$"executor:{name}"] = await VersionAsync(e.VersionCmd, ct);
+            }
+        }
+
+        if (config.Policy.ArchitectProvider.Kind != ArchitectProviderConfig.ApiKind)
+        {
+            env["architect_cli"] = await VersionAsync([config.Policy.ArchitectProvider.CommandOrDefault, "--version"], ct);
+        }
+
+        var root = Path.GetDirectoryName(config.ConfigDirectory)!;
+        var git = new Tokonomy.Runtime.Git.GitCli(runner);
+        env["git_head"] = (await git.RunAsync(root, ["rev-parse", "HEAD"], ct, allowFailure: true)).Trim();
+        var dirty = await git.RunAsync(root, ["status", "--porcelain"], ct, allowFailure: true);
+        env["git_dirty_files"] = dirty.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length.ToString(CultureInfo.InvariantCulture);
+        var diff = await git.RunAsync(root, ["diff", "HEAD"], ct, allowFailure: true);
+        env["git_diff_sha"] = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(diff)))[..12];
+        return env;
+    }
+
+    private async Task<string> VersionAsync(IReadOnlyList<string> cmd, CancellationToken ct)
+    {
+        try
+        {
+            var result = await runner.RunAsync(new ProcessSpec { Args = cmd, WorkingDirectory = Directory.GetCurrentDirectory(), Timeout = TimeSpan.FromSeconds(30) }, ct);
+            return (result.Stdout + result.Stderr).Trim().Split('\n')[0].Trim();
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException or IOException)
+        {
+            return "unavailable: " + ex.Message;
+        }
     }
 }
 

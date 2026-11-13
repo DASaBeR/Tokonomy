@@ -121,6 +121,36 @@ public enum ReviewVerdict
 /// </summary>
 public sealed record FinalReview(ReviewVerdict Verdict, string Summary, IReadOnlyList<string> Concerns, string Model = "");
 
+public enum UnitReviewVerdict
+{
+    Approve,
+    ApproveWithWarnings,
+    RequestChanges,
+    Blocked,
+    HumanDecisionRequired,
+
+    /// <summary>The review could not be obtained (architect call failed, budget exhausted, or the reply was unreadable).</summary>
+    Unavailable,
+}
+
+/// <summary>One problem the architect found in a unit's diff.</summary>
+public sealed record ReviewFinding(string Severity, string Category, string? File, string Description, string? Recommendation = null)
+{
+    public bool High => Severity.Equals("high", StringComparison.OrdinalIgnoreCase) || Severity.Equals("critical", StringComparison.OrdinalIgnoreCase);
+
+    public override string ToString() =>
+        $"[{Severity}/{Category}] {(File is null ? "" : File + ": ")}{Description}{(string.IsNullOrWhiteSpace(Recommendation) ? "" : $" -> {Recommendation}")}";
+}
+
+/// <summary>
+/// The architect's review of one unit after its gates passed. It complements the gates and never overrides them: a
+/// unit is reviewed only once every mandatory gate passed, and approval cannot accept a unit whose gates failed.
+/// </summary>
+public sealed record UnitReview(UnitReviewVerdict Verdict, string Summary, IReadOnlyList<ReviewFinding> Findings, string Model = "")
+{
+    public bool Accepts => Verdict is UnitReviewVerdict.Approve or UnitReviewVerdict.ApproveWithWarnings;
+}
+
 public enum DecisionKind
 {
     Accept,

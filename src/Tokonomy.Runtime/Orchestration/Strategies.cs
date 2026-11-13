@@ -10,7 +10,8 @@ public sealed record Strategy(
     bool UseGates,
     bool AllowEscalation,
     int? MaxAttempts,
-    bool WorkerIsStrong)
+    bool WorkerIsStrong,
+    bool AdaptiveSupervision = false)
 {
     public static readonly Strategy StrongOnly = new("1", "strong model only, single shot", false, false, false, 1, true);
     public static readonly Strategy StrongWithGates = new("1b", "strong model + gates + retry", false, true, false, null, true);
@@ -18,7 +19,17 @@ public sealed record Strategy(
     public static readonly Strategy SplitNoGates = new("3", "architect plan + cheap worker, no gates", true, false, false, 1, false);
     public static readonly Strategy Supervised = new("4", "architect plan + cheap worker + gates + supervision", true, true, true, null, false);
 
-    public static IReadOnlyList<Strategy> All { get; } = [StrongOnly, StrongWithGates, CheapOnly, SplitNoGates, Supervised];
+    /// <summary>
+    /// Strategy 4 plus adaptive supervision: worker reports, architect interventions (instruction correction, guided
+    /// correction, takeover), plan revisions with lessons, decomposition of oversized units, recovery after a failed
+    /// takeover and risk-based architectural review of each unit.
+    /// </summary>
+    public static readonly Strategy Adaptive = new("5", "architect plan + cheap worker + gates + adaptive supervision and review", true, true, true, null, false, AdaptiveSupervision: true);
+
+    /// <summary>What <c>build</c> and <c>plan</c> use when no strategy is given.</summary>
+    public static Strategy Default => Supervised; // strategy 5 stays opt-in until benchmarks justify promoting it
+
+    public static IReadOnlyList<Strategy> All { get; } = [StrongOnly, StrongWithGates, CheapOnly, SplitNoGates, Supervised, Adaptive];
 
     public static Strategy Parse(string id) =>
         All.FirstOrDefault(s => string.Equals(s.Id, id.Trim(), StringComparison.OrdinalIgnoreCase))

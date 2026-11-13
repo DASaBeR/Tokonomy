@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Spectre.Console;
 using Tokonomy.Cli;
+using Tokonomy.Cli.Infrastructure;
 using Tokonomy.Core.Model;
 using Tokonomy.Runtime.Ledger;
 
@@ -73,6 +74,70 @@ public sealed class CliTests : IDisposable
         Assert.Equal(0, exit);
         using var doc = JsonDocument.Parse(output);
         Assert.Equal("python", doc.RootElement.GetProperty("stacks")[0].GetProperty("name").GetString());
+    }
+
+    [Theory]
+    [InlineData(RunStatus.Pass, "already passed")]
+    [InlineData(RunStatus.Planned, "never started")]
+    [InlineData(RunStatus.Fail, "failed on a verdict")]
+    [InlineData(RunStatus.Running, "no saved plan")]
+    public async Task Resume_refuses_runs_that_are_not_resumable(RunStatus status, string message)
+    {
+        await Run("init", "--path", _repo);
+        using (var ledger = new SqliteLedger(Path.Combine(ConfigDir, "ledger.db")))
+        {
+            ledger.StartRun(new RunRecord { Id = "run-r", Strategy = "4", TaskId = "t", Repo = _repo, Status = status, Started = DateTimeOffset.UtcNow });
+        }
+
+        var (exit, output) = await Run("run", "--resume", "run-r", "--config", ConfigDir);
+
+        Assert.Equal(ExitCodes.Usage, exit);
+        Assert.Contains(message, output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Resume_cannot_be_combined_with_plan_or_again()
+    {
+        await Run("init", "--path", _repo);
+
+        var (exit, output) = await Run("run", "--resume", "a", "--plan", "b", "--config", ConfigDir);
+
+        Assert.Equal(ExitCodes.Usage, exit);
+        Assert.Contains("cannot be combined", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Report_shows_architect_spend_by_purpose_interventions_revisions_and_reviews()
+    {
+        await Run("init", "--path", _repo);
+        using (var ledger = new SqliteLedger(Path.Combine(ConfigDir, "ledger.db")))
+        {
+            ledger.StartRun(new RunRecord { Id = "run-5", Strategy = "5", TaskId = "adaptive", Repo = _repo, Started = DateTimeOffset.UtcNow });
+            ledger.RecordLlmCall(new LlmCallRecord { RunId = "run-5", Role = LlmRole.Architect, Model = "opus", Usd = 0.2m, Purpose = "planning" });
+            ledger.RecordLlmCall(new LlmCallRecord { RunId = "run-5", Role = LlmRole.Architect, Model = "opus", Usd = 0.05m, Purpose = "supervision" });
+            ledger.UpsertUnit("run-5", "U1", "Search", "accepted", 2, 0);
+            ledger.RecordIntervention(new InterventionRecord
+            {
+                RunId = "run-5", UnitId = "U1", At = DateTimeOffset.UtcNow, Trigger = "worker_blocked", Level = 1, Outcome = "resumed",
+                Diagnosis = "plan named [IProductService] which does not exist", Action = "corrected instructions given", PlanRevision = 2,
+            });
+            ledger.RecordPlanRevision("run-5", new Tokonomy.Core.Planning.PlanRevision
+            {
+                Number = 2, At = DateTimeOffset.UtcNow, Source = "supervision", Reason = "use [ProductQueries]", Changes = [],
+            });
+            ledger.RecordUnitReview(new UnitReviewRecord("run-5", "U1", DateTimeOffset.UtcNow, UnitReviewVerdict.ApproveWithWarnings, "ok [minor]", "high-risk unit",
+                [new ReviewFinding("low", "other", "a.py", "naming [nit]")]));
+            ledger.FinishRun("run-5", RunStatus.Pass, DateTimeOffset.UtcNow);
+        }
+
+        var (exit, detail) = await Run("report", "run-5", "--config", ConfigDir);
+
+        Assert.Equal(0, exit);
+        Assert.Contains("supervision 1×", detail, StringComparison.Ordinal);
+        Assert.Contains("[IProductService]", detail, StringComparison.Ordinal);
+        Assert.Contains("rev 2", detail, StringComparison.Ordinal);
+        Assert.Contains("ApproveWithWarnings", detail, StringComparison.Ordinal);
+        Assert.Contains("naming [nit]", detail, StringComparison.Ordinal);
     }
 
     [Fact]

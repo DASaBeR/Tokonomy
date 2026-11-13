@@ -170,18 +170,57 @@ internal static class Ui
         return result.Head;
     }
 
-    /// <summary>The plan as a tree: one node per unit with what it builds and which tests will judge it.</summary>
+    /// <summary>
+    /// The plan: what the architect found and decided (for a blueprint), then one node per unit with what it builds, its
+    /// risk, its dependencies and which tests will judge it.
+    /// </summary>
     public static void PlanView(IAnsiConsole console, string runId, Contract contract)
     {
+        if (contract.Analysis is { } analysis)
+        {
+            var found = analysis.Facts.Count > 0 ? $"{analysis.Facts.Count} verified fact(s)" : "no verified facts";
+            console.MarkupLine($"[grey]Discovered:[/] {found}, {analysis.Requirements.Count} requirement(s), {analysis.Assumptions.Count} assumption(s)");
+            foreach (var fact in analysis.Facts.Take(4))
+            {
+                console.MarkupLine($"  [grey]•[/] {Markup.Escape(Shorten(fact.Text, 140))} [grey]({Markup.Escape(string.Join(", ", fact.Evidence.Take(2)))})[/]");
+            }
+
+            foreach (var assumption in analysis.Assumptions.Take(3))
+            {
+                console.MarkupLine($"  [yellow]?[/] {Markup.Escape(Shorten(assumption, 140))} [grey](assumed)[/]");
+            }
+        }
+
+        if (contract.Architecture is { Summary.Length: > 0 } architecture)
+        {
+            console.MarkupLine($"[grey]Architecture:[/] {Markup.Escape(Shorten(architecture.Summary, 300))}");
+        }
+
+        foreach (var decision in contract.Decisions.Take(6))
+        {
+            console.MarkupLine($"  [blue]{Markup.Escape(decision.Id)}[/] {Markup.Escape(Shorten(decision.Title, 60))}: {Markup.Escape(Shorten(decision.Decision, 140))}");
+        }
+
         var tree = new Tree($"[bold]{Markup.Escape(contract.Task)}[/]") { Style = Style.Parse("grey") };
         foreach (var unit in contract.Units)
         {
             var after = unit.DependsOn.Count > 0 ? $" [grey](after {Markup.Escape(string.Join(", ", unit.DependsOn))})[/]" : "";
-            var node = tree.AddNode($"[bold blue]{Markup.Escape(unit.Id)}[/]  [bold]{Markup.Escape(unit.Title)}[/]{after}");
-            node.AddNode($"[grey]{Markup.Escape(Shorten(unit.Spec, 220))}[/]");
-            if (unit.Files.Count > 0)
+            var risk = !contract.IsBlueprint ? "" : unit.Risk switch
             {
-                node.AddNode($"[grey]files:[/] {Markup.Escape(string.Join(", ", unit.Files.Take(5)))}");
+                UnitRisk.High => "  [red]high risk[/]",
+                UnitRisk.Medium => "  [yellow]medium risk[/]",
+                _ => "",
+            };
+            var node = tree.AddNode($"[bold blue]{Markup.Escape(unit.Id)}[/]  [bold]{Markup.Escape(unit.Title)}[/]{after}{risk}");
+            node.AddNode($"[grey]{Markup.Escape(Shorten(unit.Objective ?? unit.Spec, 220))}[/]");
+            if (unit.ExpectedFiles.Count > 0)
+            {
+                node.AddNode($"[grey]files:[/] {Markup.Escape(string.Join(", ", unit.ExpectedFiles.Take(5)))}");
+            }
+
+            if (unit.Steps.Count > 0)
+            {
+                node.AddNode($"[grey]{unit.Steps.Count} step(s), {unit.Acceptance.Count} acceptance criteria{(unit.Requirements.Count > 0 ? ", covers " + Markup.Escape(string.Join(", ", unit.Requirements)) : "")}[/]");
             }
 
             if (unit.Tests.Count > 0)
@@ -195,7 +234,41 @@ internal static class Ui
         {
             console.MarkupLine("[grey]Rules:[/] " + Markup.Escape(string.Join("  ·  ", contract.Rules.Select(r => r.Text))));
         }
+
+        if (contract.Analysis is { Risks.Count: > 0 } withRisks)
+        {
+            console.MarkupLine("[grey]Risks:[/] " + Markup.Escape(string.Join("  ·  ", withRisks.Risks.Take(4).Select(r => Shorten(r, 120)))));
+        }
     }
+
+    /// <summary>The plan's quality verdict, its critique and the issues still open.</summary>
+    public static void PlanQualityView(IAnsiConsole console, PlannedTask planned)
+    {
+        if (!planned.Contract.IsBlueprint && planned.Critique is null && planned.Assessment.Issues.Count == 0)
+        {
+            return;
+        }
+
+        var assessment = planned.Assessment;
+        var color = assessment.IsReady ? "green" : "yellow";
+        var revised = planned.RevisionRounds > 0 ? $", revised {planned.RevisionRounds} time(s)" : "";
+        var critique = planned.Critique is { } c ? $"; critique: {c.Verdict.ToString().ToLowerInvariant()}{(c.Summary.Length > 0 ? " - " + Shorten(c.Summary, 120) : "")}" : "";
+        var inspected = planned.InspectedFiles.Count > 0 ? $"; read {planned.InspectedFiles.Count} file(s) first" : "";
+        console.MarkupLine($"[grey]Plan check:[/] [{color}]{Readiness(assessment.Readiness)}[/]{Markup.Escape(revised + critique + inspected)}");
+        foreach (var issue in assessment.Issues.OrderByDescending(i => i.Blocking).Take(6))
+        {
+            var mark = issue.Blocking ? "[yellow]![/]" : "[grey]·[/]";
+            console.MarkupLine($"  {mark} {Markup.Escape(Shorten(issue.ToString(), 180))}");
+        }
+    }
+
+    public static string Readiness(Tokonomy.Core.Planning.PlanReadiness readiness) => readiness switch
+    {
+        Tokonomy.Core.Planning.PlanReadiness.Ready => "ready",
+        Tokonomy.Core.Planning.PlanReadiness.Incomplete => "incomplete",
+        Tokonomy.Core.Planning.PlanReadiness.ArchitecturallyInconsistent => "architecturally inconsistent",
+        _ => "structurally invalid",
+    };
 
     /// <summary>End-of-run summary: verdict, per-unit result, cost, time and what to do next.</summary>
     public static void RunSummary(IAnsiConsole console, RunOutcome outcome, string runId, bool costEstimated, TimeSpan elapsed)
@@ -206,7 +279,12 @@ internal static class Ui
         var table = new Table().Border(TableBorder.None).HideHeaders().AddColumn("").AddColumn("");
         foreach (var unit in outcome.Units)
         {
-            var mark = unit.Status == "accepted" ? "[green]✓[/]" : "[red]✗[/]";
+            var mark = unit.Status switch
+            {
+                UnitOutcome.Accepted => "[green]✓[/]",
+                UnitOutcome.Split => "[blue]↳[/]",
+                _ => "[red]✗[/]",
+            };
             var tries = unit.Attempts == 1 ? "1 attempt" : $"{unit.Attempts} attempts";
             table.AddRow(mark, $"[bold]{Markup.Escape(unit.UnitId)}[/] [grey]{tries}; {Markup.Escape(unit.Reason)}[/]");
         }

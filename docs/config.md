@@ -44,6 +44,31 @@ escalation:
   worker_timeout_seconds: 1200
   final_review: false                  # one advisory architect review of the combined diff after every unit passed
 
+planning:                      # every strategy with an architect plan (3, 4, 5)
+  blueprint: true              # analysis, architecture, decisions (ADRs), detailed units; false: the original short contract
+  critique: true               # a separate architect call critiques the plan before you see it
+  max_revision_rounds: 1       # 0-3 revisions after the quality check or the critique
+  inspect_files: true          # the architect may read up to max_inspect_files tracked files once before planning
+  max_inspect_files: 12
+  max_context_chars: 60000     # repository context sent to the architect
+
+supervision:                   # strategy 5 only
+  max_interventions_per_unit: 2
+  max_interventions_per_run: 6
+  early_on_repeated_failure: true      # call the architect when the same failure repeats, before retries run out
+  resume_after_failed_takeover: true   # reset the unit and let the worker resume instead of failing the run
+  max_splits_per_run: 2                # oversized units the architect may split
+  max_plan_revisions: 20
+  worker_reports: true                 # ask the worker for tokonomy-report.json and act on blockers
+
+review:                        # strategy 5 only: architectural review of units whose gates passed
+  mode: risk                   # off | risk | always
+  max_change_requests_per_unit: 1
+  on_unavailable: accept       # accept (on the gates, with a warning) | fail
+  medium_risk_diff_lines: 150
+  architect_changes: risk      # independent review of units the architect finished itself: off | risk | always
+  # architect_review_model: ""  # optional second model for that review (default: models.architect, fresh context)
+
 budget:
   max_usd_per_task: 3.00       # hard abort
   max_usd_per_run: 20.00       # optional
@@ -66,13 +91,19 @@ Checked in order after every attempt; the first match decides.
 
 | # | Condition | Decision |
 |---|---|---|
-| 1 | Diff larger than `max_diff_lines` | Split (the unit is mis-sized) |
-| 2 | Diff touches `.tokonomy/**` or a `protected_paths` glob | Takeover |
-| 3 | New dependency (not listed in `allowed_dependencies`) and `review_on_new_dependency` | Takeover (a human decision, so the run stops and names the packages) |
-| 4 | Worker timed out | Takeover |
-| 5 | No changes | Retry, or Takeover at the limit |
-| 6 | A gate has new failures | Retry with gate output as feedback, or Takeover at the limit |
-| 7 | Otherwise | Accept: the unit is committed on `tokonomy/<run-id>` |
+| 1 | The worker used a different model than requested | Fail (never retried or taken over) |
+| 2 | Workspace violation (links, `.git` tampering, a replaced managed file) | Fail (nothing from the attempt is trusted) |
+| 3 | Diff larger than `max_diff_lines` and **not** verified by passing gates | Split (strategy 5 splits the unit; other strategies fail it). A large diff every gate accepted is kept |
+| 4 | Diff touches `.tokonomy/**` or a `protected_paths` glob | Takeover (a human decision: the run stops) |
+| 5 | New dependency (not listed in `allowed_dependencies`) and `review_on_new_dependency` | Takeover (a human decision, so the run stops and names the packages) |
+| 6 | Worker timed out | Takeover |
+| 7 | The worker run faulted (crash, error status, denied tool call) | Retry, or Takeover at the limit; a faulted run is never accepted |
+| 8 | No changes | Retry, or Takeover at the limit |
+| 9 | A gate has new failures | Retry with gate output as feedback, or Takeover at the limit |
+| 10 | Otherwise | Accept: the unit is committed on `tokonomy/<run-id>` |
+
+"The limit" is `max_retries_per_unit` attempts since the last architect correction (strategy 5 opens a new retry window
+when the architect sends the worker back with corrected instructions).
 
 The worker's exit code and self-report are ignored; only the git diff and gates count.
 
@@ -88,7 +119,20 @@ When a unit keeps failing its gates (rule 6), the worker makes no changes, or it
 
 Takeover cost is counted in the ledger as architect spend and against the budget caps.
 
-**Not handled by takeover:** a diff that touches a protected path or adds a dependency is a human decision, so the unit fails with a message saying so. An oversized diff (rule 1) also fails: splitting such a unit is not implemented yet.
+**Not handled by takeover:** a diff that touches a protected path or adds a dependency is a human decision, so the unit fails with a message saying so. An unverified oversized diff (rule 3) fails in strategy 4; strategy 5 splits the unit instead.
+
+### Adaptive supervision (strategy 5)
+
+Strategy 5 (opt-in: `--strategy 5`; `build` and `plan` default to 4) adds worker reports, architect interventions at three levels
+(instruction correction, guided correction, takeover), plan revisions with lessons that reach later units, splitting of
+oversized units, recovery after a failed takeover and a risk-based architectural review of each unit. Its knobs are the
+`supervision` and `review` sections above. How it works, what is validated and what is recorded:
+[adaptive-supervision.md](adaptive-supervision.md).
+
+### Crash recovery
+
+An interrupted run (crash, closed terminal, Ctrl+C) continues with `tokonomy run --resume <run-id>`, for every
+strategy. What is checked, kept and refused: [recovery.md](recovery.md).
 
 ### Gates
 

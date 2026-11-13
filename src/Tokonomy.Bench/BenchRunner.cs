@@ -23,6 +23,22 @@ public sealed record BenchOptions
     /// benchmark stops starting trials once less than <see cref="BenchRunner.MinTrialBudgetUsd"/> remains.
     /// </summary>
     public decimal? MaxUsd { get; init; }
+
+    /// <summary>
+    /// Paired design: every strategy that uses an architect plan executes the SAME plan for a given task and repeat
+    /// (made once, by the first such trial), so differences come from execution, not from planner variance. The
+    /// planning cost is charged to every trial that uses the plan, as each would have had to plan on its own.
+    /// </summary>
+    public bool SharePlans { get; init; }
+
+    /// <summary>
+    /// After each trial, an independent architect call judges the final diff against the task alone (not the plan),
+    /// identically for every strategy. Recorded as an event, never charged to the trial.
+    /// </summary>
+    public bool Judge { get; init; }
+
+    /// <summary>Written to <c>runs/&lt;bench-id&gt;.manifest.json</c> for reproducibility (tool versions, code state).</summary>
+    public IReadOnlyDictionary<string, string> Environment { get; init; } = new Dictionary<string, string>();
 }
 
 public interface IBenchObserver
@@ -60,6 +76,8 @@ public sealed class BenchRunner(
         var tasks = taskset.Tasks.Where(t => options.TaskFilter is null || options.TaskFilter.Contains(t.Id)).ToList();
         var trials = (from task in tasks from strategy in options.Strategies from r in Enumerable.Range(1, options.Repeat) select (task, strategy, r)).ToList();
         var cacheRoot = Path.Combine(Path.GetTempPath(), "tokonomy", "bench-cache");
+        WriteManifest(benchId, taskset, config, options, tasks, trials.Count);
+        var plans = new Dictionary<(string Task, int Repeat), (PlannedTask Planned, string RunId)>();
 
         decimal spent = 0;
         for (var i = 0; i < trials.Count; i++)
@@ -78,7 +96,8 @@ public sealed class BenchRunner(
             var (task, strategy, repeat) = trials[i];
             var trialCap = remaining is { } r ? Math.Min(config.Policy.Budget.MaxUsdPerTask, r) : config.Policy.Budget.MaxUsdPerTask;
             observer?.TrialStarted(task, strategy, repeat, i + 1, trials.Count);
-            var result = await RunTrialAsync(benchId, taskset, task, strategy, repeat, config, trialCap, prices, upstreamKey, cacheRoot, ct);
+            var result = await RunTrialAsync(benchId, taskset, task, strategy, repeat, config, trialCap, prices, upstreamKey, cacheRoot,
+                options.SharePlans ? plans : null, options.Judge, ct);
             ledger.RecordBenchResult(result);
             spent += result.Usd;
             observer?.TrialFinished(result);
@@ -96,6 +115,11 @@ public sealed class BenchRunner(
         Prepare = policy.Prepare,
         Gates = policy.Gates,
         Escalation = policy.Escalation,
+        Acceptance = policy.Acceptance,
+        ArchitectProvider = policy.ArchitectProvider,
+        Planning = policy.Planning,
+        Supervision = policy.Supervision,
+        Review = policy.Review,
         Isolation = policy.Isolation,
         GateExecution = policy.GateExecution,
         Budget = new BudgetConfig
@@ -108,8 +132,10 @@ public sealed class BenchRunner(
 
     private async Task<BenchResultRecord> RunTrialAsync(
         string benchId, Taskset taskset, BenchTask task, Strategy strategy, int repeat, TokonomyConfig config, decimal trialCap,
-        PriceTable prices, string? upstreamKey, string cacheRoot, CancellationToken ct)
+        PriceTable prices, string? upstreamKey, string cacheRoot,
+        Dictionary<(string Task, int Repeat), (PlannedTask Planned, string RunId)>? plans, bool judge, CancellationToken ct)
     {
+        decimal sharedPlanUsd = 0;
         var started = _clock.UtcNow;
         var runId = RunArtifacts.NewRunId(started);
         var clone = Path.Combine(Path.GetTempPath(), "tokonomy", "bench", runId);
@@ -142,7 +168,24 @@ public sealed class BenchRunner(
 
             var baseSha = await _git.ResolveAsync(clone, task.Base, ct);
 
-            var planned = await TaskPlanning.PlanAsync(strategy, task.Prompt, clone, baseSha, runId, provider, policy.Models.Architect, ledger, _git, ct, policy.Acceptance);
+            PlannedTask planned;
+            if (plans is not null && strategy.UsesArchitectPlan && plans.TryGetValue((task.Id, repeat), out var shared))
+            {
+                planned = shared.Planned;
+                sharedPlanUsd = planned.ArchitectUsd;
+                note = $"plan shared from {shared.RunId}";
+                ledger.RecordEvent(runId, _clock.UtcNow, "shared_plan", System.Text.Json.JsonSerializer.Serialize(new { from = shared.RunId, usd = planned.ArchitectUsd }));
+            }
+            else
+            {
+                planned = await TaskPlanning.PlanAsync(strategy, task.Prompt, clone, baseSha, runId, provider, policy.Models.Architect, ledger, _git, ct, policy.Acceptance,
+                    policy: policy);
+                if (plans is not null && strategy.UsesArchitectPlan)
+                {
+                    plans[(task.Id, repeat)] = (planned, runId);
+                }
+            }
+
             var artifacts = new RunArtifacts(config.ConfigDirectory, runId, upstreamKey is null ? [] : [upstreamKey]);
             artifacts.SavePlan(new PlanFile
             {
@@ -152,6 +195,8 @@ public sealed class BenchRunner(
                 BaseSha = baseSha,
                 Created = started,
                 Contract = planned.Contract,
+                Readiness = strategy.UsesArchitectPlan ? planned.Assessment.Readiness : null,
+                Issues = planned.Assessment.Issues.Select(i => i.ToString()).ToList(),
             });
 
             var orchestrator = new RunOrchestrator(runner, ledger, supervisor, executorFactory, _clock, strategy.AllowEscalation ? provider : null);
@@ -168,6 +213,7 @@ public sealed class BenchRunner(
                 WorkerModel = strategy.WorkerIsStrong ? policy.Models.Architect : policy.Models.Worker,
                 UseGates = strategy.UseGates,
                 AllowEscalation = strategy.AllowEscalation,
+                AdaptiveSupervision = strategy.AdaptiveSupervision,
                 MaxAttempts = strategy.MaxAttempts,
                 Prices = prices,
                 UpstreamKey = upstreamKey,
@@ -175,11 +221,15 @@ public sealed class BenchRunner(
             }, null, ct);
 
             status = outcome.Status;
-            note = outcome.Error;
+            note = string.Join("; ", new[] { note, outcome.Error }.Where(s => !string.IsNullOrEmpty(s)));
             (accepted, var acceptanceNote) = outcome.Branch.Length == 0
                 ? (false, "acceptance not run: the run never created a branch")
                 : await AcceptAsync(taskset, task, clone, outcome.Branch, policy, runId, artifacts, ct);
             note = string.Join("; ", new[] { note, acceptanceNote }.Where(s => !string.IsNullOrEmpty(s)));
+            if (outcome.Branch.Length > 0)
+            {
+                await MeasureQualityAsync(task, clone, baseSha, outcome.Branch, artifacts.LoadPlanState()?.Current ?? planned.Contract, runId, policy, judge, ct);
+            }
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
@@ -201,7 +251,7 @@ public sealed class BenchRunner(
             RunId = runId,
             RunStatus = status,
             Accepted = accepted,
-            Usd = run?.TotalUsd ?? 0,
+            Usd = (run?.TotalUsd ?? 0) + sharedPlanUsd,
             CostSource = run?.CostSource ?? CostSource.Estimated,
             Duration = _clock.UtcNow - started,
             Note = string.IsNullOrEmpty(note) ? null : note,
@@ -265,6 +315,118 @@ public sealed class BenchRunner(
             await env.DestroyAsync();
         }
     }
+
+    internal const string JudgeSystem = """
+        You are an independent principal engineer judging a finished change for a benchmark. You did not plan or write it.
+        Judge the change against the task and the repository as it actually is. The task description may contain
+        INCORRECT assumptions about the repository (for example a helper, module or file that does not exist); a change
+        that correctly works around a false assumption is right, and one that invents the missing piece is acceptable
+        only if it is clean. Ignore whether automated tests pass (that is measured separately). Look for: requirements of
+        the task not met, wrong or risky logic, unrelated modifications, needless dependencies, duplicated logic,
+        changes to public behaviour the task did not ask for, and poor structure. Do not raise style nits.
+
+        Answer in exactly this form:
+
+        VERDICT: APPROVE
+        SUMMARY: one sentence
+
+        or
+
+        VERDICT: CONCERNS
+        SUMMARY: one sentence
+        CONCERNS:
+        - one concrete problem per line, naming the file
+        """;
+
+    /// <summary>
+    /// Deterministic and judged quality of a trial's final branch, the same for every strategy: files changed that the
+    /// final plan never named (tests excluded), and optionally an independent review of the diff against the task
+    /// alone. Stored as a <c>bench_quality</c> event; the judge's tokens are never charged to the trial.
+    /// </summary>
+    private async Task MeasureQualityAsync(
+        BenchTask task, string clone, string baseSha, string branch, Contract plan, string runId, Policy policy, bool judge, CancellationToken ct)
+    {
+        var changed = (await _git.RunAsync(clone, ["diff", "--name-only", "--no-renames", baseSha, branch], ct))
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+        int? unplanned = null;
+        var expected = plan.Units.SelectMany(u => u.ExpectedFiles).Distinct(StringComparer.Ordinal).ToList();
+        if (plan.Units.Count > 0 && expected.Count > 0)
+        {
+            var all = new WorkUnit { Id = "ALL", Title = "all", Spec = "all", Files = expected };
+            unplanned = Tokonomy.Core.Supervision.PlanDeviation.Detect(all, changed, policy.Acceptance.Enabled ? policy.Acceptance.Dir : null).Unplanned.Count;
+        }
+
+        string? verdict = null;
+        string? summary = null;
+        IReadOnlyList<string> concerns = [];
+        decimal judgeUsd = 0;
+        long judgeTokens = 0;
+        if (judge && provider is not null)
+        {
+            var patch = await _git.RunAsync(clone, ["diff", "--no-renames", baseSha, branch], ct);
+            try
+            {
+                var response = await provider.CompleteAsync(new ProviderRequest(policy.Models.Architect, JudgeSystem,
+                    Tokonomy.Llm.Architect.ReviewPrompt.Build(Strategy.SingleUnit(task.Prompt), patch, [])), ct);
+                var review = Tokonomy.Llm.Architect.ReviewPrompt.Parse(response.Text, response.Model);
+                (verdict, summary, concerns) = (review.Verdict.ToString(), review.Summary, review.Concerns);
+                judgeUsd = response.Usd ?? 0;
+                judgeTokens = response.InputTokens + response.OutputTokens;
+            }
+            catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or System.ClientModel.ClientResultException)
+            {
+                (verdict, summary) = ("Unavailable", ex.Message);
+            }
+        }
+
+        ledger.RecordEvent(runId, _clock.UtcNow, "bench_quality", System.Text.Json.JsonSerializer.Serialize(new
+        {
+            changed = changed.Count,
+            unplanned,
+            judge = verdict,
+            summary,
+            concerns,
+            judge_usd = judgeUsd,
+            judge_tokens = judgeTokens,
+        }));
+    }
+
+    private void WriteManifest(string benchId, Taskset taskset, TokonomyConfig config, BenchOptions options, IReadOnlyList<BenchTask> tasks, int trials)
+    {
+        var p = config.Policy;
+        var manifest = new
+        {
+            bench_id = benchId,
+            started = _clock.UtcNow,
+            taskset = taskset.BaseDirectory,
+            tasks = tasks.Select(t => new { t.Id, t.Repo, prompt_sha = Sha(t.Prompt), acceptance = t.Acceptance.Files }),
+            strategies = options.Strategies.Select(s => new { s.Id, s.Description }),
+            options.Repeat,
+            trials,
+            options.MaxUsd,
+            share_plans = options.SharePlans,
+            judge = options.Judge,
+            models = new { architect = p.Models.Architect, worker = p.Models.Worker },
+            architect_provider = p.ArchitectProvider.Kind,
+            executors = new { cheap = p.Executors.Default, strong = p.Executors.Strong },
+            temperature = "provider default (not settable through the Claude Code and Antigravity CLIs)",
+            planning = p.Planning,
+            supervision = p.Supervision,
+            review = p.Review,
+            escalation = p.Escalation,
+            budget = p.Budget,
+            gate_execution = p.GateExecution?.Provider,
+            gates = p.Gates.Select(g => g.DisplayName),
+            prompts = Tokonomy.Llm.Architect.PromptCatalog.Hashes(),
+            environment = options.Environment,
+        };
+        var path = Path.Combine(config.ConfigDirectory, "runs", benchId + ".manifest.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, System.Text.Json.JsonSerializer.Serialize(manifest, RunArtifacts.JsonOptions));
+    }
+
+    private static string Sha(string text) =>
+        Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text)))[..12];
 
     private static bool IsGitRepository(string path) =>
         Directory.Exists(Path.Combine(path, ".git")) || File.Exists(Path.Combine(path, ".git"));

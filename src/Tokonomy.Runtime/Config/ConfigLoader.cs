@@ -235,6 +235,53 @@ public static class ConfigLoader
             yield return new(Severity.Error, file, null, "escalation.worker_timeout_seconds must be positive.");
         }
 
+        var p = policy.Planning;
+        if (p.MaxRevisionRounds is < 0 or > 3)
+        {
+            yield return new(Severity.Error, file, null, "planning.max_revision_rounds must be between 0 and 3.");
+        }
+
+        if (p.MaxInspectFiles is < 0 or > 40)
+        {
+            yield return new(Severity.Error, file, null, "planning.max_inspect_files must be between 0 and 40.");
+        }
+
+        if (p.MaxContextChars < 5_000)
+        {
+            yield return new(Severity.Error, file, null, "planning.max_context_chars must be at least 5000.");
+        }
+
+        var s = policy.Supervision;
+        foreach (var (key, value) in new[]
+                 {
+                     ("max_interventions_per_unit", s.MaxInterventionsPerUnit), ("max_interventions_per_run", s.MaxInterventionsPerRun),
+                     ("max_splits_per_run", s.MaxSplitsPerRun), ("max_plan_revisions", s.MaxPlanRevisions),
+                 }.Where(x => x.Item2 < 0))
+        {
+            yield return new(Severity.Error, file, null, $"supervision.{key} must be >= 0.");
+        }
+
+        var r = policy.Review;
+        if (r.Mode is not (ReviewConfig.Off or ReviewConfig.Risk or ReviewConfig.Always))
+        {
+            yield return new(Severity.Error, file, null, $"review.mode '{r.Mode}' must be off, risk or always.");
+        }
+
+        if (r.ArchitectChanges is not (ReviewConfig.Off or ReviewConfig.Risk or ReviewConfig.Always))
+        {
+            yield return new(Severity.Error, file, null, $"review.architect_changes '{r.ArchitectChanges}' must be off, risk or always.");
+        }
+
+        if (r.OnUnavailable is not (ReviewConfig.OnUnavailableAccept or ReviewConfig.OnUnavailableFail))
+        {
+            yield return new(Severity.Error, file, null, $"review.on_unavailable '{r.OnUnavailable}' must be accept or fail.");
+        }
+
+        if (r.MaxChangeRequestsPerUnit < 0 || r.MediumRiskDiffLines <= 0)
+        {
+            yield return new(Severity.Error, file, null, "review.max_change_requests_per_unit must be >= 0 and review.medium_risk_diff_lines positive.");
+        }
+
         var b = policy.Budget;
         if (b.MaxUsdPerTask <= 0)
         {

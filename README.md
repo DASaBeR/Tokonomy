@@ -52,18 +52,22 @@ This is a hypothesis, not a claim. The project's first job is to test it with a 
 ```
 Task
   ↓
-PLAN      Architect (strong model) writes a contract: units, rules, don'ts
+PLAN      Architect (strong model) reads the repo and writes a blueprint: analysis, architecture,
+          decisions, detailed units; the plan is checked by code and critiqued before you see it
   ↓
-EXECUTE   Worker (cheap model) implements each unit in an isolated git worktree
+EXECUTE   Worker (cheap model) implements each unit in an isolated git worktree, from a brief
+          compiled from the current plan revision; it reports blockers instead of guessing
   ↓
-GATE      Build, lint, tests, locked-region check: deterministic pass/fail
+GATE      Build, lint, tests, locked-region and lessons checks: deterministic pass/fail
   ↓
 DECIDE    Supervisor applies policy
-  ├── Accept   → one commit per unit
-  ├── Retry    → worker reruns with the gate output as feedback
-  └── Takeover → architect applies structured edits, hands back to a fresh worker
+  ├── Accept    → (architectural review by risk) → one commit per unit
+  ├── Retry     → worker reruns with the gate output as feedback
+  ├── Intervene → architect diagnoses, corrects instructions / applies a fix / takes over,
+  │               revises the remaining plan and records lessons (strategy 5)
+  └── Split     → an oversized unit becomes smaller units (strategy 5)
   ↓
-LEDGER    Tokens, cost per tier, attempts, escalations, outcome
+LEDGER    Tokens, cost per tier and purpose, attempts, interventions, plan revisions, reviews
 ```
 
 Design principles:
@@ -214,6 +218,8 @@ Requires the .NET 10 SDK.
 
 - [Glossary](docs/glossary.md)
 - [Configuration](docs/config.md)
+- [Adaptive planning and supervision](docs/adaptive-supervision.md)
+- [Crash recovery](docs/recovery.md)
 - [Benchmarking](docs/benchmarking.md)
 - [Threat model](docs/threat-model.md)
 - [Project brief](PROJECT_BRIEF.md)

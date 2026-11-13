@@ -4,6 +4,7 @@ using Spectre.Console.Cli;
 using Tokonomy.Cli.Infrastructure;
 using Tokonomy.Core.Model;
 using Tokonomy.Runtime.Git;
+using Tokonomy.Runtime.Orchestration;
 using Tokonomy.Runtime.Process;
 
 namespace Tokonomy.Cli.Commands;
@@ -81,7 +82,7 @@ public sealed class BuildCommand(IAnsiConsole console, IProcessRunner runner, Se
 
         // 2. Plan.
         var planner = new PlanCommand(console, runner, services);
-        var (planExit, runId, planned) = await planner.PlanCoreAsync(config, new PlanSettings { Task = task, Strategy = "4", Config = config.ConfigDirectory, NoQuestions = settings.Yes }, cancellationToken);
+        var (planExit, runId, planned) = await planner.PlanCoreAsync(config, new PlanSettings { Task = task, Strategy = Strategy.Default.Id, Config = config.ConfigDirectory, NoQuestions = settings.Yes }, cancellationToken);
         if (planned is null || runId is null)
         {
             return planExit;
@@ -93,7 +94,14 @@ public sealed class BuildCommand(IAnsiConsole console, IProcessRunner runner, Se
         // 3. Confirm.
         console.WriteLine();
         Ui.DiscardPendingInput();
-        if (!settings.Yes && Ui.IsInteractive(console) && !console.Confirm("Build this now?", true))
+        var ready = planned.Assessment.IsReady;
+        if (!ready && settings.Yes)
+        {
+            Output.Warn(console, $"The plan is {Ui.Readiness(planned.Assessment.Readiness)}; building anyway because of --yes. The gates still decide every unit.");
+        }
+
+        if (!settings.Yes && Ui.IsInteractive(console) &&
+            !console.Confirm(ready ? "Build this now?" : $"The plan is {Ui.Readiness(planned.Assessment.Readiness)}. Build it anyway?", ready))
         {
             console.MarkupLine($"Plan saved. Build it later with [bold]tokonomy run --plan {runId}[/]");
             return ExitCodes.Ok;

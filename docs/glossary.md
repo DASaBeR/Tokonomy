@@ -20,8 +20,20 @@ The words Tokonomy uses, in the order you meet them.
 
 **Locked region.** Text the strong model wrote during a takeover. A built-in gate checks it is still in place, so a later worker cannot undo the fix.
 
+**Blueprint.** The detailed plan the strong model writes by default: what it found in the repository (facts with evidence, assumptions kept apart), the architecture, its decisions (ADRs) and units with exact steps, files to create, modify and avoid, interfaces, edge cases and acceptance criteria. It is checked by code and critiqued by a second strong-model call before you see it.
+
+**Plan revision.** In strategy 5 the plan can change while the run executes it. Each change is validated, applied all-or-nothing, numbered and recorded with its reason and before/after values; completed units never change. The original plan is kept unchanged.
+
+**Intervention.** The strong model stepping in during a run, on a rule-based trigger (the worker reports a blocker, the same failure repeats, retries run out, the worker touches a file it must avoid). Level 1 corrects the worker's instructions, level 2 applies a small fix, level 3 takes the unit over.
+
+**Lesson.** Something learned from a mistake that later units must respect, shown in their briefs. A lesson with a forbidden pattern is also enforced by the built-in `lessons` check.
+
+**Worker report.** `tokonomy-report.json`, where the cheap model tells the strong model it is blocked or found something the plan did not know. A signal for supervision, never proof of success.
+
+**Architectural review.** In strategy 5, the strong model reads a unit's diff after its gates passed, when the unit's risk warrants it. It can approve, send the unit back, or stop it; it can never accept a unit whose gates failed.
+
 **Gate isolation (sandbox).** Gates run code the worker wrote, so by default they run in a disposable Windows Sandbox VM with a copy of your source, no network and none of your files. See [gate-isolation.md](gate-isolation.md).
 
-**Strategy.** A way of getting a task done, used mainly by the benchmark: `1` strong model alone, `1b` strong model with gates and retries, `2` cheap model alone, `3` plan plus cheap worker without gates, `4` plan plus cheap worker plus gates and supervision (what `tokonomy build` uses). See [benchmarking.md](benchmarking.md).
+**Strategy.** A way of getting a task done, used mainly by the benchmark: `1` strong model alone, `1b` strong model with gates and retries, `2` cheap model alone, `3` plan plus cheap worker without gates, `4` plan plus cheap worker plus gates and takeover (what `tokonomy build` uses), `5` strategy 4 plus adaptive supervision and review (opt-in). See [benchmarking.md](benchmarking.md).
 
 **Ledger.** The local database (`.tokonomy/ledger.db`) that records every model call, its tokens and cost, every attempt, and every gate result. `tokonomy report` reads it.

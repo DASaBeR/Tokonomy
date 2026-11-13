@@ -170,7 +170,7 @@ internal sealed class Shell(IAnsiConsole console, Func<string[], Task<int>> runC
 
     private const string SlashHint = "[grey]Describe a task to build it, or type a command: /build <task>  /plan <task>  /doctor  /report  /run  /setup  /login  /proxy[/]";
 
-    private static readonly string[] Strategies = ["1", "1b", "2", "3", "4"];
+    private static readonly string[] Strategies = ["1", "1b", "2", "3", "4", "5"];
 
     private static readonly Dictionary<string, string[]> Slash = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -286,11 +286,12 @@ internal sealed class Shell(IAnsiConsole console, Func<string[], Task<int>> runC
             .Select("1").Select("1b").Select("2")
             .UseConverter(x => x switch
             {
-                "1" => "1   strong model alone",
-                "1b" => "1b  strong model alone + gates",
-                "2" => "2   cheap model alone + gates",
-                "3" => "3   cheap model with strong-model review",
-                _ => "4   strong plans, cheap codes, gates + supervision",
+                "1" => "1   strong model alone, single shot",
+                "1b" => "1b  strong model alone + gates + retry",
+                "2" => "2   cheap model alone, single shot",
+                "3" => "3   strong plans, cheap codes, no gates",
+                "4" => "4   strong plans, cheap codes, gates + takeover",
+                _ => "5   strong plans, cheap codes, gates + adaptive supervision and review",
             }));
         var repeat = console.Prompt(new TextPrompt<int>("[bold]Trials per task[/]:").DefaultValue(1).Validate(n => n is >= 1 and <= 10 ? ValidationResult.Success() : ValidationResult.Error("1 to 10")));
         var cap = console.Prompt(new TextPrompt<decimal>("[bold]Hard spend cap in USD[/] [grey](the run stops there)[/]:").DefaultValue(0.50m)

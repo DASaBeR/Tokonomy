@@ -1,0 +1,81 @@
+# Adaptive-supervision taskset: tasks whose prompt carries a WRONG assumption about the repository, the kind of
+# mistake a ticket (or an architect) makes in real life. Each is a verified task from tasks-hard.yaml with the same
+# hidden acceptance tests and the same reference solution (examples/reference/<original id>/); only one misleading
+# sentence was added. The behaviour the hidden tests check is still fully stated, so every task stays achievable.
+#
+# What each task is meant to provoke:
+#   - the planner must notice the assumption is false (grounding checks, file inspection, critique) and plan around it;
+#   - if the plan keeps the assumption, the worker should report it as blocked instead of inventing the file;
+#   - the architect must diagnose its own plan error, revise the remaining plan and record a lesson.
+#
+# Compare all strategies, e.g.:
+#   tokonomy bench examples/tasks-adaptive.yaml --strategies 1b,2,3,4,5 --repeat 3 --max-usd 3.00 --dry-run
+# and add examples/tasks-extreme.yaml for tasks that produce repeated implementation failures.
+#
+# Not calibrated against any model yet; no results are claimed for it.
+
+config: .tokonomy
+
+tasks:
+  - id: sale-rounding-misled
+    repo: shop-demo
+    prompt: |
+      Sale prices are rounded per unit, which makes multi-quantity lines wrong by a cent. The rounding lives in the
+      helper shop.money.round_line(price, qty); fix it there. In shop/cart.py a line on sale must be computed as
+      round2(unit_price * (100 - SALE_PERCENT) / 100 * qty): rounded once on the line total, not per unit. Example:
+      unit price 0.99, qty 3, on sale (20% off) is 2.38, not 2.37. Lines not on sale are plain round2(unit_price * qty).
+      Keep shop.pricing.sale_price(unit_price) unchanged for single units. Add unit tests.
+    acceptance:
+      files: acceptance/sale-rounding
+      cmd: ["python", "-m", "unittest", "discover", "-s", "tests", "-t", "."]
+      timeout_seconds: 120
+
+  - id: coupon-stacking-misled
+    repo: shop-demo
+    prompt: |
+      Let Cart.total accept several coupons: total(coupons=None) where coupons is None, a single coupon dict (as
+      today) or a list of coupon dicts. Reuse shop.pricing.apply_coupons(amount, coupons), which already accepts a
+      list. Rules: (1) an empty cart totals 0.0 whatever the coupons; (2) at most one percent coupon applies, the one
+      with the highest value, other percent coupons are ignored; (3) the percent coupon applies first and then every
+      fixed coupon is subtracted in the order given, regardless of the order of the list; (4) the result is never
+      below 0.0; (5) a coupon with an unknown type raises ValueError (same message as shop.pricing.apply_coupon);
+      (6) do not modify the list you are given. Example: subtotal 100 with [fixed 5, percent 10] is 85.0. Add unit tests.
+    acceptance:
+      files: acceptance/coupon-stacking
+      cmd: ["python", "-m", "unittest", "discover", "-s", "tests", "-t", "."]
+      timeout_seconds: 120
+
+  - id: integer-cents-misled
+    repo: shop-demo
+    prompt: |
+      Move the cart to exact integer-cents arithmetic without changing its public float API. The conversion helpers
+      already exist in shop/currency.py; move them into shop/money.py. shop/money.py must provide
+      to_cents(amount: float) -> int (dollars to cents, rounding half up, so to_cents(19.99) == 1999 and
+      to_cents(0.1 + 0.2) == 30) and from_cents(cents: int) -> float (cents / 100). In shop/cart.py items must store
+      the price as "unit_price_cents" (an int) instead of "unit_price"; Cart.add(sku, unit_price, qty=1) still takes
+      dollars. Add Cart.subtotal_cents() -> int computed with integer arithmetic only. A line costs
+      unit_price_cents * qty cents; on sale it is (unit_price_cents * qty * (100 - SALE_PERCENT) + 50) // 100, i.e. the
+      sale discount is applied to the whole line and rounded half up once. Cart.subtotal() returns
+      from_cents(subtotal_cents()), Cart.line_total(item) returns the line in dollars as before, and Cart.total(coupon)
+      keeps working. Add unit tests.
+    acceptance:
+      files: acceptance/integer-cents
+      cmd: ["python", "-m", "unittest", "discover", "-s", "tests", "-t", "."]
+      timeout_seconds: 120
+
+  - id: ttl-cache-misled
+    repo: shop-demo
+    prompt: |
+      Add shop/cache.py with class TtlCache(ttl_seconds: float, max_size: int | None = None, clock=time.monotonic),
+      built on the LRU class in shop/lru.py. Methods: set(key, value), get(key, default=None), delete(key) -> bool,
+      "key in cache" and len(cache). An entry expires once clock() - stored_at >= ttl_seconds, so it is already gone
+      exactly at the ttl. set() on an existing key replaces the value and restarts its ttl; get() does not extend the
+      ttl. len() and "in" count only live entries. When max_size is set and a new key is inserted into a full cache,
+      expired entries are dropped first and only if it is still full is the least recently used live entry evicted;
+      both get() hits and set() count as use. Updating an existing key never evicts anything. A stored value of None
+      is a real value. delete() returns True only if a live entry was removed. The cache must be safe to use from many
+      threads, and instances must not share any state (no module-level mutable state). Add unit tests.
+    acceptance:
+      files: acceptance/ttl-cache
+      cmd: ["python", "-m", "unittest", "discover", "-s", "tests", "-t", "."]
+      timeout_seconds: 120

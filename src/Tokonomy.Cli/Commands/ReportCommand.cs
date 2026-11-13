@@ -101,8 +101,65 @@ public sealed class ReportCommand(IAnsiConsole console) : Command<ReportSettings
         var architectTokens = summary.Tiers.Where(t => t.Role == LlmRole.Architect).Sum(t => t.InputTokens + t.OutputTokens);
         console.MarkupLine($"Total: [bold]{Money(total, summary.Tiers.Any(t => t.AnyEstimated))}[/]" +
                            (totalTokens > 0 ? $"   Architect token share: {(double)architectTokens / totalTokens:P0}" : ""));
+
+        var architectPurposes = summary.Purposes.Where(p => p.Role == LlmRole.Architect).ToList();
+        if (architectPurposes.Count > 1 || architectPurposes.Any(p => p.Purpose != "unspecified"))
+        {
+            console.MarkupLine("Architect spend by purpose: " + string.Join("  ·  ", architectPurposes.Select(p =>
+                $"{Markup.Escape(p.Purpose)} {p.Calls}× {Money(p.Usd, p.AnyEstimated)}")));
+        }
+
+        var s = summary.Stats;
+        if (s.Units > 0)
+        {
+            console.MarkupLine(
+                $"Units: {s.UnitsAccepted}/{s.Units} accepted ({s.UnitsAcceptedWithoutTakeover} without takeover) · worker attempts {s.WorkerAttempts} (retries {s.WorkerRetries}) · " +
+                $"takeovers {s.Takeovers} · interventions {s.Interventions} · plan revisions {s.PlanRevisions}" +
+                (s.ReviewChangeRequests > 0 ? $" · review change requests {s.ReviewChangeRequests}" : "") +
+                (s.RepeatedMistakes > 0 ? $" · [yellow]repeated mistakes {s.RepeatedMistakes}[/]" : ""));
+        }
+
+        if (summary.Interventions.Count > 0)
+        {
+            var interventions = new Table().Border(TableBorder.Rounded).AddColumns("Unit", "Trigger", "Level", "Outcome", "Found / did", "Rev");
+            foreach (var i in summary.Interventions)
+            {
+                interventions.AddRow(
+                    Markup.Escape(i.UnitId),
+                    Markup.Escape(i.Trigger),
+                    i.Level < 0 ? "-" : i.Level.ToString(CultureInfo.InvariantCulture),
+                    Markup.Escape(i.Outcome),
+                    Markup.Escape(Shorten($"{i.Diagnosis} → {i.Action}", 140)),
+                    i.PlanRevision?.ToString(CultureInfo.InvariantCulture) ?? "");
+            }
+
+            console.MarkupLine("[bold]Architect interventions[/]");
+            console.Write(interventions);
+        }
+
+        if (summary.Revisions.Count > 0)
+        {
+            console.MarkupLine("[bold]Plan revisions[/] (full before/after values: .tokonomy/runs/" + Markup.Escape(runId) + "/plan-state.json)");
+            foreach (var r in summary.Revisions)
+            {
+                console.MarkupLine($"  rev {r.Revision} [grey]{Markup.Escape(r.Source)}, {r.Changes} change(s){(r.Trigger is null ? "" : ", " + Markup.Escape(r.Trigger))}:[/] {Markup.Escape(Shorten(r.Reason, 140))}" +
+                                   (r.RequiresApproval ? " [yellow](human approval)[/]" : ""));
+            }
+        }
+
+        foreach (var review in summary.Reviews)
+        {
+            console.MarkupLine($"Review {Markup.Escape(review.UnitId)}: [bold]{Markup.Escape(review.Verdict.ToString())}[/] [grey]({Markup.Escape(review.Why)})[/] {Markup.Escape(Shorten(review.Summary, 140))}");
+            foreach (var finding in review.Findings.Take(5))
+            {
+                console.MarkupLine($"  - {Markup.Escape(Shorten(finding.ToString(), 180))}");
+            }
+        }
+
         return ExitCodes.Ok;
     }
+
+    private static string Shorten(string text, int max) => text.Length <= max ? text : text[..(max - 3)] + "...";
 
     private static string Money(decimal usd, bool estimated) =>
         "$" + usd.ToString("0.0000", CultureInfo.InvariantCulture) + (estimated ? " [yellow](est.)[/]" : "");

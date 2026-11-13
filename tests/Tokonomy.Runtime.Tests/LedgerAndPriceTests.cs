@@ -21,7 +21,7 @@ public class SqliteLedgerTests
         using var tmp = new TempDir();
         using var ledger = new SqliteLedger(Path.Combine(tmp.Path, "ledger.db"));
 
-        Assert.Equal(2, ledger.SchemaVersion);
+        Assert.Equal(3, ledger.SchemaVersion);
     }
 
     [Fact]

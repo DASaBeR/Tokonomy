@@ -21,7 +21,7 @@ public sealed class PlanSettings : CommonSettings
     public string Task { get; init; } = "";
 
     [CommandOption("-s|--strategy <ID>")]
-    [Description("1, 1b, 2, 3 or 4 (default). Strategies 1, 1b and 2 skip the architect and use the task as a single unit.")]
+    [Description("1, 1b, 2, 3, 4 (default: plan + gates + takeover) or 5 (adaptive supervision and review, opt-in). Strategies 1, 1b and 2 skip the architect and use the task as a single unit.")]
     [DefaultValue("4")]
     public string Strategy { get; init; } = "4";
 
@@ -54,9 +54,13 @@ public sealed partial class PlanCommand(IAnsiConsole console, IProcessRunner run
     internal void ShowPlan(Tokonomy.Runtime.Config.TokonomyConfig config, string runId, PlannedTask planned)
     {
         Ui.PlanView(console, runId, planned.Contract);
+        Ui.PlanQualityView(console, planned);
         if (planned.ArchitectUsd > 0 || config.Policy.ArchitectProvider.Kind != Tokonomy.Core.Config.ArchitectProviderConfig.ApiKind)
         {
-            Ui.Note(console, $"planning cost: {Ui.Money(planned.ArchitectUsd, planned.CostEstimated)}");
+            var split = planned.CostByPurpose.Count > 1
+                ? " (" + string.Join(", ", planned.CostByPurpose.Select(p => $"{p.Key} {Ui.Money(p.Value, planned.CostEstimated)}")) + ")"
+                : "";
+            Ui.Note(console, $"planning cost: {Ui.Money(planned.ArchitectUsd, planned.CostEstimated)}{split}");
         }
 
         Ui.Note(console, $"saved: {Path.GetRelativePath(config.RepoRoot, new RunArtifacts(config.ConfigDirectory, runId).PlanPath)}");
@@ -124,14 +128,16 @@ public sealed partial class PlanCommand(IAnsiConsole console, IProcessRunner run
                 // Questions are prompts, which cannot run inside a spinner, so each architect call spins on its own.
                 var spinning = new SpinningProvider(provider!, console, $"{models.Architect} is planning (a few minutes; a big project can take 10+)");
                 planned = await TaskPlanning.PlanAsync(strategy, settings.Task, config.RepoRoot, baseSha, runId, spinning, models.Architect, ledger, git, cancellationToken,
-                    config.Policy.Acceptance, ClarifyPrompt.For(console));
+                    config.Policy.Acceptance, ClarifyPrompt.For(console), config.Policy, stage => Ui.Note(console, stage));
             }
             else
             {
                 planned = strategy.UsesArchitectPlan && !settings.Json
                     ? await Ui.SpinAsync(console, $"{models.Architect} is planning (a few minutes; a big project can take 10+)", () =>
-                        TaskPlanning.PlanAsync(strategy, settings.Task, config.RepoRoot, baseSha, runId, provider, models.Architect, ledger, git, cancellationToken, config.Policy.Acceptance))
-                    : await TaskPlanning.PlanAsync(strategy, settings.Task, config.RepoRoot, baseSha, runId, provider, models.Architect, ledger, git, cancellationToken, config.Policy.Acceptance);
+                        TaskPlanning.PlanAsync(strategy, settings.Task, config.RepoRoot, baseSha, runId, provider, models.Architect, ledger, git, cancellationToken, config.Policy.Acceptance,
+                            policy: config.Policy))
+                    : await TaskPlanning.PlanAsync(strategy, settings.Task, config.RepoRoot, baseSha, runId, provider, models.Architect, ledger, git, cancellationToken, config.Policy.Acceptance,
+                        policy: config.Policy);
             }
         }
         catch (Exception ex) when (ex is PlanningException or MissingApiKeyException or HttpRequestException or InvalidOperationException)
@@ -150,11 +156,24 @@ public sealed partial class PlanCommand(IAnsiConsole console, IProcessRunner run
             BaseSha = baseSha,
             Created = DateTimeOffset.UtcNow,
             Contract = planned.Contract,
+            Readiness = strategy.UsesArchitectPlan ? planned.Assessment.Readiness : null,
+            Issues = planned.Assessment.Issues.Select(i => (i.Blocking ? "" : "(advice) ") + i).ToList(),
         });
 
         if (settings.Json)
         {
-            Output.Json(console, new { run_id = runId, strategy = strategy.Id, base_sha = baseSha, architect_usd = planned.ArchitectUsd, contract = planned.Contract });
+            Output.Json(console, new
+            {
+                run_id = runId,
+                strategy = strategy.Id,
+                base_sha = baseSha,
+                architect_usd = planned.ArchitectUsd,
+                cost_by_purpose = planned.CostByPurpose,
+                readiness = planned.Assessment.Readiness.ToString(),
+                issues = planned.Assessment.Issues.Select(i => new { level = i.Level.ToString(), i.Code, unit = i.UnitId, i.Message, i.Blocking }),
+                critique = planned.Critique,
+                contract = planned.Contract,
+            });
         }
 
         return (ExitCodes.Ok, runId, planned);

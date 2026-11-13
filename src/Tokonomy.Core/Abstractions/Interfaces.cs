@@ -27,6 +27,15 @@ public sealed class UnitState
     public required WorkUnit Unit { get; init; }
     public int Attempts { get; set; }
     public int Takeovers { get; set; }
+
+    /// <summary>
+    /// The attempt count when the current retry window opened. An architect intervention that sends the worker back
+    /// with corrected instructions opens a new window, so retries are counted from there. 0 for the classic flow.
+    /// </summary>
+    public int RetryWindowStart { get; set; }
+
+    /// <summary>Attempts since the current retry window opened.</summary>
+    public int AttemptsInWindow => Attempts - RetryWindowStart;
     public IReadOnlyList<string> ChangedPaths { get; set; } = [];
     public int DiffLines { get; set; }
     public bool AddedDependency { get; set; }

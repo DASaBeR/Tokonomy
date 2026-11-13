@@ -2,6 +2,7 @@ using Tokonomy.Core.Abstractions;
 using Tokonomy.Core.Config;
 using Tokonomy.Core.Model;
 using Tokonomy.Core.Planning;
+using Tokonomy.Core.Supervision;
 using Tokonomy.Core.Takeover;
 using Tokonomy.Llm.Architect;
 using Tokonomy.Llm.Providers;
@@ -37,6 +38,12 @@ public sealed record RunRequest
     /// <summary>Architect escalation available (strategy 4): gate failures, no changes and timeouts trigger a takeover.</summary>
     public bool AllowEscalation { get; init; } = true;
 
+    /// <summary>
+    /// Strategy 5: the architect supervises (worker reports, L1-L3 interventions, plan revisions, lessons, decomposition,
+    /// recovery) and reviews units by risk. Requires <see cref="AllowEscalation"/> and gates.
+    /// </summary>
+    public bool AdaptiveSupervision { get; init; }
+
     /// <summary>Cap on attempts per unit regardless of policy (1 for single-shot strategies).</summary>
     public int? MaxAttempts { get; init; }
 
@@ -49,9 +56,26 @@ public sealed record RunRequest
     public decimal AlreadySpentUsd { get; init; }
 
     public string? WorktreeLocation { get; init; }
+
+    /// <summary>Set by <c>run --resume</c>: continue this interrupted run on its existing branch instead of starting it.</summary>
+    public ResumeRequest? Resume { get; init; }
 }
 
-public sealed record UnitOutcome(string UnitId, string Status, int Attempts, string Reason);
+/// <summary>
+/// How one unit ended. <see cref="Status"/>: accepted, failed, or split (replaced by smaller units in the plan, which
+/// appear as their own outcomes).
+/// </summary>
+public sealed record UnitOutcome(string UnitId, string Status, int Attempts, string Reason)
+{
+    public const string Accepted = "accepted";
+    public const string Failed = "failed";
+    public const string Split = "split";
+
+    public int Interventions { get; init; }
+
+    /// <summary>The architectural review's verdict, when the unit was reviewed.</summary>
+    public UnitReviewVerdict? Review { get; init; }
+}
 
 public sealed record RunOutcome
 {
@@ -65,6 +89,12 @@ public sealed record RunOutcome
 
     /// <summary>The architect's advisory review of the combined diff (only when <c>escalation.final_review</c> is on and the run passed).</summary>
     public FinalReview? Review { get; init; }
+
+    /// <summary>The plan revision the run ended on (1 when the plan never changed).</summary>
+    public int PlanRevision { get; init; } = 1;
+
+    public int Interventions { get; init; }
+    public int Lessons { get; init; }
 }
 
 /// <summary>Progress callbacks for the CLI. All methods are optional.</summary>
@@ -80,10 +110,28 @@ public interface IRunObserver
 
     /// <summary>One model call was billed. <paramref name="totalUsd"/> is the run's spend so far (including earlier planning cost).</summary>
     void Usage(LlmRole role, string model, long inputTokens, long outputTokens, decimal usd, decimal totalUsd) { }
+
+    /// <summary>The worker wrote a structured report (adaptive supervision).</summary>
+    void WorkerReported(WorkUnit unit, WorkerReport report) { }
+
+    /// <summary>The architect is called to supervise a unit.</summary>
+    void SupervisionStarted(WorkUnit unit, SupervisionRequest request) { }
+
+    /// <summary>An intervention finished: what the architect found, what it changed, and how it ended.</summary>
+    void InterventionFinished(WorkUnit unit, InterventionRecord intervention) { }
+
+    /// <summary>The plan changed during the run.</summary>
+    void PlanUpdated(PlanRevision revision) { }
+
+    /// <summary>The architect reviewed a unit whose gates passed.</summary>
+    void ReviewFinished(WorkUnit unit, UnitReview review, string why) { }
 }
 
-/// <summary>PLAN is done by the caller. This runs PREPARE → (EXECUTE → GATE → DECIDE)* per unit → LEDGER.</summary>
-public sealed class RunOrchestrator(
+/// <summary>
+/// PLAN is done by the caller. This runs PREPARE → (EXECUTE → GATE → DECIDE)* per unit → LEDGER. The units come from a
+/// <see cref="PlanManager"/>: with adaptive supervision (strategy 5) the plan can change while the run executes it.
+/// </summary>
+public sealed partial class RunOrchestrator(
     IProcessRunner runner,
     ILedger ledger,
     ISupervisor supervisor,
@@ -94,6 +142,9 @@ public sealed class RunOrchestrator(
 {
     private readonly IClock _clock = clock ?? SystemClock.Instance;
     private readonly GitCli _git = new(runner);
+
+    // A provider timeout must mean "architect unavailable" (and its fallback), never an exception that ends the run.
+    private readonly IProvider? architect = Tokonomy.Runtime.Providers.GuardedProvider.Wrap(architect);
 
     // Unit currently executing, so metered worker calls (reported on proxy threads) are attributed to it.
     private volatile string? _currentUnit;
@@ -111,7 +162,20 @@ public sealed class RunOrchestrator(
         var status = RunStatus.Running;
         string? error = null;
         FinalReview? review = null;
+        RunContext? context = null;
 
+        // One process per run: a live run cannot be resumed (or started) twice. The OS releases the lock if we crash.
+        IDisposable runLock;
+        try
+        {
+            runLock = artifacts.AcquireLock();
+        }
+        catch (RunInProgressException ex)
+        {
+            return new RunOutcome { Status = RunStatus.Error, Branch = "", HeadSha = request.BaseSha, TotalUsd = request.AlreadySpentUsd, Units = [], Error = ex.Message };
+        }
+
+        using var heldLock = runLock;
         ledger.SetRunStatus(request.RunId, RunStatus.Running);
         using var budget = new BudgetGuard(policy.Budget.MaxUsdPerTask, request.AlreadySpentUsd);
 
@@ -137,9 +201,26 @@ public sealed class RunOrchestrator(
             };
         }
 
-        observer.Stage("Creating worktree");
-        var workspace = await RunWorkspace.CreateAsync(_git, request.RepoRoot, request.RunId, request.BaseSha, ct, request.WorktreeLocation, policy.Isolation.WorktreeRoot);
-        artifacts.Append("worktree", new { workspace.Path, workspace.Branch, workspace.BaseSha });
+        RunWorkspace workspace;
+        if (request.Resume is null)
+        {
+            observer.Stage("Creating worktree");
+            workspace = await RunWorkspace.CreateAsync(_git, request.RepoRoot, request.RunId, request.BaseSha, ct, request.WorktreeLocation, policy.Isolation.WorktreeRoot);
+        }
+        else
+        {
+            observer.Stage("Resuming: attaching a fresh worktree to the run branch");
+            string? salvaged;
+            (workspace, salvaged) = await RunWorkspace.ReattachAsync(_git, request.RepoRoot, request.RunId, request.BaseSha,
+                Path.Combine(artifacts.Directory, "recovery"), ct, request.WorktreeLocation, policy.Isolation.WorktreeRoot);
+            if (salvaged is not null)
+            {
+                artifacts.Append("recovery_salvage", new { patch = salvaged });
+                observer.Warning($"The interrupted run left unverified changes; they were saved to {salvaged} and are not reused.");
+            }
+        }
+
+        artifacts.Append("worktree", new { workspace.Path, workspace.Branch, workspace.BaseSha, resumed = request.Resume is not null });
 
         MeteringProxy? proxy = null;
         var watch = new WorkspaceWatch(workspace);
@@ -161,6 +242,33 @@ public sealed class RunOrchestrator(
                 Restrictions = watch.Restrictions,
             };
             var executor = executorFactory?.Invoke(session) ?? new ConfigExecutor(request.ExecutorName, request.Executor, session, runner);
+
+            RecoveryDecision? recovery = null;
+            if (request.Resume is { } resume)
+            {
+                recovery = RunRecovery.Reconcile(request.RunId, request.Contract, resume, await workspace.CommitsSinceAsync(request.BaseSha, ct),
+                    ledger.ListAttempts(request.RunId), ledger.ListInterventions(request.RunId), ledger.ListPlanRevisions(request.RunId));
+                artifacts.Append("recovery", new { safe = recovery.Safe, recovery.Problems, recovery.Notes });
+                foreach (var note in recovery.Notes)
+                {
+                    observer.Stage($"Recovery: {note}");
+                }
+
+                if (!recovery.Safe)
+                {
+                    status = RunStatus.Error;
+                    error = "the run cannot be resumed safely: " + string.Join("; ", recovery.Problems);
+                    return Finish();
+                }
+
+                foreach (var revision in recovery.RevisionsToRecord)
+                {
+                    ledger.RecordPlanRevision(request.RunId, revision);
+                }
+
+                // Prepare and the baseline belong to the base commit, exactly as in the original run.
+                await workspace.CheckoutDetachedAsync(request.BaseSha, ct);
+            }
 
             if (policy.Prepare.Count > 0)
             {
@@ -198,6 +306,11 @@ public sealed class RunOrchestrator(
                 }
             }
 
+            if (recovery is not null)
+            {
+                await workspace.ReturnToBranchAsync(ct);
+            }
+
             // Links present now came from the repository, from prepare (e.g. a pnpm install) or from the base commit's own
             // gates. They are allowed to stay,
             // but the worker is denied access to the ones that lead outside; any link that appears later is a violation.
@@ -208,25 +321,73 @@ public sealed class RunOrchestrator(
                 observer.Warning($"{escaping.Count} link(s) in the worktree lead outside it ({string.Join(", ", escaping.Take(3).Select(l => l.RelativePath))}); the worker is denied access to them.");
             }
 
-            var completed = new List<WorkUnit>();
-            var locks = new List<LockedRegion>();
-            var handoffs = new List<Handoff>();
-            foreach (var unit in ContractValidator.Order(request.Contract))
+            // Plan updates may never target the policy, a protected path or the architect's acceptance tests.
+            var acceptanceDir = acceptance?.Dir;
+            List<string> planProtected = [.. policy.Escalation.ProtectedPaths, .. acceptanceDir is null ? Array.Empty<string>() : [acceptanceDir + "/**"]];
+            var plan = recovery?.Plan is { } restored
+                ? PlanManager.Restore(restored, planProtected, policy.Supervision.MaxPlanRevisions, _clock)
+                : new PlanManager(request.Contract, planProtected, policy.Supervision.MaxPlanRevisions, _clock);
+            context = new RunContext
             {
-                var outcome = await RunUnitAsync(request, unit, workspace, watch, executor, gates, baseline, completed, locks, handoffs, budget, observer, ct);
+                Request = request,
+                Workspace = workspace,
+                Watch = watch,
+                Executor = executor,
+                Gates = gates,
+                Baseline = baseline,
+                Plan = plan,
+                Budget = budget,
+                Observer = observer,
+                AcceptanceDir = acceptanceDir,
+            };
+            if (recovery is not null && !await RestoreAsync(context, recovery, ct))
+            {
+                status = RunStatus.Error;
+                error = context.RecoveryError;
+                return Finish();
+            }
+
+            SavePlanState(context);
+            SaveRunState(context, RunPhases.Idle);
+
+            while (plan.NextPending() is { } next)
+            {
+                plan.MarkRunning(next.Id);
+                var outcome = await RunUnitAsync(context, next.Id, ct);
                 units.Add(outcome);
-                if (outcome.Status != "accepted")
+                switch (outcome.Status)
                 {
-                    status = budget.Exhausted ? RunStatus.AbortedBudget : RunStatus.Fail;
-                    error = $"{unit.Id}: {outcome.Reason}";
-                    return Finish();
+                    case UnitOutcome.Accepted:
+                        plan.MarkAccepted(next.Id);
+                        context.Completed.Add(plan.Unit(next.Id));
+                        SavePlanState(context);
+                        SaveRunState(context, RunPhases.Idle);
+                        continue;
+                    case UnitOutcome.Split:
+                        // The plan now holds the smaller units in its place; the loop picks them up.
+                        SavePlanState(context);
+                        SaveRunState(context, RunPhases.Idle);
+                        continue;
                 }
 
-                completed.Add(unit);
+                plan.MarkFailed(next.Id);
+                SavePlanState(context);
+                SaveRunState(context, RunPhases.Finished);
+                status = budget.Exhausted ? RunStatus.AbortedBudget : RunStatus.Fail;
+                error = $"{next.Id}: {outcome.Reason}";
+                return Finish();
+            }
+
+            if (plan.Remaining().Count > 0)
+            {
+                status = RunStatus.Error;
+                error = $"units could not be scheduled: {string.Join(", ", plan.Remaining().Select(u => u.Id))}";
+                return Finish();
             }
 
             status = RunStatus.Pass;
-            review = await FinalReviewAsync(request, workspace, units, budget, observer, ct);
+            SaveRunState(context, RunPhases.Finished);
+            review = await FinalReviewAsync(request, plan.Current, workspace, units, budget, observer, ct);
             return Finish();
         }
         catch (OperationCanceledException) when (budget.Exhausted && !ct.IsCancellationRequested)
@@ -263,6 +424,10 @@ public sealed class RunOrchestrator(
             if (ct.IsCancellationRequested)
             {
                 ledger.FinishRun(request.RunId, RunStatus.Error, _clock.UtcNow);
+                if (context is not null)
+                {
+                    SavePlanState(context);
+                }
             }
         }
 
@@ -270,7 +435,7 @@ public sealed class RunOrchestrator(
         {
             ledger.FinishRun(request.RunId, status, _clock.UtcNow);
             var head = workspace.HeadAsync(CancellationToken.None).GetAwaiter().GetResult();
-            artifacts.Append("finished", new { status, error, head });
+            artifacts.Append("finished", new { status, error, head, plan_revision = context?.Plan.Revision });
             return new RunOutcome
             {
                 Status = status,
@@ -281,6 +446,9 @@ public sealed class RunOrchestrator(
                 Units = units,
                 Error = error,
                 Review = review,
+                PlanRevision = context?.Plan.Revision ?? 1,
+                Interventions = context?.RunInterventions ?? 0,
+                Lessons = context?.Plan.Lessons.Count ?? 0,
             };
         }
     }
@@ -290,7 +458,7 @@ public sealed class RunOrchestrator(
     /// recorded as unavailable and never fails the run.
     /// </summary>
     private async Task<FinalReview?> FinalReviewAsync(
-        RunRequest request, RunWorkspace workspace, List<UnitOutcome> units, BudgetGuard budget, IRunObserver observer, CancellationToken ct)
+        RunRequest request, Contract plan, RunWorkspace workspace, List<UnitOutcome> units, BudgetGuard budget, IRunObserver observer, CancellationToken ct)
     {
         var policy = request.Policy;
         if (!policy.Escalation.FinalReview || !request.AllowEscalation || architect is null)
@@ -301,13 +469,14 @@ public sealed class RunOrchestrator(
         var model = request.ArchitectModel ?? policy.Models.Architect;
         observer.Stage($"Final review: the architect ({model}) reads the combined diff");
         var diff = await workspace.DiffAsync(request.BaseSha, ct);
-        var prompt = ReviewPrompt.Build(request.Contract, diff.Patch, units.Select(u => (u.UnitId, request.Contract.Units.First(c => c.Id == u.UnitId).Title, u.Status, u.Attempts, u.Reason)).ToList());
+        var reviewed = units.Where(u => u.Status != UnitOutcome.Split).ToList();
+        var prompt = ReviewPrompt.Build(plan, diff.Patch, reviewed.Select(u => (u.UnitId, plan.Units.FirstOrDefault(c => c.Id == u.UnitId)?.Title ?? u.UnitId, u.Status, u.Attempts, u.Reason)).ToList());
 
         FinalReview review;
         try
         {
             var response = await architect.CompleteAsync(new ProviderRequest(model, ReviewPrompt.System, prompt), ct);
-            RecordArchitectCall(request.RunId, units.Count > 0 ? units[^1].UnitId : "", response, budget);
+            RecordArchitectCall(request.RunId, units.Count > 0 ? units[^1].UnitId : "", response, budget, CallPurposes.FinalReview);
             request.Artifacts.WriteLog("final-review.reply.md", response.Text);
             review = ReviewPrompt.Parse(response.Text, response.Model);
         }
@@ -325,47 +494,103 @@ public sealed class RunOrchestrator(
         return review;
     }
 
-    private async Task<UnitOutcome> RunUnitAsync(
-        RunRequest request, WorkUnit unit, RunWorkspace workspace, WorkspaceWatch watch, IExecutor executor, GateSession gates,
-        Dictionary<string, GateRun> baseline, List<WorkUnit> completed, List<LockedRegion> locks, List<Handoff> handoffs,
-        BudgetGuard budget, IRunObserver observer, CancellationToken ct)
+    /// <summary>
+    /// Runs one unit to a verdict. The classic loop (worker → gates → supervisor → retry / takeover / fail) is unchanged
+    /// for strategies 1-4. With adaptive supervision the unit is re-read from the plan on every attempt (it may have been
+    /// revised), the worker's report is read, the architect is called on deterministic triggers, oversized units are
+    /// split, a failed takeover can hand the unit back to the worker, and accepted units are reviewed by risk.
+    /// </summary>
+    private async Task<UnitOutcome> RunUnitAsync(RunContext ctx, string unitId, CancellationToken ct)
     {
+        var request = ctx.Request;
         var policy = request.Policy;
         var artifacts = request.Artifacts;
+        var workspace = ctx.Workspace;
+        var unit = ctx.Plan.Unit(unitId);
         var state = new UnitState { Unit = unit };
-        if (gates.Acceptance is { } acceptanceFiles && acceptanceFiles.Add(unit).Count > 0)
+        var adaptive = ctx.Adaptive && architect is not null;
+        if (ctx.Gates.Acceptance is { } acceptanceFiles && acceptanceFiles.Add(unit).Count > 0)
         {
             // The architect's tests for this unit go in as their own commit, so they are never part of the worker's diff.
             acceptanceFiles.Enforce(workspace.Path);
-            await workspace.CommitAsync($"tokonomy({unit.Id}): acceptance tests", ct);
+            if (!ctx.TestsCommitted.Contains(unit.Id))
+            {
+                await workspace.CommitAsync($"tokonomy({unit.Id}): acceptance tests", ct);
+            }
+
             artifacts.Append("acceptance", new { unit = unit.Id, files = acceptanceFiles.Paths });
         }
 
         var unitStart = await workspace.HeadAsync(ct);
         var maxAttempts = request.MaxAttempts ?? int.MaxValue;
         string? feedback = null;
-        observer.UnitStarted(unit);
-        ledger.UpsertUnit(request.RunId, unit.Id, unit.Title, "running", 0, 0);
+        var track = new UnitTrack();
+
+        // A resumed unit keeps its history: attempt numbers continue, and takeover and intervention caps still hold.
+        // Its retry window starts fresh, because the interrupted attempt was never judged.
+        if (ctx.History.TryGetValue(unitId, out var history))
+        {
+            state.Attempts = history.Attempts;
+            state.RetryWindowStart = history.Attempts;
+            state.Takeovers = history.Takeovers;
+            track.Interventions = history.Interventions;
+            track.InstructionCorrectionUsed = history.InstructionCorrectionUsed;
+        }
+
+        SaveRunState(ctx, RunPhases.Unit, unitId, unitStart);
+        ctx.Observer.UnitStarted(unit);
+        ledger.UpsertUnit(request.RunId, unit.Id, unit.Title, "running", state.Attempts, state.Takeovers);
         _currentUnit = unit.Id;
 
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, budget.Token);
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct, ctx.Budget.Token);
         while (true)
         {
+            // The worker always gets the latest approved revision of its unit, never a stale copy.
+            unit = ctx.Plan.Unit(unitId);
             state.Attempts++;
-            var brief = BriefWriter.Build(request.Contract, unit, state.Attempts, request.Executor.BriefFile, feedback, completed, handoffs,
-                gates.Acceptance is { Count: > 0 } ? (gates.Acceptance.Paths, string.Join(' ', policy.Acceptance.Cmd)) : null);
+            var brief = BriefWriter.Compile(new BriefInput
+            {
+                Plan = ctx.Plan.Current,
+                Unit = unit,
+                Attempt = state.Attempts,
+                BriefFileName = request.Executor.BriefFile,
+                Feedback = feedback,
+                Completed = ctx.Completed,
+                Handoffs = ctx.Handoffs,
+                Acceptance = ctx.Gates.Acceptance is { Count: > 0 } ? (ctx.Gates.Acceptance.Paths, string.Join(' ', policy.Acceptance.Cmd)) : null,
+                Revision = ctx.Plan.Revision,
+                Lessons = adaptive ? ctx.Plan.LessonsFor(unitId) : [],
+                RequestReport = adaptive && policy.Supervision.WorkerReports,
+            });
             artifacts.WriteLog($"{brief.Label}.brief.md", brief.Body);
 
-            await watch.BeforeAttemptAsync(ct);
-            observer.AttemptStarted(unit, state.Attempts);
-            var run = await executor.RunAsync(brief, workspace.Path, request.WorkerModel,
+            await ctx.Watch.BeforeAttemptAsync(ct);
+            var reportExisted = File.Exists(Path.Combine(workspace.Path, WorkerReports.FileName));
+            ctx.Observer.AttemptStarted(unit, state.Attempts);
+            var run = await ctx.Executor.RunAsync(brief, workspace.Path, request.WorkerModel,
                 TimeSpan.FromSeconds(policy.Escalation.WorkerTimeoutSeconds), linked.Token);
-            RecordReportedUsage(request.RunId, unit.Id, run, budget, request.Prices);
+            RecordReportedUsage(request.RunId, unit.Id, run, ctx.Budget, request.Prices);
 
             // Before git looks at the worktree (staging a junction is how a link would get into the diff): links,
             // the .git pointer and, for executors that report their commands, files hidden in ignored paths.
-            run = await InspectAttemptAsync(watch, run, request.Artifacts, brief.Label, ct);
+            WorkerReport? report;
+            (run, report) = await InspectAttemptAsync(ctx.Watch, run, artifacts, brief.Label,
+                adaptive && policy.Supervision.WorkerReports && !reportExisted ? workspace.Path : null, ct);
             var violated = run.Fault is { Kind: WorkerFaultKind.WorkspaceViolation };
+            if (report is not null)
+            {
+                ledger.RecordEvent(request.RunId, _clock.UtcNow, "worker_report", System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    unit = unit.Id,
+                    attempt = state.Attempts,
+                    status = report.Status.ToString(),
+                    reason = report.Reason,
+                    decision_required = report.DecisionRequired,
+                    needs_architect = report.NeedsArchitect,
+                    problems = report.Problems.Count,
+                }));
+                ctx.Observer.WorkerReported(unit, report);
+            }
 
             var diff = await workspace.DiffAsync(unitStart, ct);
             state.ChangedPaths = diff.ChangedPaths;
@@ -385,12 +610,13 @@ public sealed class RunOrchestrator(
             {
                 if (diff.ChangedPaths.Count > 0)
                 {
-                    observer.GatesStarted(unit);
+                    ctx.Observer.GatesStarted(unit);
                 }
 
                 try
                 {
-                    (gateResults, gateLogs) = await RunGatesAsync(request, brief.Label, workspace.Path, diff, gates, baseline, locks, linked.Token);
+                    (gateResults, gateLogs) = await RunGatesAsync(request, brief.Label, workspace.Path, diff, ctx.Gates, ctx.Baseline, ctx.Locks, linked.Token,
+                        adaptive ? ctx.Plan.LessonsFor(unitId) : []);
                 }
                 catch (GateSecurityException ex)
                 {
@@ -401,26 +627,50 @@ public sealed class RunOrchestrator(
                 }
             }
 
-            if (!violated && watch.CheckLinks("after the gates ran") is { } gateViolation)
+            if (!violated && ctx.Watch.CheckLinks("after the gates ran") is { } gateViolation)
             {
                 run = run with { Fault = new WorkerFault(WorkerFaultKind.WorkspaceViolation, gateViolation) };
             }
 
             var decision = supervisor.Decide(state, run, gateResults, policy);
-            var takeover = decision.CanTakeOver && request.AllowEscalation && architect is not null &&
+            var signature = FailureSignature.Of(gateResults);
+            var repeated = signature is not null && signature == track.LastFailure;
+            track.LastFailure = signature;
+            var deviation = adaptive ? PlanDeviation.Detect(unit, diff.ChangedPaths, ctx.AcceptanceDir) : PlanDeviation.None;
+
+            // Adaptive: what the architect should look at, decided by deterministic rules (never for wrong-model or
+            // workspace-violation failures, never for decisions a human owns, bounded per unit and per run).
+            SupervisionRequest? call = null;
+            if (adaptive && !ctx.Budget.Exhausted)
+            {
+                call = InterventionPolicy.Evaluate(new SupervisionContext
+                {
+                    Decision = decision,
+                    Report = report,
+                    AvoidTouched = deviation.AvoidTouched,
+                    RepeatedFailure = repeated,
+                    UnitInterventions = track.Interventions,
+                    RunInterventions = ctx.RunInterventions,
+                    Takeovers = state.Takeovers,
+                    InstructionCorrectionUsed = track.InstructionCorrectionUsed,
+                }, policy.Supervision, policy.Escalation);
+            }
+
+            var splitting = adaptive && decision.Kind == DecisionKind.Split && CanDecompose(ctx, unit);
+            var takeover = call is null && !splitting && decision.CanTakeOver && request.AllowEscalation && architect is not null &&
                            state.Takeovers < policy.Escalation.MaxTakeoversPerUnit;
-            if (!takeover)
+            if (!takeover && call is null && !splitting)
             {
                 decision = Constrain(decision, request, state, maxAttempts, architect is not null);
             }
 
-            observer.AttemptFinished(unit, state.Attempts, run, diff, gateResults, decision);
+            ctx.Observer.AttemptFinished(unit, state.Attempts, run, diff, gateResults, decision);
             var attemptId = ledger.RecordAttempt(new AttemptRecord
             {
                 RunId = request.RunId,
                 UnitId = unit.Id,
                 Number = state.Attempts,
-                Executor = executor.Name,
+                Executor = ctx.Executor.Name,
                 Model = request.WorkerModel,
                 ExitCode = run.ExitCode,
                 Duration = run.Duration,
@@ -437,11 +687,14 @@ public sealed class RunOrchestrator(
             {
                 unit = unit.Id,
                 attempt = state.Attempts,
+                revision = ctx.Plan.Revision,
                 run.ExitCode,
                 run.TimedOut,
                 fault = run.Fault is null ? null : new { kind = run.Fault.Kind.ToString(), run.Fault.Detail },
                 reported_model = run.ReportedModel,
                 audit = run.Audit,
+                report = report is null ? null : new { status = report.Status.ToString(), report.Reason, report.Description, report.DecisionRequired },
+                deviation = deviation.Any ? deviation.Describe().ToList() : null,
                 diff_lines = diff.TotalLines,
                 changed = diff.ChangedPaths,
                 gates = gateResults.Select(g => new { g.Gate, g.Status, g.NewFailures }),
@@ -449,48 +702,131 @@ public sealed class RunOrchestrator(
                 decision.Reason,
             });
 
-            if (takeover)
+            if (splitting)
             {
-                var result = await TakeOverAsync(request, unit, workspace, watch, unitStart, state, decision, diff, gateResults, gates, baseline, locks, handoffs, budget, observer, ct);
-                observer.TakeoverFinished(unit, result.Success, result.Note);
-                if (result.Success)
+                if (await DecomposeAsync(ctx, unit, decision, diff, gateResults, unitStart, ct) is { } splitNote)
                 {
-                    ledger.UpsertUnit(request.RunId, unit.Id, unit.Title, "accepted", state.Attempts, state.Takeovers);
-                    return new UnitOutcome(unit.Id, "accepted", state.Attempts, $"architect takeover: {result.Note}");
+                    ledger.UpsertUnit(request.RunId, unit.Id, unit.Title, "split", state.Attempts, state.Takeovers);
+                    return new UnitOutcome(unit.Id, UnitOutcome.Split, state.Attempts, splitNote) { Interventions = track.Interventions };
                 }
 
-                await workspace.ResetAsync(unitStart, CancellationToken.None, watch.KnownLinks);
-                ledger.UpsertUnit(request.RunId, unit.Id, unit.Title, "failed", state.Attempts, state.Takeovers);
-                return new UnitOutcome(unit.Id, "failed", state.Attempts, $"{decision.Reason}; takeover failed: {result.Note}");
+                decision = Constrain(decision, request, state, maxAttempts, architect is not null);
+            }
+
+            if (call is not null)
+            {
+                var step = await SuperviseAsync(ctx, unitId, state, track, call, decision, report, diff, gateResults, deviation, unitStart, [], ct);
+                switch (step.Kind)
+                {
+                    case StepKind.Resume:
+                        feedback = step.Feedback;
+                        state.RetryWindowStart = state.Attempts;
+                        track.LastFailure = null;
+                        continue;
+                    case StepKind.Accepted:
+                        return Done(UnitOutcome.Accepted, step.Note);
+                    case StepKind.Replaced:
+                        ledger.UpsertUnit(request.RunId, unit.Id, unit.Title, "split", state.Attempts, state.Takeovers);
+                        return new UnitOutcome(unit.Id, UnitOutcome.Split, state.Attempts, step.Note) { Interventions = track.Interventions };
+                    case StepKind.Human or StepKind.Failed:
+                        await workspace.ResetAsync(unitStart, CancellationToken.None, ctx.Watch.KnownLinks);
+                        return Done(UnitOutcome.Failed, step.Note);
+                }
+
+                // Proceed: no action (or no usable decision): the deterministic decision stands, with the classic
+                // takeover as the floor so adaptive supervision never rescues less than strategy 4.
+                takeover = decision.CanTakeOver && state.Takeovers < policy.Escalation.MaxTakeoversPerUnit;
+                if (!takeover)
+                {
+                    decision = Constrain(decision, request, state, maxAttempts, architectAvailable: true);
+                }
+            }
+
+            if (takeover)
+            {
+                var result = await TakeOverAsync(ctx, unit, unitStart, state, decision, diff, gateResults, ct, adaptive ? track : null);
+                ctx.Observer.TakeoverFinished(unit, result.Success, result.Note);
+                if (result.Success)
+                {
+                    return Done(UnitOutcome.Accepted, $"architect takeover: {result.Note}");
+                }
+
+                await workspace.ResetAsync(unitStart, CancellationToken.None, ctx.Watch.KnownLinks);
+                if (adaptive && policy.Supervision.ResumeAfterFailedTakeover && state.AttemptsInWindow < maxAttempts &&
+                    track.Interventions < policy.Supervision.MaxInterventionsPerUnit && ctx.RunInterventions < policy.Supervision.MaxInterventionsPerRun)
+                {
+                    // Recovery: the unit restarts from its verified start; the worker resumes with the architect's findings.
+                    RecordRecovery(ctx, unit, decision, result.Note);
+                    track.Interventions++;
+                    ctx.RunInterventions++;
+                    feedback = $"The architect tried to finish this unit and its fix did not pass: {result.Note}\nThe unit was reset to its start. {decision.Reason}";
+                    state.RetryWindowStart = state.Attempts;
+                    track.LastFailure = null;
+                    continue;
+                }
+
+                return Done(UnitOutcome.Failed, $"{decision.Reason}; takeover failed: {result.Note}");
             }
 
             switch (decision.Kind)
             {
                 case DecisionKind.Accept:
+                    if (adaptive)
+                    {
+                        var verdict = await ReviewAsync(ctx, unit, state, track, report, diff, gateResults, deviation, unitStart, ct);
+                        switch (verdict.Kind)
+                        {
+                            case StepKind.Resume:
+                                feedback = verdict.Feedback;
+                                state.RetryWindowStart = state.Attempts;
+                                track.LastFailure = null;
+                                continue;
+                            case StepKind.Accepted:
+                                // Accepted by an architect correction the review escalated to (already committed).
+                                return Done(UnitOutcome.Accepted, verdict.Note);
+                            case StepKind.Replaced:
+                                ledger.UpsertUnit(request.RunId, unit.Id, unit.Title, "split", state.Attempts, state.Takeovers);
+                                return new UnitOutcome(unit.Id, UnitOutcome.Split, state.Attempts, verdict.Note) { Interventions = track.Interventions };
+                            case StepKind.Human or StepKind.Failed:
+                                await workspace.ResetAsync(unitStart, CancellationToken.None, ctx.Watch.KnownLinks);
+                                return Done(UnitOutcome.Failed, verdict.Note);
+                        }
+                    }
+
                     await workspace.CommitAsync($"tokonomy({unit.Id}): {unit.Title}", ct);
-                    ledger.UpsertUnit(request.RunId, unit.Id, unit.Title, "accepted", state.Attempts, state.Takeovers);
-                    return new UnitOutcome(unit.Id, "accepted", state.Attempts, decision.Reason);
+                    return Done(UnitOutcome.Accepted, decision.Reason);
 
                 case DecisionKind.Retry:
                     feedback = BriefWriter.Feedback(decision.Reason, gateResults);
                     continue;
 
                 default:
-                    await workspace.ResetAsync(unitStart, CancellationToken.None, watch.KnownLinks);
-                    ledger.UpsertUnit(request.RunId, unit.Id, unit.Title, "failed", state.Attempts, state.Takeovers);
-                    return new UnitOutcome(unit.Id, "failed", state.Attempts, decision.Reason);
+                    await workspace.ResetAsync(unitStart, CancellationToken.None, ctx.Watch.KnownLinks);
+                    return Done(UnitOutcome.Failed, decision.Reason);
             }
+        }
+
+        UnitOutcome Done(string status, string reason)
+        {
+            ledger.UpsertUnit(request.RunId, unit.Id, unit.Title, status, state.Attempts, state.Takeovers);
+            return new UnitOutcome(unit.Id, status, state.Attempts, reason) { Interventions = track.Interventions, Review = track.Review };
         }
     }
 
-    /// <summary>Applies the workspace checks to a finished attempt and turns findings into a fault.</summary>
-    private static async Task<RunResult> InspectAttemptAsync(WorkspaceWatch watch, RunResult run, RunArtifacts artifacts, string label, CancellationToken ct)
+    /// <summary>
+    /// Applies the workspace checks to a finished attempt and turns findings into a fault. With <paramref name="reportRoot"/>
+    /// set, the worker's report file is read (never through a link) and removed, so it is never part of the diff.
+    /// </summary>
+    private static async Task<(RunResult Run, WorkerReport? Report)> InspectAttemptAsync(
+        WorkspaceWatch watch, RunResult run, RunArtifacts artifacts, string label, string? reportRoot, CancellationToken ct)
     {
         if (watch.CheckLinks("after the worker ran") is { } violation)
         {
             artifacts.Append("violation", new { attempt = label, detail = violation });
-            return run with { Fault = new WorkerFault(WorkerFaultKind.WorkspaceViolation, violation) };
+            return (run with { Fault = new WorkerFault(WorkerFaultKind.WorkspaceViolation, violation) }, null);
         }
+
+        var report = reportRoot is null ? null : ReadWorkerReport(reportRoot, artifacts, label);
 
         // Only executors that report every shell command (an audit) can be judged here: with no commands run, anything
         // new in ignored paths was written by the worker's file tools on purpose. Others may legitimately create build
@@ -498,16 +834,63 @@ public sealed class RunOrchestrator(
         if (run.Audit is { Commands.Count: 0 } && await watch.CheckIgnoredAsync(ct) is { } hidden)
         {
             artifacts.Append("hidden_files", new { attempt = label, detail = hidden });
-            return run.Fault is null ? run with { Fault = new WorkerFault(WorkerFaultKind.PermissionDenied, hidden) } : run;
+            return (run.Fault is null ? run with { Fault = new WorkerFault(WorkerFaultKind.PermissionDenied, hidden) } : run, report);
         }
 
-        return run;
+        return (run, report);
     }
 
-    /// <summary>Runs every command gate, then the locked-region check once an earlier takeover created locks.</summary>
+    private static WorkerReport? ReadWorkerReport(string root, RunArtifacts artifacts, string label)
+    {
+        string? text;
+        try
+        {
+            text = WorktreeGuard.ReadAllText(root, WorkerReports.FileName, WorkerReports.MaxBytes);
+            if (File.Exists(Path.Combine(root, WorkerReports.FileName)) || WorktreeGuard.IsLink(Path.Combine(root, WorkerReports.FileName)))
+            {
+                WorktreeGuard.DeleteFile(root, WorkerReports.FileName);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or WorktreeEscapeException)
+        {
+            artifacts.Append("worker_report", new { attempt = label, error = ex.Message });
+            return null;
+        }
+
+        if (text is null)
+        {
+            return null;
+        }
+
+        artifacts.WriteLog($"{label}.report.json", text);
+        var report = WorkerReports.Parse(text, path =>
+        {
+            try
+            {
+                var full = WorktreeGuard.ResolveInside(root, path);
+                return File.Exists(full) || Directory.Exists(full);
+            }
+            catch (WorktreeEscapeException)
+            {
+                return false;
+            }
+        });
+        artifacts.Append("worker_report", new
+        {
+            attempt = label,
+            status = report?.Status.ToString(),
+            report?.Reason,
+            report?.DecisionRequired,
+            problems = report?.Problems,
+            unreadable = report is null,
+        });
+        return report;
+    }
+
+    /// <summary>Runs every command gate, then the locked-region check once an earlier takeover created locks, then the lessons check.</summary>
     private static async Task<(List<GateResult> Results, List<string?> Logs)> RunGatesAsync(
         RunRequest request, string label, string workdir, UnitDiff diff, GateSession gates,
-        Dictionary<string, GateRun> baseline, List<LockedRegion> locks, CancellationToken ct)
+        Dictionary<string, GateRun> baseline, List<LockedRegion> locks, CancellationToken ct, IReadOnlyList<Lesson>? lessons = null)
     {
         var results = new List<GateResult>();
         var logs = new List<string?>();
@@ -528,6 +911,19 @@ public sealed class RunOrchestrator(
             logs.Add(null);
         }
 
+        // A corrected mistake made again: lessons with a forbidden pattern are checked against the lines this unit adds.
+        if (request.UseGates && lessons is { Count: > 0 } && lessons.Any(l => l.ForbiddenPattern is not null))
+        {
+            var violations = LessonCheck.Violations(lessons, diff.Patch);
+            results.Add(new GateResult
+            {
+                Gate = LessonCheck.GateName,
+                Status = violations.Count == 0 ? GateStatus.Passed : GateStatus.Failed,
+                Output = violations.Count == 0 ? "" : "A mistake the architect already corrected was made again:\n" + string.Join('\n', violations),
+            });
+            logs.Add(null);
+        }
+
         return (results, logs);
     }
 
@@ -538,35 +934,20 @@ public sealed class RunOrchestrator(
     /// suite re-runs, and on success the edit is locked, a handoff is written and the unit is committed.
     /// </summary>
     private async Task<TakeoverResult> TakeOverAsync(
-        RunRequest request, WorkUnit unit, RunWorkspace workspace, WorkspaceWatch watch, string unitStart, UnitState state, Decision decision,
-        UnitDiff diff, List<GateResult> gateResults, GateSession gates, Dictionary<string, GateRun> baseline,
-        List<LockedRegion> locks, List<Handoff> handoffs, BudgetGuard budget, IRunObserver observer, CancellationToken ct)
+        RunContext ctx, WorkUnit unit, string unitStart, UnitState state, Decision decision, UnitDiff diff, List<GateResult> gateResults, CancellationToken ct,
+        UnitTrack? track = null)
     {
+        var request = ctx.Request;
         var policy = request.Policy;
         var artifacts = request.Artifacts;
         var model = request.ArchitectModel ?? policy.Models.Architect;
         state.Takeovers++;
+        SaveRunState(ctx, RunPhases.Takeover, unit.Id, unitStart);
         ledger.UpsertUnit(request.RunId, unit.Id, unit.Title, "takeover", state.Attempts, state.Takeovers);
-        observer.Stage($"Takeover: the architect ({model}) steps in on {unit.Id} ({decision.Reason})");
+        ctx.Observer.Stage($"Takeover: the architect ({model}) steps in on {unit.Id} ({decision.Reason})");
 
-        var files = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var path in diff.ChangedPaths.Concat(unit.Files).Distinct(StringComparer.Ordinal))
-        {
-            // Through the guard: this text is sent to the architect, so a link to e.g. ~/.ssh must never be followed.
-            try
-            {
-                if (WorktreeGuard.ReadAllText(workspace.Path, path, maxBytes: 200_000) is { } text)
-                {
-                    files[path] = text;
-                }
-            }
-            catch (IOException)
-            {
-            }
-        }
-
-        var repoFiles = (await _git.RunAsync(workspace.Path, ["ls-files", "--cached", "--others", "--exclude-standard"], ct))
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var files = ReadRelevantFiles(ctx.Workspace.Path, diff.ChangedPaths.Concat(unit.Files));
+        var repoFiles = await ListRepoFilesAsync(ctx.Workspace.Path, ct);
         var failure = BriefWriter.Feedback(decision.Reason, gateResults);
 
         string? problem = null;
@@ -574,7 +955,7 @@ public sealed class RunOrchestrator(
         ApplyResult? applied = null;
         for (var ask = 1; ask <= 2; ask++)
         {
-            var prompt = TakeoverPrompt.Build(request.Contract, unit, state.Attempts, decision.Reason, diff.Patch, failure, files, repoFiles, locks, problem);
+            var prompt = TakeoverPrompt.Build(ctx.Plan.Current, unit, state.Attempts, decision.Reason, diff.Patch, failure, files, repoFiles, ctx.Locks, problem);
             ProviderResponse response;
             try
             {
@@ -585,15 +966,15 @@ public sealed class RunOrchestrator(
                 return new TakeoverResult(false, $"the architect call failed: {ex.Message}");
             }
 
-            RecordArchitectCall(request.RunId, unit.Id, response, budget);
+            RecordArchitectCall(request.RunId, unit.Id, response, ctx.Budget, CallPurposes.Takeover);
             artifacts.WriteLog($"{unit.Id}-takeover{ask}.reply.md", response.Text);
-            if (budget.Exhausted)
+            if (ctx.Budget.Exhausted)
             {
                 return new TakeoverResult(false, "budget exhausted");
             }
 
             reply = TakeoverPrompt.Parse(response.Text);
-            applied = EditApplier.Apply(workspace.Path, reply.Edits);
+            applied = EditApplier.Apply(ctx.Workspace.Path, reply.Edits);
             if (applied.Ok)
             {
                 break;
@@ -607,26 +988,60 @@ public sealed class RunOrchestrator(
             return new TakeoverResult(false, $"the architect's edits could not be applied: {problem}");
         }
 
-        var newDiff = await workspace.DiffAsync(unitStart, ct);
+        var verified = await VerifyArchitectEditAsync(ctx, unit, unitStart, state, model, reply.Edits, applied, "takeover", decision.Trigger, ct);
+        if (!verified.Ok)
+        {
+            return new TakeoverResult(false, verified.Note);
+        }
+
+        var summary = reply.Summary ?? "the architect corrected this unit";
+        if (ctx.Adaptive && track is not null)
+        {
+            // Strategy 5: the classic takeover is architect-written too, so risky ones get the same independent review.
+            var after = await ctx.Workspace.DiffAsync(unitStart, ct);
+            var reviewed = await ReviewAsync(ctx, unit, state, track, null, after, verified.Gates,
+                PlanDeviation.Detect(unit, after.ChangedPaths, ctx.AcceptanceDir), unitStart, ct, architectChange: true);
+            if (reviewed.Kind != StepKind.Proceed)
+            {
+                return new TakeoverResult(false, $"the takeover passed the gates but the independent review did not accept it: {reviewed.Note}{reviewed.Feedback}");
+            }
+        }
+
+        await CommitArchitectEditAsync(ctx, unit, applied.Files, summary, reply.Why ?? decision.Reason, LocksOf(reply.Edits), "[architect takeover]", ct);
+        return new TakeoverResult(true, summary);
+    }
+
+    /// <summary>
+    /// Re-runs every gate on an architect edit that applied cleanly and records the result as an architect attempt.
+    /// <paramref name="kind"/> is <c>takeover</c> (L3) or <c>correction</c> (L2); reasons start with it.
+    /// </summary>
+    private async Task<(bool Ok, string Note, List<GateResult> Gates)> VerifyArchitectEditAsync(
+        RunContext ctx, WorkUnit unit, string unitStart, UnitState state, string model, IReadOnlyList<EditBlock> edits, ApplyResult applied,
+        string kind, TakeoverTrigger trigger, CancellationToken ct)
+    {
+        var request = ctx.Request;
+        var artifacts = request.Artifacts;
+        var newDiff = await ctx.Workspace.DiffAsync(unitStart, ct);
         if (newDiff.Patch.Length > 0)
         {
-            artifacts.WriteLog($"{unit.Id}-takeover.diff", newDiff.Patch);
+            artifacts.WriteLog($"{unit.Id}-{kind}.diff", newDiff.Patch);
         }
 
         List<GateResult> after;
         List<string?> afterLogs;
         try
         {
-            (after, afterLogs) = await RunGatesAsync(request, $"{unit.Id}-takeover", workspace.Path, newDiff, gates, baseline, locks, ct);
+            (after, afterLogs) = await RunGatesAsync(request, $"{unit.Id}-{kind}", ctx.Workspace.Path, newDiff, ctx.Gates, ctx.Baseline, ctx.Locks, ct,
+                ctx.Adaptive ? ctx.Plan.LessonsFor(unit.Id) : null);
         }
         catch (GateSecurityException ex)
         {
-            return new TakeoverResult(false, $"gate environment violation: {ex.Message}");
+            return (false, $"gate environment violation: {ex.Message}", []);
         }
 
-        if (watch.CheckLinks("after the takeover gates ran") is { } violation)
+        if (ctx.Watch.CheckLinks($"after the {kind} gates ran") is { } violation)
         {
-            return new TakeoverResult(false, $"workspace violation: {violation}");
+            return (false, $"workspace violation: {violation}", after);
         }
 
         var blocking = after.Where(g => g.Blocking).Select(g => g.Gate).ToList();
@@ -641,52 +1056,79 @@ public sealed class RunOrchestrator(
             Duration = TimeSpan.Zero,
             DiffLines = newDiff.TotalLines,
             Decision = blocking.Count == 0 ? DecisionKind.Accept : DecisionKind.Fail,
-            Reason = blocking.Count == 0 ? "takeover: gates pass" : $"takeover: gate(s) still failing: {string.Join(", ", blocking)}",
+            Reason = blocking.Count == 0 ? $"{kind}: gates pass" : $"{kind}: gate(s) still failing: {string.Join(", ", blocking)}",
         });
         for (var i = 0; i < after.Count; i++)
         {
             ledger.RecordGateResult(attemptId, after[i], afterLogs[i]);
         }
 
-        artifacts.Append("takeover", new
+        artifacts.Append(kind, new
         {
             unit = unit.Id,
-            trigger = decision.Trigger,
+            trigger,
             files = applied.Files,
             gates = after.Select(g => new { g.Gate, g.Status }),
             ok = blocking.Count == 0,
         });
-        if (blocking.Count > 0)
-        {
-            return new TakeoverResult(false, $"gate(s) still failing after the architect's edit: {string.Join(", ", blocking)}");
-        }
+        return blocking.Count == 0
+            ? (true, "", after)
+            : (false, $"gate(s) still failing after the architect's edit: {string.Join(", ", blocking)}", after);
+    }
 
-        var newLocks = reply.Edits
-            .Where(e => !string.IsNullOrWhiteSpace(e.Replace))
-            .Select(e => new LockedRegion(e.Path.Replace('\\', '/').TrimStart('/'), e.Replace))
-            .ToList();
-        locks.AddRange(newLocks);
-
+    /// <summary>Locks (for a takeover), writes the handoff for the next workers and commits the unit.</summary>
+    private static async Task CommitArchitectEditAsync(
+        RunContext ctx, WorkUnit unit, IReadOnlyList<string> files, string summary, string why, IReadOnlyList<LockedRegion> newLocks, string label, CancellationToken ct)
+    {
+        var request = ctx.Request;
+        ctx.Locks.AddRange(newLocks);
         var handoff = new Handoff
         {
             UnitId = unit.Id,
             UnitTitle = unit.Title,
-            Files = applied.Files,
-            Summary = reply.Summary ?? "the architect corrected this unit",
-            Why = reply.Why ?? decision.Reason,
+            Files = files,
+            Summary = summary,
+            Why = why,
             Locked = newLocks,
-            MustFollow = request.Contract.Rules.Select(r => $"{r.Id}: {r.Text}").ToList(),
+            MustFollow = ctx.Plan.Current.Rules.Select(r => $"{r.Id}: {r.Text}").ToList(),
         };
-        handoffs.Add(handoff);
-        var order = ContractValidator.Order(request.Contract).ToList();
-        var next = order.SkipWhile(u => u.Id != unit.Id).Skip(1).FirstOrDefault();
+        ctx.Handoffs.Add(handoff);
+        var next = ctx.Plan.Remaining().FirstOrDefault(u => u.Id != unit.Id);
         var yaml = HandoffWriter.ToYaml(handoff, next is null ? null : $"{next.Id}: {next.Title}");
-        artifacts.WriteFile("handoff.yaml", yaml);
-        artifacts.WriteFile($"handoff-{unit.Id}.yaml", yaml);
-
-        await workspace.CommitAsync($"tokonomy({unit.Id}): {unit.Title} [architect takeover]", ct);
-        return new TakeoverResult(true, handoff.Summary);
+        request.Artifacts.WriteFile("handoff.yaml", yaml);
+        request.Artifacts.WriteFile($"handoff-{unit.Id}.yaml", yaml);
+        await ctx.Workspace.CommitAsync($"tokonomy({unit.Id}): {unit.Title} {label}", ct);
     }
+
+    private static List<LockedRegion> LocksOf(IReadOnlyList<EditBlock> edits) => edits
+        .Where(e => !string.IsNullOrWhiteSpace(e.Replace))
+        .Select(e => new LockedRegion(e.Path.Replace('\\', '/').TrimStart('/'), e.Replace))
+        .ToList();
+
+    /// <summary>The current text of the given files, read through the guard (this text is sent to the architect, so a link to e.g. ~/.ssh is never followed).</summary>
+    private static Dictionary<string, string> ReadRelevantFiles(string root, IEnumerable<string> paths)
+    {
+        var files = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var path in paths.Select(PlanPaths.Normalize).OfType<string>().Where(p => !PlanPaths.IsGlob(p)).Distinct(StringComparer.Ordinal))
+        {
+            try
+            {
+                if (WorktreeGuard.ReadAllText(root, path, maxBytes: 200_000) is { } text)
+                {
+                    files[path] = text;
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or WorktreeEscapeException)
+            {
+            }
+        }
+
+        return files;
+    }
+
+    private async Task<string[]> ListRepoFilesAsync(string workdir, CancellationToken ct) =>
+        (await _git.RunAsync(workdir, ["ls-files", "--cached", "--others", "--exclude-standard"], ct))
+        .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     /// <summary>Records usage the executor reported itself (not metered by the proxy); always marked estimated.</summary>
     private void RecordReportedUsage(string runId, string unitId, RunResult run, BudgetGuard budget, PriceTable prices)
@@ -726,7 +1168,7 @@ public sealed class RunOrchestrator(
         }
     }
 
-    private void RecordArchitectCall(string runId, string unitId, ProviderResponse response, BudgetGuard budget)
+    private void RecordArchitectCall(string runId, string unitId, ProviderResponse response, BudgetGuard budget, string purpose)
     {
         ledger.RecordLlmCall(new LlmCallRecord
         {
@@ -739,6 +1181,7 @@ public sealed class RunOrchestrator(
             CachedTokens = response.CachedTokens,
             Usd = response.Usd ?? 0,
             Source = response.Usd is null || response.Estimated ? CostSource.Estimated : CostSource.Metered,
+            Purpose = purpose,
         });
         budget.Add(response.Usd ?? 0);
         NotifyUsage(LlmRole.Architect, response.Model, response.InputTokens, response.OutputTokens, response.Usd ?? 0, budget);
@@ -763,7 +1206,9 @@ public sealed class RunOrchestrator(
 
             if (decision.Kind == DecisionKind.Split)
             {
-                return new Decision(DecisionKind.Fail, $"{decision.Reason}; splitting an oversized unit is not implemented yet");
+                return new Decision(DecisionKind.Fail, request.AdaptiveSupervision
+                    ? $"{decision.Reason}; the unit could not be split (split limit reached, already a split part, or no usable split)"
+                    : $"{decision.Reason}; splitting an oversized unit is not implemented yet in this strategy (strategy 5 splits it)");
             }
 
             if (!decision.CanTakeOver)
@@ -778,7 +1223,7 @@ public sealed class RunOrchestrator(
             return new Decision(DecisionKind.Fail, $"{decision.Reason}; takeover unavailable ({why})");
         }
 
-        if (decision.Kind == DecisionKind.Retry && state.Attempts >= maxAttempts)
+        if (decision.Kind == DecisionKind.Retry && state.AttemptsInWindow >= maxAttempts)
         {
             return new Decision(DecisionKind.Fail, $"{decision.Reason}; attempt limit {maxAttempts} reached");
         }

@@ -77,8 +77,8 @@ public sealed class Supervisor : ISupervisor
             return new(DecisionKind.Takeover, "worker timed out", TakeoverTrigger.Timeout);
         }
 
-        // unit.Attempts counts the attempt just evaluated.
-        var limitReached = unit.Attempts >= Math.Max(1, esc.MaxRetriesPerUnit);
+        // unit.Attempts counts the attempt just evaluated; an architect correction opens a new retry window.
+        var limitReached = unit.AttemptsInWindow >= Math.Max(1, esc.MaxRetriesPerUnit);
 
         // A faulted run is never accepted, even if the diff happens to pass every gate: the worker did not finish
         // cleanly (crash, error status, denied tool call), so nothing it produced is a reported success.
