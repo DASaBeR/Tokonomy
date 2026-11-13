@@ -68,7 +68,7 @@ public class ChildProcessesTests
         var run = new ProcessRunner().RunAsync(new ProcessSpec { Args = LongSleep, WorkingDirectory = Path.GetTempPath() }, default);
         await WaitUntilAsync(() => ChildProcesses.Count > 0);
 
-        var pid = System.Diagnostics.Process.GetProcessesByName("PING").FirstOrDefault(p => !p.HasExited);
+        var pid = System.Diagnostics.Process.GetProcessesByName("PING").Where(p => !p.HasExited).OrderByDescending(p => p.StartTime).FirstOrDefault();
         Assert.NotNull(pid);
         Assert.True(ChildProcesses.IsInJob(pid));
 

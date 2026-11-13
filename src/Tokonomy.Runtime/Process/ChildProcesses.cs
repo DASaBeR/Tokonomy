@@ -34,9 +34,10 @@ public static class ChildProcesses
     internal static IDisposable Adopt(System.Diagnostics.Process process)
     {
         var id = process.Id;
+        // Join the job before becoming visible, so anything that sees the process tracked can rely on it being in the job.
+        AssignToJob(process);
         Live[id] = process;
         Interlocked.Increment(ref _busy);
-        AssignToJob(process);
         return new Registration(() =>
         {
             Live.TryRemove(id, out _);

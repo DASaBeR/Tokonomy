@@ -872,7 +872,7 @@ public sealed class SandboxRunnerScriptTests : IDisposable
 
         Assert.Equal(0, (await Script("export")).ExitCode);
         var archive = Path.Combine(_root, "tk", "out", "deps.tar");
-        var listing = (await new ProcessRunner().RunAsync(new ProcessSpec { Args = ["tar", "-tf", archive], WorkingDirectory = _dir.Path }, default)).Stdout;
+        var listing = (await new ProcessRunner().RunAsync(new ProcessSpec { Args = [Path.Combine(Environment.SystemDirectory, "tar.exe"), "-tf", archive], WorkingDirectory = _dir.Path }, default)).Stdout;
         Assert.Contains("work/node_modules/left-pad/index.js", listing, StringComparison.Ordinal);
         Assert.Contains("tkc/nuget/pkg.txt", listing, StringComparison.Ordinal);
         Assert.DoesNotContain("package.json", listing, StringComparison.Ordinal);

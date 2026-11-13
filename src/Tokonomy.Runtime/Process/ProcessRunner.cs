@@ -190,7 +190,9 @@ public sealed class ProcessRunner : IProcessRunner
     private static async Task DrainAsync(Task a, Task b)
     {
         // A surviving grandchild could keep a pipe open; never block forever on it.
-        await Task.WhenAny(Task.WhenAll(a, b), Task.Delay(DrainGrace));
+        using var grace = new CancellationTokenSource();
+        await Task.WhenAny(Task.WhenAll(a, b), Task.Delay(DrainGrace, grace.Token));
+        await grace.CancelAsync();
     }
 
     private sealed class StreamCapture(int maxChars, string? filePath, long maxFileBytes, Action? onActivity, Action<string>? onLine) : IDisposable
