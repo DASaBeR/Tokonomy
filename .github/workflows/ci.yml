@@ -38,6 +38,18 @@ jobs:
       - run: dotnet build --no-restore -c Release
       - run: dotnet test --no-build -c Release --logger "trx;LogFilePrefix=results" --results-directory TestResults
 
+      - name: Report failed tests
+        if: failure()
+        shell: python
+        run: |
+          import glob, xml.etree.ElementTree as ET
+          ns = {"t": "http://microsoft.com/schemas/VisualStudio/TeamTest/2010"}
+          for f in glob.glob("TestResults/*.trx"):
+              for r in ET.parse(f).getroot().iterfind(".//t:UnitTestResult[@outcome='Failed']", ns):
+                  msg = r.findtext(".//t:Message", default="", namespaces=ns).strip().replace("
+", " | ")[:400]
+                  print(f"::error title=FAILED {r.get('testName')}::{msg}")
+
       - name: Upload test results
         if: failure()
         uses: actions/upload-artifact@v4
