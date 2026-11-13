@@ -107,7 +107,7 @@ internal sealed partial class FakeWsb : IProcessRunner
                 }
 
                 var index = int.Parse(IndexRegex().Match(command).Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
-                side.Specs[index] = JsonDocument.Parse(Convert.FromBase64String(SpecRegex().Match(command).Groups[1].Value)).RootElement;
+                side.Specs[index] = JsonElement.Parse(Convert.FromBase64String(SpecRegex().Match(command).Groups[1].Value));
                 if (HangRuns)
                 {
                     using var timeout = new CancellationTokenSource(spec.Timeout ?? TimeSpan.FromDays(1));
@@ -145,7 +145,7 @@ internal sealed partial class FakeWsb : IProcessRunner
 /// <summary>What code inside the sandbox can touch: the writable results folder (and it can read the control folder).</summary>
 internal sealed record SandboxSide(string Out, string Ctl)
 {
-    public string Nonce => JsonDocument.Parse(File.ReadAllText(Path.Combine(Ctl, "session.json"))).RootElement.GetProperty("nonce").GetString()!;
+    public string Nonce => JsonElement.Parse(File.ReadAllText(Path.Combine(Ctl, "session.json"))).GetProperty("nonce").GetString()!;
 
     /// <summary>Command specs as the runner receives them (decoded from the exec command line).</summary>
     public Dictionary<int, JsonElement> Specs { get; } = [];
@@ -797,7 +797,7 @@ public sealed class SandboxRunnerScriptTests : IDisposable
             new GateCommand { Name = "t", Args = args, Timeout = TimeSpan.FromMilliseconds(timeoutMs), ReportPath = report },
             new GateArtifactLimits { MaxLogKb = 4, MaxReportMb = 1 });
 
-    private JsonElement Status(int index) => JsonDocument.Parse(File.ReadAllText(Path.Combine(_root, "tk", "out", $"{index}.status.json"))).RootElement;
+    private JsonElement Status(int index) => JsonElement.Parse(File.ReadAllText(Path.Combine(_root, "tk", "out", $"{index}.status.json")));
 
     private string Out(string name) => File.ReadAllText(Path.Combine(_root, "tk", "out", name));
 

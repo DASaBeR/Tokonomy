@@ -96,7 +96,7 @@ public sealed class WorkflowTests : IDisposable
 
         var (planExit, planOut) = await Cli(services, "plan", "Add the feature", "--strategy", "1b", "--json", "--config", ConfigDir);
         Assert.True(planExit == 0, planOut);
-        var planId = System.Text.Json.JsonDocument.Parse(planOut).RootElement.GetProperty("run_id").GetString()!;
+        var planId = System.Text.Json.JsonElement.Parse(planOut).GetProperty("run_id").GetString()!;
 
         var (firstExit, firstOut) = await Cli(services, "run", "--plan", planId, "--config", ConfigDir);
         Assert.True(firstExit == 0, firstOut);
@@ -112,7 +112,7 @@ public sealed class WorkflowTests : IDisposable
         Assert.Contains("PASS", againOut, StringComparison.Ordinal);
 
         var (_, reportOut) = await Cli(services, "report", "--json", "--config", ConfigDir);
-        var runs = System.Text.Json.JsonDocument.Parse(reportOut).RootElement.EnumerateArray().Select(r => r.GetProperty("id").GetString()).ToList();
+        var runs = System.Text.Json.JsonElement.Parse(reportOut).EnumerateArray().Select(r => r.GetProperty("id").GetString()).ToList();
         Assert.Equal(2, runs.Count);
         Assert.Contains(planId, runs);
     }
