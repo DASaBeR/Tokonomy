@@ -1,0 +1,855 @@
+{
+  "experiment": "strategy 5 on a large multi-module full-stack project (single run, single plan)",
+  "date": "2026-11-13",
+  "strategy": 5,
+  "models": {
+    "strong_model": "claude-sonnet-5-5 (Claude Code subscription)",
+    "worker_model": "gemini-3.8-flash-high (Antigravity subscription)"
+  },
+  "outcome": {
+    "status": "pass",
+    "units_accepted": 16,
+    "units_total_after_splits": 18,
+    "split_parent_units": 2,
+    "worker_attempts": 22,
+    "retries": 4,
+    "takeovers": 0,
+    "interventions": 3,
+    "plan_revisions": 5,
+    "lessons": 3,
+    "review_change_requests": 2
+  },
+  "cost_note": "API-equivalent estimates from Tokonomy's ledger; both models ran on subscriptions, so nothing was billed per token",
+  "cost": {
+    "passing_run_usd": 29.9,
+    "all_runs_of_the_day_usd": 52.3,
+    "by_role_and_purpose": [
+      {
+        "role": "Architect",
+        "purpose": "decomposition",
+        "calls": 2,
+        "input_tokens": 104238,
+        "output_tokens": 11932,
+        "cache_read_tokens": 0,
+        "api_equivalent_usd": 0.33
+      },
+      {
+        "role": "Architect",
+        "purpose": "review",
+        "calls": 16,
+        "input_tokens": 1453069,
+        "output_tokens": 26636,
+        "cache_read_tokens": 14210,
+        "api_equivalent_usd": 3.33
+      },
+      {
+        "role": "Architect",
+        "purpose": "supervision",
+        "calls": 1,
+        "input_tokens": 71846,
+        "output_tokens": 1854,
+        "cache_read_tokens": 0,
+        "api_equivalent_usd": 0.17
+      },
+      {
+        "role": "Worker",
+        "purpose": "implementation",
+        "calls": 22,
+        "input_tokens": 6292941,
+        "output_tokens": 1811379,
+        "cache_read_tokens": 162446898,
+        "api_equivalent_usd": 26.07
+      }
+    ]
+  },
+  "time": {
+    "passing_run_started_utc": "2026-11-13T13:11:39Z",
+    "ended_utc": "2026-11-13T18:23:57Z",
+    "active_time_note": "about 2h16m before a stop at U6a plus about 2h43m after the resume (about 5h00m active; a short pause in between)"
+  },
+  "reviews": {
+    "by_verdict": {
+      "ApproveWithWarnings": 14,
+      "Skipped (routine)": 2,
+      "RequestChanges": 2
+    }
+  },
+  "units": [
+    {
+      "id": "U1",
+      "label": "Foundation: repository scaffolding, backend skeleton, test harness, CI",
+      "attempts": [
+        {
+          "number": 1,
+          "decision": "accept",
+          "files": 23,
+          "diff_lines": 957,
+          "shell_commands": 38,
+          "at": "2026-11-13T13:22:36.2984969+00:00",
+          "reason": "gates passed",
+          "fault": null
+        }
+      ],
+      "reviews": [
+        {
+          "verdict": "ApproveWithWarnings",
+          "findings": 3,
+          "by_severity": {
+            "medium": 1,
+            "low": 2
+          },
+          "at": "2026-11-13T13:22:57.4961637+00:00"
+        }
+      ]
+    },
+    {
+      "id": "U2",
+      "label": "Identity, first-run lock, authentication, roles, users, audit log",
+      "attempts": [
+        {
+          "number": 1,
+          "decision": "accept",
+          "files": 26,
+          "diff_lines": 2432,
+          "shell_commands": 19,
+          "at": "2026-11-13T13:34:51.1505276+00:00",
+          "reason": "gates passed",
+          "fault": null
+        }
+      ],
+      "reviews": [
+        {
+          "verdict": "ApproveWithWarnings",
+          "findings": 6,
+          "by_severity": {
+            "medium": 2,
+            "low": 4
+          },
+          "at": "2026-11-13T13:35:12.7462167+00:00"
+        }
+      ]
+    },
+    {
+      "id": "U3",
+      "label": "Metrics collection module and endpoints",
+      "attempts": [
+        {
+          "number": 1,
+          "decision": "accept",
+          "files": 20,
+          "diff_lines": 1521,
+          "shell_commands": 16,
+          "at": "2026-11-13T13:47:27.6363505+00:00",
+          "reason": "gates passed",
+          "fault": null
+        }
+      ],
+      "reviews": [
+        {
+          "verdict": "ApproveWithWarnings",
+          "findings": 4,
+          "by_severity": {
+            "low": 4
+          },
+          "at": "2026-11-13T13:47:45.2418984+00:00"
+        }
+      ]
+    },
+    {
+      "id": "U4",
+      "label": "Third-party service integration module",
+      "attempts": [
+        {
+          "number": 1,
+          "decision": "accept",
+          "files": 14,
+          "diff_lines": 1760,
+          "shell_commands": 16,
+          "at": "2026-11-13T14:01:47.5228986+00:00",
+          "reason": "gates passed",
+          "fault": null
+        }
+      ],
+      "reviews": [
+        {
+          "verdict": "ApproveWithWarnings",
+          "findings": 5,
+          "by_severity": {
+            "medium": 1,
+            "low": 4
+          },
+          "at": "2026-11-13T14:02:06.856865+00:00"
+        }
+      ]
+    },
+    {
+      "id": "U5",
+      "label": "Background-jobs module (split into U5a-U5d)",
+      "attempts": [
+        {
+          "number": 1,
+          "decision": "split",
+          "files": 14,
+          "diff_lines": 1377,
+          "shell_commands": 19,
+          "at": "2026-11-13T14:15:02.2673839+00:00",
+          "reason": "diff has 1377 changed lines (limit 1000)",
+          "fault": "ReportedError"
+        }
+      ],
+      "reviews": []
+    },
+    {
+      "id": "U5a",
+      "label": "Background-jobs module: data model and migration",
+      "attempts": [
+        {
+          "number": 1,
+          "decision": "accept",
+          "files": 6,
+          "diff_lines": 398,
+          "shell_commands": 21,
+          "at": "2026-11-13T14:20:58.7349316+00:00",
+          "reason": "gates passed",
+          "fault": null
+        }
+      ],
+      "reviews": [
+        {
+          "verdict": "ApproveWithWarnings",
+          "findings": 1,
+          "by_severity": {
+            "low": 1
+          },
+          "at": "2026-11-13T14:21:05.1714364+00:00"
+        }
+      ]
+    },
+    {
+      "id": "U5b",
+      "label": "Background-jobs module: validation and executor",
+      "attempts": [
+        {
+          "number": 1,
+          "decision": "accept",
+          "files": 3,
+          "diff_lines": 264,
+          "shell_commands": 45,
+          "at": "2026-11-13T14:32:34.7415132+00:00",
+          "reason": "gates passed",
+          "fault": null
+        }
+      ],
+      "reviews": [
+        {
+          "verdict": "Skipped (routine)",
+          "findings": 0,
+          "by_severity": {},
+          "at": "2026-11-13T14:32:34.891193+00:00"
+        }
+      ]
+    },
+    {
+      "id": "U5c",
+      "label": "Background-jobs module: scheduler/runner",
+      "attempts": [
+        {
+          "number": 1,
+          "decision": "accept",
+          "files": 1,
+          "diff_lines": 174,
+          "shell_commands": 22,
+          "at": "2026-11-13T14:39:22.0557362+00:00",
+          "reason": "gates passed",
+          "fault": null
+        }
+      ],
+      "reviews": [
+        {
+          "verdict": "ApproveWithWarnings",
+          "findings": 3,
+          "by_severity": {
+            "medium": 1,
+            "low": 2
+          },
+          "at": "2026-11-13T14:39:36.5912414+00:00"
+        }
+      ]
+    },
+    {
+      "id": "U5d",
+      "label": "Background-jobs module: endpoints and wiring",
+      "attempts": [
+        {
+          "number": 1,
+          "decision": "accept",
+          "files": 2,
+          "diff_lines": 209,
+          "shell_commands": 31,
+          "at": "2026-11-13T14:48:32.9356062+00:00",
+          "reason": "gates passed",
+          "fault": null
+        }
+      ],
+      "reviews": [
+        {
+          "verdict": "ApproveWithWarnings",
+          "findings": 4,
+          "by_severity": {
+            "medium": 1,
+            "low": 3
+          },
+          "at": "2026-11-13T14:48:48.4819124+00:00"
+        }
+      ]
+    },
+    {
+      "id": "U6",
+      "label": "Frontend foundation (split into U6a-U6e)",
+      "attempts": [
+        {
+          "number": 1,
+          "decision": "split",
+          "files": 42,
+          "diff_lines": 10988,
+          "shell_commands": 55,
+          "at": "2026-11-13T15:14:26.4413124+00:00",
+          "reason": "diff has 10988 changed lines (limit 1000)",
+          "fault": "PermissionDenied"
+        }
+      ],
+      "reviews": []
+    },
+    {
+      "id": "U6a",
+      "label": "Frontend: framework scaffold, tooling, design tokens, theme provider",
+      "attempts": [
+        {
+          "number": 1,
+          "decision": "retry",
+          "files": 0,
+          "diff_lines": 0,
+          "shell_commands": 73,
+          "at": "2026-11-13T15:27:08.471403+00:00",
+          "reason": "worker run failed (PermissionDenied): read_file was refused by a permission rule: <HOME>\\.gemini\\antigravity-cli\\builtin\\skills\\agy-c",
+          "fault": "PermissionDenied"
+        },
+        {
+          "number": 2,
+          "decision": "accept",
+          "files": 17,
+          "diff_lines": 8508,
+          "shell_commands": 86,
+          "at": "2026-11-13T16:05:13.7238696+00:00",
+          "reason": "gates passed",
+          "fault": null
+        }
+      ],
+      "reviews": [
+        {
+          "verdict": "ApproveWithWarnings",
+          "findings": 3,
+          "by_severity": {
+            "medium": 1,
+            "low": 2
+          },
+          "at": "2026-11-13T16:05:27.4585981+00:00"
+        }
+      ]
+    },
+    {
+      "id": "U6b",
+      "label": "Frontend: typed API client, DTO types, polling hook, formatters",
+      "attempts": [
+        {
+          "number": 1,
+          "decision": "accept",
+          "files": 6,
+          "diff_lines": 1527,
+          "shell_commands": 19,
+          "at": "2026-11-13T16:17:50.6851463+00:00",
+          "reason": "gates passed",
+          "fault": null
+        }
+      ],
+      "reviews": [
+        {
+          "verdict": "ApproveWithWarnings",
+          "findings": 6,
+          "by_severity": {
+            "low": 6
+          },
+          "at": "2026-11-13T16:18:06.9785726+00:00"
+        }
+      ]
+    },
+    {
+      "id": "U6c",
+      "label": "Frontend: reusable UI component library",
+      "attempts": [
+        {
+          "number": 1,
+          "decision": "accept",
+          "files": 12,
+          "diff_lines": 1288,
+          "shell_commands": 20,
+          "at": "2026-11-13T16:30:03.1998088+00:00",
+          "reason": "gates passed",
+          "fault": null
+        }
+      ],
+      "reviews": [
+        {
+          "verdict": "Skipped (routine)",
+          "findings": 0,
+          "by_severity": {},
+          "at": "2026-11-13T16:30:03.339242+00:00"
+        }
+      ]
+    },
+    {
+      "id": "U6d",
+      "label": "Frontend: auth provider, app shell, home page",
+      "attempts": [
+        {
+          "number": 1,
+          "decision": "accept",
+          "files": 10,
+          "diff_lines": 1329,
+          "shell_commands": 21,
+          "at": "2026-11-13T16:44:04.9715331+00:00",
+          "reason": "gates passed",
+          "fault": null
+        },
+        {
+          "number": 2,
+          "decision": "accept",
+          "files": 12,
+          "diff_lines": 1490,
+          "shell_commands": 15,
+          "at": "2026-11-13T16:53:28.0240907+00:00",
+          "reason": "gates passed",
+          "fault": null
+        }
+      ],
+      "reviews": [
+        {
+          "verdict": "RequestChanges",
+          "findings": 2,
+          "by_severity": {
+            "high": 1,
+            "low": 1
+          },
+          "at": "2026-11-13T16:44:19.9707839+00:00"
+        },
+        {
+          "verdict": "ApproveWithWarnings",
+          "findings": 4,
+          "by_severity": {
+            "low": 4
+          },
+          "at": "2026-11-13T16:53:40.7941805+00:00"
+        }
+      ]
+    },
+    {
+      "id": "U6e",
+      "label": "Frontend: first-run wizard and login flows",
+      "attempts": [
+        {
+          "number": 1,
+          "decision": "accept",
+          "files": 5,
+          "diff_lines": 1748,
+          "shell_commands": 18,
+          "at": "2026-11-13T17:06:21.7086596+00:00",
+          "reason": "gates passed",
+          "fault": null
+        }
+      ],
+      "reviews": [
+        {
+          "verdict": "ApproveWithWarnings",
+          "findings": 3,
+          "by_severity": {
+            "low": 3
+          },
+          "at": "2026-11-13T17:06:36.6231253+00:00"
+        }
+      ]
+    },
+    {
+      "id": "U7",
+      "label": "Frontend: dashboard and chart pages",
+      "attempts": [
+        {
+          "number": 1,
+          "decision": "accept",
+          "files": 10,
+          "diff_lines": 1695,
+          "shell_commands": 23,
+          "at": "2026-11-13T17:22:33.8983232+00:00",
+          "reason": "gates passed",
+          "fault": null
+        }
+      ],
+      "reviews": [
+        {
+          "verdict": "ApproveWithWarnings",
+          "findings": 5,
+          "by_severity": {
+            "medium": 1,
+            "low": 4
+          },
+          "at": "2026-11-13T17:22:49.72094+00:00"
+        }
+      ]
+    },
+    {
+      "id": "U8",
+      "label": "Frontend: management pages (lists, team, settings, audit)",
+      "attempts": [
+        {
+          "number": 1,
+          "decision": "accept",
+          "files": 20,
+          "diff_lines": 2900,
+          "shell_commands": 31,
+          "at": "2026-11-13T17:37:48.2214811+00:00",
+          "reason": "gates passed",
+          "fault": null
+        }
+      ],
+      "reviews": [
+        {
+          "verdict": "ApproveWithWarnings",
+          "findings": 4,
+          "by_severity": {
+            "low": 4
+          },
+          "at": "2026-11-13T17:37:59.8544072+00:00"
+        }
+      ]
+    },
+    {
+      "id": "U9",
+      "label": "Deployment: compose file, Dockerfiles, installation docs",
+      "attempts": [
+        {
+          "number": 1,
+          "decision": "accept",
+          "files": 11,
+          "diff_lines": 704,
+          "shell_commands": 32,
+          "at": "2026-11-13T17:56:51.7220401+00:00",
+          "reason": "gates passed",
+          "fault": null
+        },
+        {
+          "number": 2,
+          "decision": "retry",
+          "files": 11,
+          "diff_lines": 718,
+          "shell_commands": 15,
+          "at": "2026-11-13T18:05:35.3174539+00:00",
+          "reason": "worker run failed (PermissionDenied): read_file was refused by a permission rule: <HOME>/.gemini/antigravity-cli/brain/b97e49f1-c6aa-",
+          "fault": "PermissionDenied"
+        },
+        {
+          "number": 3,
+          "decision": "accept",
+          "files": 11,
+          "diff_lines": 718,
+          "shell_commands": 10,
+          "at": "2026-11-13T18:23:39.5969092+00:00",
+          "reason": "gates passed",
+          "fault": null
+        }
+      ],
+      "reviews": [
+        {
+          "verdict": "RequestChanges",
+          "findings": 5,
+          "by_severity": {
+            "high": 1,
+            "medium": 2,
+            "low": 2
+          },
+          "at": "2026-11-13T17:57:21.6808904+00:00"
+        },
+        {
+          "verdict": "ApproveWithWarnings",
+          "findings": 4,
+          "by_severity": {
+            "medium": 1,
+            "low": 3
+          },
+          "at": "2026-11-13T18:23:57.6170378+00:00"
+        }
+      ]
+    }
+  ],
+  "events": [
+    {
+      "kind": "plan_revision",
+      "at": "2026-11-13T14:15:35.60216+00:00",
+      "unit": null,
+      "trigger": "U5:oversized",
+      "level": null,
+      "root_cause": null,
+      "outcome": null,
+      "revision": 2,
+      "source": "decomposition",
+      "status": null
+    },
+    {
+      "kind": "intervention",
+      "at": "2026-11-13T14:15:35.816226+00:00",
+      "unit": "U5",
+      "trigger": "oversized",
+      "level": 0,
+      "root_cause": "plan_error",
+      "outcome": "split",
+      "revision": null,
+      "source": null,
+      "status": null
+    },
+    {
+      "kind": "plan_revision",
+      "at": "2026-11-13T15:15:09.8823996+00:00",
+      "unit": null,
+      "trigger": "U6:oversized",
+      "level": null,
+      "root_cause": null,
+      "outcome": null,
+      "revision": 3,
+      "source": "decomposition",
+      "status": null
+    },
+    {
+      "kind": "intervention",
+      "at": "2026-11-13T15:15:10.7719888+00:00",
+      "unit": "U6",
+      "trigger": "oversized",
+      "level": 0,
+      "root_cause": "plan_error",
+      "outcome": "split",
+      "revision": null,
+      "source": null,
+      "status": null
+    },
+    {
+      "kind": "intervention",
+      "at": "2026-11-13T15:27:27.6830841+00:00",
+      "unit": "U6a",
+      "trigger": "worker_blocked",
+      "level": 0,
+      "root_cause": "environment",
+      "outcome": "human",
+      "revision": null,
+      "source": null,
+      "status": null
+    },
+    {
+      "kind": "finished",
+      "at": "2026-11-13T15:27:28.0460017+00:00",
+      "unit": null,
+      "trigger": null,
+      "level": null,
+      "root_cause": null,
+      "outcome": null,
+      "revision": null,
+      "source": null,
+      "status": "fail"
+    },
+    {
+      "kind": "finished",
+      "at": "2026-11-13T15:39:46.4669288+00:00",
+      "unit": null,
+      "trigger": null,
+      "level": null,
+      "root_cause": null,
+      "outcome": null,
+      "revision": null,
+      "source": null,
+      "status": "error"
+    },
+    {
+      "kind": "plan_revision",
+      "at": "2026-11-13T16:05:27.6134827+00:00",
+      "unit": null,
+      "trigger": "U6a:review",
+      "level": null,
+      "root_cause": null,
+      "outcome": null,
+      "revision": 4,
+      "source": "review",
+      "status": null
+    },
+    {
+      "kind": "plan_revision",
+      "at": "2026-11-13T16:44:20.0997463+00:00",
+      "unit": null,
+      "trigger": "U6d:review",
+      "level": null,
+      "root_cause": null,
+      "outcome": null,
+      "revision": 5,
+      "source": "review",
+      "status": null
+    },
+    {
+      "kind": "plan_revision",
+      "at": "2026-11-13T17:57:21.8395716+00:00",
+      "unit": null,
+      "trigger": "U9:review",
+      "level": null,
+      "root_cause": null,
+      "outcome": null,
+      "revision": 6,
+      "source": "review",
+      "status": null
+    },
+    {
+      "kind": "finished",
+      "at": "2026-11-13T18:23:58.0112048+00:00",
+      "unit": null,
+      "trigger": null,
+      "level": null,
+      "root_cause": null,
+      "outcome": null,
+      "revision": null,
+      "source": null,
+      "status": "pass"
+    }
+  ],
+  "lessons": [
+    {
+      "id": "L1",
+      "source_unit": "U6a",
+      "text": "Platform-specific build workarounds (e.g. Windows EISDIR) in next.config.mjs must be guarded by platform and must not alter the Linux/Docker build path."
+    },
+    {
+      "id": "L2",
+      "source_unit": "U6d",
+      "text": "Do not monkey-patch the `api` client object or `window.fetch` to observe responses. Cross-cutting behaviour such as 401 handling must be a hook inside the central request function in `api.ts`, registered by the consumer."
+    },
+    {
+      "id": "L3",
+      "source_unit": "U9",
+      "text": "Documentation must be checked against the ADRs and the actual code. Do not state behaviours (password policy, audit fields, config fallbacks, command syntax) that were not verified. Shell commands in docs must be runnable as written."
+    }
+  ],
+  "all_runs": [
+    {
+      "run_id": "20261113-084005-c67eb1",
+      "status": "Error",
+      "started_utc": "2026-11-13T08:40:05.2742298+00:00",
+      "ended_utc": "2026-11-13T08:40:05.3882749+00:00",
+      "api_equivalent_usd": 0.0,
+      "model_calls": 0
+    },
+    {
+      "run_id": "20261113-084005-3de495",
+      "status": "Error",
+      "started_utc": "2026-11-13T08:40:05.3997807+00:00",
+      "ended_utc": "2026-11-13T08:40:05.4882514+00:00",
+      "api_equivalent_usd": 0.0,
+      "model_calls": 0
+    },
+    {
+      "run_id": "20261113-084034-56600e",
+      "status": "Error",
+      "started_utc": "2026-11-13T08:40:34.9167747+00:00",
+      "ended_utc": "2026-11-13T09:06:29.9888191+00:00",
+      "api_equivalent_usd": 3.02,
+      "model_calls": 4
+    },
+    {
+      "run_id": "20261113-090630-89abc4",
+      "status": "Running",
+      "started_utc": "2026-11-13T09:06:30.0193125+00:00",
+      "ended_utc": null,
+      "api_equivalent_usd": 1.96,
+      "model_calls": 3
+    },
+    {
+      "run_id": "20261113-092500-255524",
+      "status": "Fail",
+      "started_utc": "2026-11-13T09:25:00.3240665+00:00",
+      "ended_utc": "2026-11-13T10:02:57.5495873+00:00",
+      "api_equivalent_usd": 4.18,
+      "model_calls": 5
+    },
+    {
+      "run_id": "20261113-100523-a5a810",
+      "status": "Running",
+      "started_utc": "2026-11-13T10:05:23.6921150+00:00",
+      "ended_utc": null,
+      "api_equivalent_usd": 1.68,
+      "model_calls": 3
+    },
+    {
+      "run_id": "20261113-102820-645340",
+      "status": "Error",
+      "started_utc": "2026-11-13T10:28:20.2646204+00:00",
+      "ended_utc": "2026-11-13T10:28:20.4515255+00:00",
+      "api_equivalent_usd": 0.0,
+      "model_calls": 0
+    },
+    {
+      "run_id": "20261113-102843-94e97e",
+      "status": "Fail",
+      "started_utc": "2026-11-13T10:28:43.3763556+00:00",
+      "ended_utc": "2026-11-13T11:17:21.6262941+00:00",
+      "api_equivalent_usd": 4.9,
+      "model_calls": 8
+    },
+    {
+      "run_id": "20261113-114040-151fb7",
+      "status": "Running",
+      "started_utc": "2026-11-13T11:40:40.2444049+00:00",
+      "ended_utc": null,
+      "api_equivalent_usd": 0.63,
+      "model_calls": 1
+    },
+    {
+      "run_id": "20261113-114910-f11c05",
+      "status": "Fail",
+      "started_utc": "2026-11-13T11:49:10.7442672+00:00",
+      "ended_utc": "2026-11-13T12:42:53.3600888+00:00",
+      "api_equivalent_usd": 5.6,
+      "model_calls": 13
+    },
+    {
+      "run_id": "20261113-125536-17a033",
+      "status": "Running",
+      "started_utc": "2026-11-13T12:55:36.7677627+00:00",
+      "ended_utc": null,
+      "api_equivalent_usd": 0.17,
+      "model_calls": 1
+    },
+    {
+      "run_id": "20261113-130754-9a4339",
+      "status": "Fail",
+      "started_utc": "2026-11-13T13:07:54.2743538+00:00",
+      "ended_utc": "2026-11-13T13:10:00.5008453+00:00",
+      "api_equivalent_usd": 0.28,
+      "model_calls": 1
+    },
+    {
+      "run_id": "20261113-131139-d42ffb",
+      "status": "Pass",
+      "started_utc": "2026-11-13T13:11:39.1817146+00:00",
+      "ended_utc": "2026-11-13T18:23:57.9786902+00:00",
+      "api_equivalent_usd": 29.9,
+      "model_calls": 41
+    }
+  ],
+  "not_measured": [
+    "hidden acceptance suite (written, never run against the result)",
+    "independent blind quality review",
+    "strategy 4 on the same plan (it failed earlier on an oversized unit; no paired comparison)",
+    "image builds and a running compose stack (no container engine available)"
+  ]
+}

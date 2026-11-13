@@ -158,3 +158,10 @@ Cost is an API-equivalent estimate, not money spent: Gemini is priced like `goog
 - **A harness bias was found and fixed along the way.** The first Gemini-alone trials "failed" because the harness discarded the worker's output when a diff exceeded the 400-line limit, even though that strategy has no gates. Strategies without gates now skip the limit, and the re-run passed. Results from before that fix, in any benchmark, are not comparable for strategies 1, 2 and 3.
 
 **Not measured.** More than two tasks, repeats, tasks where Opus alone struggles, and whether the cheap worker plus takeover matches Opus on those.
+
+## Results: Strategy 5 on a project-scale build (2026-11-13)
+
+> **One run, one plan, one project; gates only, with no independent quality review and no paired Strategy 4 result.**
+> Full report, per-unit data and the list of Tokonomy bugs found: [benchmarks/project-scale](../benchmarks/project-scale/README.md).
+
+Strategy 5 (Claude Sonnet 5.5 as strong model, Gemini 3.8 Flash as worker, both on subscriptions) built a multi-module full-stack project from a written specification: 16 of 18 units accepted, every unit passed its gates, no architect takeovers, $29.90 API-equivalent for the passing run ($52.30 for the 13 runs of the experiment). Splitting oversized units was necessary three times; two units that passed every gate were sent back by the architectural review for real defects (a global monkey-patch of the API client; broken backup commands and documentation that contradicted the design). Reviews saw truncated diffs on large units. The comparison with Strategy 4 is confounded (different settings), so no claim is made that Strategy 5 beats Strategy 4. The run used a raised diff limit (1000), host gates and an unrestricted worker shell, which are not defaults.

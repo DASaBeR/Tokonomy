@@ -1,0 +1,51 @@
+# Project-scale benchmark config (2026-11-13), strategy 5. See ../benchmark-report.md.
+# Strong model: Claude Sonnet 5.5 (Claude Code subscription). Cheap worker: Gemini 3.8 Flash high (Antigravity
+# subscription). Both CLIs go through a per-user proxy (`tokonomy proxy`). No API keys.
+# No price cap (user decision): the budget below is far above anything reachable. Costs are API-equivalent estimates.
+# Gates run on the host (the Windows Sandbox on the test machine had no network, so restores would fail).
+# Replace <TOKONOMY_REPO> with the absolute path of your Tokonomy checkout.
+
+models:
+  architect: "claude-sonnet-5-5"
+  worker: "gemini-3.8-flash-high"
+
+architect_provider: { kind: claude-cli }
+
+executors:
+  default: antigravity
+  strong: claude-code-sub
+
+prepare: []
+
+# Same two gates for both arms; they pass while the backend or frontend does not exist yet.
+gates:
+  - { name: backend, cmd: ["python", "<TOKONOMY_REPO>/benchmarks/project-scale/gates/gate.py", "backend"], timeout_seconds: 1500 }
+  - { name: frontend, cmd: ["python", "<TOKONOMY_REPO>/benchmarks/project-scale/gates/gate.py", "frontend"], timeout_seconds: 1800 }
+  - { type: locked_regions }
+
+escalation:
+  max_retries_per_unit: 2
+  max_takeovers_per_unit: 1
+  protected_paths: []
+  max_diff_lines: 1000   # raised from the default 400 after the first strategy 5 run stopped on a 551-line split part (user-approved deviation)
+  review_on_new_dependency: false   # a .NET + Next.js product needs dozens of packages; a halt per package is not a realistic workflow
+  allowed_dependencies: ["Microsoft.*", "Npgsql*", "xunit*", "Swashbuckle*", "Serilog*", "OpenTelemetry*", "System.*", "next", "react", "react-dom", "typescript", "tailwindcss", "postcss", "autoprefixer", "eslint*", "@types/*", "@playwright/*", "vitest", "@testing-library/*", "recharts", "clsx", "lucide-react"]   # project-scale benchmark: approved in advance so a strategy 5 correction is not halted for a human decision
+  worker_timeout_seconds: 1800
+
+planning: { blueprint: true, critique: true, max_revision_rounds: 1, inspect_files: true }
+supervision: { max_interventions_per_unit: 2, max_interventions_per_run: 12, max_splits_per_run: 8 }
+review: { mode: risk }
+
+budget:
+  max_usd_per_task: 100000   # no cap (user decision)
+  max_architect_token_share: 1.0
+
+isolation:
+  worker_env_allow: []
+  keep_worktree: false
+  worktree_root: "<WORKTREE_ROOT>"   # outside temp, the repo and your home
+
+gate_execution:
+  provider: host-unsafe
+  network_policy: full
+  prepare_network: full
