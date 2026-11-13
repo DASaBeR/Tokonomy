@@ -58,6 +58,10 @@ public sealed class InitSettings : CommonSettings
     [Description("Where the worker's code is tested: windows-sandbox (safe, default) or host-unsafe (directly on this computer).")]
     public string? Isolation { get; init; }
 
+    [CommandOption("--worker-shell <MODE>")]
+    [Description("What shell commands the model that writes the code may run: restricted (default: only what Tokonomy needs) or all (ANY command; it can do anything your user account can).")]
+    public string? WorkerShell { get; init; }
+
     [CommandOption("--tests <on|off>")]
     [Description("Let the strong model write the acceptance tests (default: on when the project has no test setup).")]
     public string? Tests { get; init; }
@@ -80,8 +84,15 @@ public sealed class InitCommand(IAnsiConsole console, IProcessRunner runner, Ser
             return ExitCodes.Usage;
         }
 
+        if (settings.WorkerShell is not (null or "restricted" or "all"))
+        {
+            Output.Error(console, "--worker-shell must be 'restricted' or 'all'.");
+            return ExitCodes.Usage;
+        }
+
         var options = new SetupOptions
         {
+            WorkerShell = settings.WorkerShell,
             Preset = settings.Preset,
             Strong = settings.Strong,
             Cheap = settings.Cheap,

@@ -28,6 +28,9 @@ public sealed record SetupOptions
     /// <summary><c>windows-sandbox</c> or <c>host-unsafe</c>.</summary>
     public string? Isolation { get; init; }
 
+    /// <summary><c>restricted</c> (default) or <c>all</c>: may the worker run any shell command?</summary>
+    public string? WorkerShell { get; init; }
+
     /// <summary>Never ask: take flags, then sensible defaults.</summary>
     public bool Yes { get; init; }
 
@@ -100,8 +103,11 @@ internal sealed class SetupWizard(IAnsiConsole console, IProcessRunner runner, F
             return null;
         }
 
+        var workerShell = ChooseWorkerShell(cheap, options, interactive);
+
         var choices = new SetupChoices
         {
+            WorkerShell = workerShell,
             Strong = strong,
             Cheap = cheap,
             ArchitectModel = architect,
@@ -913,6 +919,34 @@ internal sealed class SetupWizard(IAnsiConsole console, IProcessRunner runner, F
 
         var pick = console.Prompt(new SelectionPrompt<string>().Title("What should I do?").AddChoices(choices).UseConverter(Markup.Escape));
         return pick.StartsWith("Run", StringComparison.Ordinal) ? "host-unsafe" : "windows-sandbox";
+    }
+
+    // --- what shell commands the worker may run -------------------------------------------------------------------
+
+    private string ChooseWorkerShell(Connection cheap, SetupOptions options, bool interactive)
+    {
+        if (options.WorkerShell is { } given)
+        {
+            return given;
+        }
+
+        if (!interactive)
+        {
+            return "restricted";
+        }
+
+        console.WriteLine();
+        console.MarkupLine($"The model that writes the code runs through [bold]{Markup.Escape(cheap.Title)}[/]. What shell commands may it run?");
+        console.MarkupLine("[grey]Restricted keeps it to editing files and a short list of commands. Allowing every command lets it build, test and generate code itself, but it can then do anything your user account can: read your login files, use the network, change or delete files outside the project.[/]");
+        var restricted = "Restricted (recommended): only the commands Tokonomy allows";
+        var all = "Allow all shell commands (risky: the model can run anything on this computer)";
+        var pick = console.Prompt(new SelectionPrompt<string>().Title("Shell commands for the worker").AddChoices(restricted, all).UseConverter(Markup.Escape));
+        if (pick == all)
+        {
+            Output.Warn(console, "All shell commands are allowed for the worker. Only use this on a computer and a project you trust. Change it later with permissions.allow_all_commands in .tokonomy/executors.yaml.");
+        }
+
+        return pick == all ? "all" : "restricted";
     }
 
     // --- tests of the connections, and what is still missing ------------------------------------------------------

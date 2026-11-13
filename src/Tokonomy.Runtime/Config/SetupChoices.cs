@@ -61,6 +61,9 @@ public sealed record SetupChoices
     /// <summary>USD per million tokens (input, output) for chosen models whose price is known, written to prices.yaml.</summary>
     public IReadOnlyDictionary<string, (decimal Input, decimal Output)> Prices { get; init; } = new Dictionary<string, (decimal, decimal)>();
 
+    /// <summary><c>restricted</c> (default) or <c>all</c>: may the model that writes the code run any shell command?</summary>
+    public string WorkerShell { get; init; } = "restricted";
+
     /// <summary><c>windows-sandbox</c> or <c>host-unsafe</c>: where the tests and builds the worker's code runs.</summary>
     public string GateExecution { get; init; } = "windows-sandbox";
 

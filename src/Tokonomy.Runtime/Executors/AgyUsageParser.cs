@@ -224,7 +224,7 @@ public static partial class AgyRunInterpreter
 {
     public static WorkerFault? Evaluate(
         AgyRunReport report, int exitCode, string stderr, string? requestedModel, bool verifyModel, string workdir,
-        IReadOnlyCollection<string> allowedCommands, IReadOnlyCollection<string>? deniedPaths = null)
+        IReadOnlyCollection<string> allowedCommands, IReadOnlyCollection<string>? deniedPaths = null, bool allowAllCommands = false)
     {
         ArgumentNullException.ThrowIfNull(report);
         ArgumentNullException.ThrowIfNull(allowedCommands);
@@ -262,8 +262,9 @@ public static partial class AgyRunInterpreter
         }
 
         var allowed = new HashSet<string>(allowedCommands.Select(Normalize), StringComparer.OrdinalIgnoreCase);
+        // With "allow all shell commands" every command is permitted: only denied actions and the file checks below still count.
         var outside = report.Tools
-            .Where(t => t.IsCommand && t.Target is not null && !allowed.Contains(Normalize(t.Target)))
+            .Where(t => !allowAllCommands && t.IsCommand && t.Target is not null && !allowed.Contains(Normalize(t.Target)))
             .Select(t => t.Target!)
             .Distinct(StringComparer.Ordinal)
             .ToList();

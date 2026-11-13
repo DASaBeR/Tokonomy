@@ -321,9 +321,44 @@ public sealed class RunWorkspace
     public async Task<IReadOnlySet<string>> IgnoredEntriesAsync(CancellationToken ct)
     {
         var output = await Git(["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"], ct);
-        return output.Split('\0', StringSplitOptions.RemoveEmptyEntries)
-            .Where(p => !p.StartsWith(".tokonomy/", StringComparison.Ordinal))
-            .ToHashSet(StringComparer.Ordinal);
+        var result = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var entry in output.Split('\0', StringSplitOptions.RemoveEmptyEntries).Where(p => !p.StartsWith(".tokonomy/", StringComparison.Ordinal)))
+        {
+            await AddIgnoredAsync(entry, result, ct);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// <c>--directory</c> collapses a folder whose content is all ignored into one entry, even when the folder itself matches no ignore
+    /// rule (for example <c>frontend/</c> that holds only <c>node_modules/</c> and <c>.next/</c> left by an earlier attempt). Denying
+    /// that folder would stop the worker writing any new file in it, so it is expanded into the ignored entries inside it. A
+    /// folder an ignore rule names itself (<c>node_modules/</c>) stays one entry.
+    /// </summary>
+    private async Task AddIgnoredAsync(string entry, HashSet<string> result, CancellationToken ct)
+    {
+        if (!entry.EndsWith('/'))
+        {
+            result.Add(entry);
+            return;
+        }
+
+        var relative = entry.TrimEnd('/');
+        var full = System.IO.Path.Combine(Path, relative.Replace('/', System.IO.Path.DirectorySeparatorChar));
+        var info = new DirectoryInfo(full);
+        if (!info.Exists || info.LinkTarget is not null || info.Attributes.HasFlag(FileAttributes.ReparsePoint) ||
+            !string.IsNullOrWhiteSpace(await Git(["check-ignore", "--no-index", "--", relative], ct, allowFailure: true)))
+        {
+            result.Add(entry);   // missing, a link, or ignored by a rule that names it: deny it as one entry
+            return;
+        }
+
+        foreach (var child in info.EnumerateFileSystemInfos())
+        {
+            var childRelative = relative + "/" + child.Name + (child is DirectoryInfo ? "/" : "");
+            await AddIgnoredAsync(childRelative, result, ct);
+        }
     }
 
     /// <summary>

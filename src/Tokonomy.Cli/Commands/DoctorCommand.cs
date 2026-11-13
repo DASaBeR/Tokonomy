@@ -234,7 +234,17 @@ public sealed partial class DoctorCommand(IAnsiConsole console, IProcessRunner r
             }
         }
 
-        if (exec.Permissions.AllowGateCommands || exec.Permissions.Commands.Count > 0)
+        if (exec.Permissions.AllowAllCommands)
+        {
+            checks.Add(new("isolation", "worker commands", Level.Warn,
+                "ALL SHELL COMMANDS ARE ALLOWED for the worker (permissions.allow_all_commands): it can do anything your user account can, including reading credential files and using the network"));
+            if (!Tokonomy.Runtime.Executors.AllCommandsMode.IsSupported(exec))
+            {
+                checks.Add(new("isolation", "all commands", Level.Warn,
+                    "this executor is not a CLI Tokonomy knows (claude, codex, agy, opencode): add all_commands_args to switch it to its no-restriction mode, or the setting has no effect"));
+            }
+        }
+        else if (exec.Permissions.AllowGateCommands || exec.Permissions.Commands.Count > 0)
         {
             checks.Add(new("isolation", "worker commands", Level.Warn,
                 "the worker may run shell commands; a command that runs repository code (tests, builds) runs code the worker wrote, with your privileges"));

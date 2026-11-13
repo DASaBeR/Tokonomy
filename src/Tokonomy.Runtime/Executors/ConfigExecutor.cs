@@ -26,6 +26,12 @@ public sealed record ExecutorSession
     public IReadOnlyList<string> GateCommands { get; init; } = [];
 
     /// <summary>
+    /// The shell commands the user approved for the unit this session works on (per-unit approval). It never narrows
+    /// <c>permissions.allow_all_commands</c>, which allows everything for every unit.
+    /// </summary>
+    public ShellGrant ShellGrant { get; init; } = ShellGrant.None;
+
+    /// <summary>
     /// Paths inside the worktree the worker must not touch, evaluated at the start of every attempt (they change as
     /// prepare steps and gates run): links that lead outside the worktree, and git-ignored content.
     /// </summary>
@@ -101,6 +107,7 @@ public sealed class ConfigExecutor(string name, ExecutorDefinition definition, E
         };
 
         {
+            var grant = definition.Permissions.AllowAllCommands ? ShellGrant.AnyCommand : session.ShellGrant;
             AgySettingsFile? agy = null;
             var briefText = brief.Body;
             if (IsAgy(definition))
@@ -114,7 +121,7 @@ public sealed class ConfigExecutor(string name, ExecutorDefinition definition, E
                 vars["settings_file"] = settingsPath;
 
                 // The first refused call ends the whole headless session, so the worker has to know the rules up front.
-                briefText = brief.Body.TrimEnd() + "\n\n" + AgyBriefSection(agy);
+                briefText = brief.Body.TrimEnd() + "\n\n" + AgyBriefSection(agy, grant);
             }
 
             // Through the guard: a brief or config file that is a link would make Tokonomy write outside the worktree.
@@ -126,10 +133,11 @@ public sealed class ConfigExecutor(string name, ExecutorDefinition definition, E
             foreach (var (relative, template) in definition.Files)
             {
                 restore.Add((relative, WorktreeGuard.ReadAllText(workdir, relative)));
-                WorktreeGuard.WriteAllText(workdir, relative, Substitute(template, vars));
+                WorktreeGuard.WriteAllText(workdir, relative, ShellAccess.ApplyToFile(definition, relative, Substitute(template, vars), grant));
             }
 
-            var args = BuildArgs(definition, vars, model);
+            var args = ShellAccess.Apply(definition, BuildArgs(definition, vars, model), grant);
+
             var proxy = ProxySettings.Current.ForProvider(ProxyIdOf(definition));
             var env = EnvironmentBuilder.ForWorker(
                 session.ExtraAllowedEnv,
@@ -158,7 +166,18 @@ public sealed class ConfigExecutor(string name, ExecutorDefinition definition, E
             {
                 var report = AgyRunParser.Parse(stdoutText, model);
                 var fault = AgyRunInterpreter.Evaluate(
-                    report, outcome.ExitCode, outcome.Stderr, model, definition.VerifyModel, workdir, agy.AllowedCommands, agy.DeniedPaths);
+                    report, outcome.ExitCode, outcome.Stderr, model, definition.VerifyModel, workdir, agy.AllowedCommands, agy.DeniedPaths,
+                    allowAllCommands: grant.All || (grant.Commands.Count > 0 && ShellAccess.Enforcement(definition) == ShellEnforcement.UnitWideWithAudit));
+                // Antigravity cannot refuse a single command, so the approved list is checked after the attempt.
+                if (fault is null)
+                {
+                    var unapproved = ShellAccess.Violations(definition, grant, report.Tools.Where(t => t.IsCommand && t.Target is not null).Select(t => t.Target!));
+                    if (unapproved.Count > 0)
+                    {
+                        fault = new(WorkerFaultKind.PermissionDenied, "ran command(s) that were not approved for this unit: " + string.Join(" | ", unapproved.Select(c => c.Length > 160 ? c[..160] : c))
+                            + "; approved: " + string.Join(" | ", grant.Commands));
+                    }
+                }
                 if (outcome.TimedOut && fault is { Kind: not WorkerFaultKind.ModelMismatch and not WorkerFaultKind.PermissionDenied })
                 {
                     // A killed process has no result by definition; the supervisor handles the timeout itself.
@@ -241,9 +260,33 @@ public sealed class ConfigExecutor(string name, ExecutorDefinition definition, E
         return problems;
     }
 
-    internal static string AgyBriefSection(AgySettingsFile settings)
+    internal static string AgyBriefSection(AgySettingsFile settings, ShellGrant grant)
     {
         var sb = new StringBuilder();
+        if (!grant.All && grant.Commands.Count > 0)
+        {
+            sb.AppendLine("## Tool permissions");
+            sb.AppendLine("The user approved exactly these shell commands for this unit. Run them as written, from inside this repository, and nothing else:");
+            foreach (var command in grant.Commands)
+            {
+                sb.AppendLine($"  - `{command}`");
+            }
+
+            sb.AppendLine("- Edit files with your file tools, inside this repository only. Never read credential or login files.");
+            sb.AppendLine("- Any other command is a violation: the attempt is rejected. If you need another command, say so in your report instead of running it.");
+            return sb.ToString();
+        }
+
+        if (grant.All)
+        {
+            sb.AppendLine("## Tool permissions");
+            sb.AppendLine("You may run shell commands (build, test, restore, generate code), always from inside this repository.");
+            sb.AppendLine("- Edit files with your file tools, inside this repository only. Do not read or change anything outside it.");
+            sb.AppendLine("- Never read credential or login files, and never print secrets.");
+            sb.AppendLine("- Do not run git commands that change history or the remote, and do not delete anything outside this repository.");
+            return sb.ToString();
+        }
+
         sb.AppendLine("## Tool permissions (enforced)");
         sb.AppendLine("This session is headless and cannot ask for permission. The FIRST tool call that is not allowed ends the session");
         sb.AppendLine("immediately with nothing saved, so do not try anything that is not listed here.");

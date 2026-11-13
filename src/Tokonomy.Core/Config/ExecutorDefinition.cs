@@ -52,6 +52,19 @@ public sealed class ExecutorDefinition
     public ExecutorPermissions Permissions { get; set; } = new();
 
     /// <summary>
+    /// Extra arguments added to <see cref="Cmd"/> when <see cref="ExecutorPermissions.AllowAllCommands"/> is on. Needed only for
+    /// an executor Tokonomy does not know (a custom CLI): <c>claude</c>, <c>codex</c>, <c>agy</c> and <c>opencode</c> have a built-in way
+    /// to be told "any shell command" (see <c>AllCommandsMode</c>).
+    /// </summary>
+    public List<string> AllCommandsArgs { get; set; } = [];
+
+    /// <summary>
+    /// For a custom CLI that can allow one exact command: arguments added once per approved command, with <c>{command}</c>
+    /// replaced by it (for example <c>["--allow-command", "{command}"]</c>). Used by per-unit shell approval.
+    /// </summary>
+    public List<string> ShellGrantArgs { get; set; } = [];
+
+    /// <summary>
     /// Fail the attempt when the agent reports a different model than the one requested (no silent fallback).
     /// Only effective for usage formats that report the model (<c>agy-json</c>).
     /// </summary>
@@ -76,6 +89,15 @@ public sealed class ExecutorPermissions
     /// run after every attempt, outside the agent.
     /// </summary>
     public bool AllowGateCommands { get; set; }
+
+    /// <summary>
+    /// Let the worker run ANY shell command (the setup wizard's "Allow all shell commands"). Off by default. It switches the
+    /// agent CLI to its no-restriction mode (Antigravity <c>--dangerously-skip-permissions</c>, Claude Code
+    /// <c>bypassPermissions</c>, Codex <c>danger-full-access</c>, OpenCode web and external-directory access), so the worker
+    /// can then do anything your user account can, including reading credential files and using the network. Use it only on
+    /// a machine and a repository you trust. The gates still decide every unit.
+    /// </summary>
+    public bool AllowAllCommands { get; set; }
 
     /// <summary>Raw rules added verbatim to <c>permissions.allow</c> (for example <c>read_url(docs.python.org)</c>).</summary>
     public List<string> Allow { get; set; } = [];

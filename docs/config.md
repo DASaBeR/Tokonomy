@@ -233,6 +233,29 @@ Other braces, such as OpenCode's `{env:VAR}`, are left untouched.
 
 The brief is appended to an existing brief file (e.g. a repo's own `AGENTS.md`) and the original is restored after each attempt.
 
+### Allow all shell commands (optional, risky)
+
+By default a worker may only edit files and run a short list of commands (see `permissions` below). That is the safe choice, but a project that needs generated code, a build before the first gate or tool commands (for example `dotnet ef migrations add`) can stall on it. `tokonomy init` asks which you want, `tokonomy init --worker-shell all` answers it for you, and you can change it later:
+
+```yaml
+executors:
+  antigravity:
+    permissions:
+      allow_all_commands: true   # the worker may run ANY shell command
+```
+
+What it switches, per CLI (in code, so it works for subscription logins, OpenRouter, any OpenAI-compatible provider through OpenCode, and Codex):
+
+| CLI | With `allow_all_commands: true` |
+|---|---|
+| `agy` (Antigravity) | adds `--dangerously-skip-permissions` and drops `--sandbox` (with `--sandbox`, agy 1.5.8 ends the session at the first shell command, exit 2); the out-of-allowlist command check is off, the denied-action and outside-the-worktree file checks stay |
+| `claude` (Claude Code) | `--permission-mode` becomes `bypassPermissions` |
+| `codex` | `--sandbox` becomes `danger-full-access` |
+| `opencode` (OpenRouter, custom providers) | `bash` stays allowed (it always was); `webfetch` and `external_directory` become `allow` |
+| any other CLI | the arguments in `all_commands_args` are appended; without them the setting has no effect and `doctor` says so |
+
+**This is a security decision.** The worker then runs on your computer with your user account and can read your login files, use the network, and change or delete files outside the project. A prompt injection in the spec, a package README or an error message can become a real command. Use it only on a machine and a repository you trust, ideally together with `gate_execution` isolation. Whether Antigravity still honours its credential `deny` rules under `--dangerously-skip-permissions` has not been verified; do not rely on them. The gates still decide every unit, and `tokonomy doctor` warns while the option is on. The architect is not an agent and never gets a shell.
+
 Workers run with a **scrubbed environment**: an allowlist of OS and toolchain variables (PATH, HOME/USERPROFILE, TEMP, locale, SystemRoot, JAVA_HOME, GOPATH, DOTNET_ROOT, proxy settings, …), plus `isolation.worker_env_allow` and the `env` entries above. Names that look like credentials are always dropped (keys, tokens, passwords, cookies, sessions, `DATABASE_URL`, connection strings, and agent sockets such as `SSH_AUTH_SOCK` / `GPG_AGENT_INFO`, which let a child process authenticate as you), and so is any **value** that carries credentials (a URL with `user:password@`, e.g. an authenticated `HTTPS_PROXY`, or `Password=` in a connection string), even under an allowlisted name. Provider keys are never passed. Gates inherit the parent environment minus the same names and values. Tokonomy's own git commands additionally drop every `GIT_*` variable, so a `GIT_DIR` or `GIT_WORK_TREE` left in your shell cannot redirect them, and they address the worktree with explicit `--git-dir`/`--work-tree` rather than trusting its `.git` file. See [threat-model.md](threat-model.md).
 
 When `proxy_routable: true`, Tokonomy starts a metering proxy on 127.0.0.1 for the run. The worker reaches the provider through it with the per-run token, and every call's tokens and cost are recorded. Executors that cannot be routed through the proxy are recorded as **estimated**.

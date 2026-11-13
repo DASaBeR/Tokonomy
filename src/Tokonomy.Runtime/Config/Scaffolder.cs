@@ -18,7 +18,7 @@ public static class Scaffolder
         var files = new (string Name, string Content)[]
         {
             (TokonomyConfig.PolicyFile, PolicyYaml(stacks, choices)),
-            (TokonomyConfig.ExecutorsFileName, ExecutorsYaml),
+            (TokonomyConfig.ExecutorsFileName, ExecutorsYamlFor(choices)),
             (TokonomyConfig.PricesFile, PricesFor(choices)),
             (".gitignore", GitIgnore),
         };
@@ -212,6 +212,56 @@ public static class Scaffolder
     // JSON string literals are valid YAML double-quoted scalars.
     private static string Quote(string s) => JsonSerializer.Serialize(s);
 
+    /// <summary>The executors file, with "Allow all shell commands" switched on for the executor that runs the worker when chosen.</summary>
+    internal static string ExecutorsYamlFor(SetupChoices? choices)
+    {
+        if (choices is null || !string.Equals(choices.WorkerShell, "all", StringComparison.OrdinalIgnoreCase))
+        {
+            return ExecutorsYaml;
+        }
+
+        return EnableAllCommands(ExecutorsYaml.ReplaceLineEndings("\n"), Sources.Executor(choices.Cheap));
+    }
+
+    /// <summary>Adds <c>allow_all_commands: true</c> to one executor's <c>permissions</c> (creating the block when it has none).</summary>
+    internal static string EnableAllCommands(string yaml, string executor)
+    {
+        var header = $"\n  {executor}:\n";
+        var at = yaml.IndexOf(header, StringComparison.Ordinal);
+        if (at < 0)
+        {
+            throw new InvalidOperationException($"executors template has no '{executor}' entry");
+        }
+
+        // The entry ends at the next line indented by exactly two spaces (the next executor).
+        var end = yaml.Length;
+        var scan = at + header.Length;
+        while (scan < yaml.Length)
+        {
+            var nl = yaml.IndexOf('\n', scan);
+            if (nl < 0 || nl + 3 >= yaml.Length)
+            {
+                break;
+            }
+
+            if (yaml[nl + 1] == ' ' && yaml[nl + 2] == ' ' && yaml[nl + 3] != ' ' && yaml[nl + 3] != '#' && yaml[nl + 3] != '\n')
+            {
+                end = nl;
+                break;
+            }
+
+            scan = nl + 1;
+        }
+
+        const string line = "      allow_all_commands: true   # chosen in `tokonomy init`: the worker may run ANY shell command\n";
+        var block = yaml[at..end];
+        const string existing = "    permissions:\n";
+        var enabled = block.Contains(existing, StringComparison.Ordinal)
+            ? block.Replace(existing, existing + line, StringComparison.Ordinal)
+            : block.Replace(header, header + existing + line, StringComparison.Ordinal);
+        return yaml[..at] + enabled + yaml[end..];
+    }
+
     internal const string ExecutorsYaml = """
         # Executor adapters: config-driven wrappers around coding-agent CLIs.
         # Agent CLI flags change often. Each entry records the version it was tested against;
@@ -321,7 +371,8 @@ public static class Scaffolder
             # gemini-3.8-flash-medium. Tokens come from its JSON output; cost is unknown and recorded as estimated.
             # `agy` is found on PATH, then in ~/.gemini/bin (where the installer puts it on Windows).
             #
-            # Headless mode cannot prompt, so permissions are given up front and never with --dangerously-skip-permissions:
+            # Headless mode cannot prompt, so permissions are given up front. --dangerously-skip-permissions is used only when you choose
+            # "Allow all shell commands" (permissions.allow_all_commands: true):
             #  * No edit mode. `permissions` below becomes a per-attempt --settings file ({settings_file}, written outside the
             #    worktree): read_file/write_file on the worktree only, plus one literal command(...) rule per allowed command.
             #    agy 1.5.3 matches command rules literally (no prefix, no wildcards, regex characters are NOT interpreted).
