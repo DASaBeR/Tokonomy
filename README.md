@@ -12,8 +12,19 @@ If you use Claude Code, Codex, Gemini CLI, OpenCode or Aider and your token bill
 
 > **Status: pre-alpha (M2).** Planning, supervised runs with gates and retries, architect takeover with handoff and locked regions, the metering proxy, the cost ledger and the benchmark harness work. The OpenCode adapter is verified against OpenCode 1.19.5 and a real OpenAI-compatible provider (AvalAI). Not yet available: a second executor adapter (M3) and splitting oversized units. Early benchmark numbers are in [docs/benchmarking.md](docs/benchmarking.md); they are small and **not conclusive**.
 
+## Latest benchmark: a full-stack product built end to end
+
+The most recent and largest test is a **project-scale run** (2026-11-13): a multi-module full-stack web product (ASP.NET Core API, Next.js frontend, PostgreSQL, Docker) built from a written specification with Strategy 5. Claude Sonnet 5.5 planned, supervised and reviewed; Gemini 3.8 Flash wrote the code.
+
+- **The whole plan completed:** 16 of 16 work units accepted (two oversized units were split automatically), every unit passed both gates, and the result has 89 backend and 141 frontend tests passing, about 27,000 added lines.
+- **No architect takeover** was needed. The cheap worker needed 22 attempts for 16 units; 4 were retries.
+- **Review caught two real defects every gate had passed**, which Strategy 4 would not have seen.
+- **Cost:** $29.90 API-equivalent for the passing run (worker $26.07, strong model $3.83), about 5 hours of active time. The strong model was about 13% of the spend; nothing was billed per token (both used subscriptions).
+- **What it does not show:** this is one run with gates as the only pass criterion, no independent quality review of the final code, and no paired Strategy 4 result, so it does not prove Strategy 5 beats Strategy 4. Read the [full report](benchmarks/project-scale/benchmark-report.md) and [how to reproduce it](benchmarks/project-scale/README.md). Earlier, smaller benchmarks are in [Benchmarking](#benchmarking-cost-per-successful-task).
+
 ## Table of contents
 
+- [Latest benchmark](#latest-benchmark-a-full-stack-product-built-end-to-end)
 - [Why Tokonomy](#why-tokonomy)
 - [How it works](#how-it-works)
 - [What is a gate?](#what-is-a-gate)
