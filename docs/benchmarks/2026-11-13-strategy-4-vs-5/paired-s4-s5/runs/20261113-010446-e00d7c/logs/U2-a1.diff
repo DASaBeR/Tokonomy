@@ -1,0 +1,303 @@
+diff --git a/shop/cache.py b/shop/cache.py
+new file mode 100644
+index 0000000..e90e2d1
+--- /dev/null
++++ b/shop/cache.py
+@@ -0,0 +1,85 @@
++"""A thread-safe cache whose entries expire after a fixed time-to-live."""
++
++from __future__ import annotations
++
++import threading
++import time
++
++from shop.lru import LRU
++
++_MISSING = object()
++
++
++class TtlCache:
++    def __init__(
++        self,
++        ttl_seconds: float,
++        max_size: int | None = None,
++        clock=time.monotonic,
++    ) -> None:
++        if ttl_seconds < 0:
++            raise ValueError("ttl_seconds must be >= 0")
++        if max_size is not None and max_size < 1:
++            raise ValueError("max_size must be >= 1")
++        self._ttl = ttl_seconds
++        self._max_size = max_size
++        self._clock = clock
++        self._store = LRU()
++        self._lock = threading.Lock()
++
++    def _expired(self, stored_at: float, now: float) -> bool:
++        return now - stored_at >= self._ttl
++
++    def _purge_expired(self, now: float) -> None:
++        for key in self._store.keys():
++            entry = self._store.peek(key)
++            if self._expired(entry[1], now):
++                self._store.remove(key)
++
++    def _live_entry(self, key, now: float):
++        entry = self._store.peek(key, _MISSING)
++        if entry is _MISSING:
++            return _MISSING
++        if self._expired(entry[1], now):
++            self._store.remove(key)
++            return _MISSING
++        return entry
++
++    def set(self, key, value) -> None:
++        with self._lock:
++            now = self._clock()
++            if key in self._store:
++                self._store.put(key, (value, now))
++                return
++            if self._max_size is not None and len(self._store) >= self._max_size:
++                self._purge_expired(now)
++                while len(self._store) >= self._max_size:
++                    self._store.pop_oldest()
++            self._store.put(key, (value, now))
++
++    def get(self, key, default=None):
++        with self._lock:
++            now = self._clock()
++            entry = self._live_entry(key, now)
++            if entry is _MISSING:
++                return default
++            self._store.get(key)
++            return entry[0]
++
++    def delete(self, key) -> bool:
++        with self._lock:
++            now = self._clock()
++            entry = self._live_entry(key, now)
++            if entry is _MISSING:
++                return False
++            self._store.remove(key)
++            return True
++
++    def __contains__(self, key) -> bool:
++        with self._lock:
++            return self._live_entry(key, self._clock()) is not _MISSING
++
++    def __len__(self) -> int:
++        with self._lock:
++            self._purge_expired(self._clock())
++            return len(self._store)
+diff --git a/tests/test_cache.py b/tests/test_cache.py
+new file mode 100644
+index 0000000..77d5929
+--- /dev/null
++++ b/tests/test_cache.py
+@@ -0,0 +1,206 @@
++import threading
++import unittest
++
++from shop.cache import TtlCache
++
++
++class FakeClock:
++    def __init__(self) -> None:
++        self.now = 0.0
++
++    def __call__(self) -> float:
++        return self.now
++
++    def advance(self, seconds: float) -> None:
++        self.now += seconds
++
++
++class TtlCacheTests(unittest.TestCase):
++    def test_set_get_basic(self):
++        clock = FakeClock()
++        cache = TtlCache(ttl_seconds=10, clock=clock)
++        cache.set("a", 1)
++        self.assertEqual(cache.get("a"), 1)
++        self.assertEqual(cache.get("x", "d"), "d")
++
++    def test_expiry_boundary(self):
++        clock = FakeClock()
++        cache = TtlCache(ttl_seconds=10, clock=clock)
++        cache.set("a", 1)
++        clock.now = 9.999
++        self.assertEqual(cache.get("a"), 1)
++        clock.now = 10.0
++        self.assertEqual(cache.get("a", "d"), "d")
++        self.assertNotIn("a", cache)
++        self.assertEqual(len(cache), 0)
++
++    def test_set_restarts_ttl(self):
++        clock = FakeClock()
++        cache = TtlCache(ttl_seconds=10, clock=clock)
++        cache.set("a", 1)
++        clock.advance(5)
++        cache.set("a", 2)
++        clock.advance(7)
++        self.assertEqual(cache.get("a"), 2)
++        clock.advance(3)
++        self.assertNotIn("a", cache)
++
++    def test_get_does_not_extend_ttl(self):
++        clock = FakeClock()
++        cache = TtlCache(ttl_seconds=10, clock=clock)
++        cache.set("a", 1)
++        clock.now = 9.0
++        self.assertEqual(cache.get("a"), 1)
++        clock.now = 10.0
++        self.assertNotIn("a", cache)
++
++    def test_len_and_in_ignore_expired(self):
++        clock = FakeClock()
++        cache = TtlCache(ttl_seconds=10, clock=clock)
++        cache.set("a", 1)
++        clock.now = 5.0
++        cache.set("b", 2)
++        clock.now = 10.0
++        self.assertEqual(len(cache), 1)
++        self.assertNotIn("a", cache)
++        self.assertIn("b", cache)
++
++    def test_none_value(self):
++        clock = FakeClock()
++        cache = TtlCache(ttl_seconds=10, clock=clock)
++        cache.set("k", None)
++        self.assertIn("k", cache)
++        self.assertIsNone(cache.get("k", "d"))
++
++    def test_delete(self):
++        clock = FakeClock()
++        cache = TtlCache(ttl_seconds=10, clock=clock)
++        cache.set("a", 1)
++        self.assertTrue(cache.delete("a"))
++        self.assertNotIn("a", cache)
++        self.assertFalse(cache.delete("a"))
++        self.assertFalse(cache.delete("missing"))
++        cache.set("b", 2)
++        clock.now = 10.0
++        self.assertFalse(cache.delete("b"))
++
++    def test_lru_eviction(self):
++        clock = FakeClock()
++        cache = TtlCache(ttl_seconds=100, max_size=2, clock=clock)
++        cache.set("a", 1)
++        cache.set("b", 2)
++        cache.get("a")
++        cache.set("c", 3)
++        self.assertNotIn("b", cache)
++        self.assertIn("a", cache)
++        self.assertIn("c", cache)
++
++    def test_set_counts_as_use(self):
++        clock = FakeClock()
++        cache = TtlCache(ttl_seconds=100, max_size=2, clock=clock)
++        cache.set("a", 1)
++        cache.set("b", 2)
++        cache.set("a", 3)
++        cache.set("c", 4)
++        self.assertNotIn("b", cache)
++        self.assertEqual(cache.get("a"), 3)
++        self.assertIn("c", cache)
++
++    def test_updating_never_evicts(self):
++        clock = FakeClock()
++        cache = TtlCache(ttl_seconds=100, max_size=2, clock=clock)
++        cache.set("a", 1)
++        cache.set("b", 2)
++        cache.set("a", 3)
++        self.assertEqual(len(cache), 2)
++        self.assertEqual(cache.get("a"), 3)
++        self.assertEqual(cache.get("b"), 2)
++
++    def test_expired_first(self):
++        clock = FakeClock()
++        cache = TtlCache(ttl_seconds=10, max_size=2, clock=clock)
++        cache.set("a", 1)
++        clock.advance(1)
++        cache.set("b", 2)
++        cache.get("a")
++        clock.advance(9.5)
++        cache.set("c", 3)
++        self.assertNotIn("a", cache)
++        self.assertIn("b", cache)
++        self.assertIn("c", cache)
++
++    def test_instances_do_not_share_data(self):
++        clock = FakeClock()
++        c1 = TtlCache(10, clock=clock)
++        c2 = TtlCache(10, clock=clock)
++        c1.set("a", 1)
++        self.assertNotIn("a", c2)
++        self.assertEqual(len(c2), 0)
++
++    def test_constructor_validation(self):
++        clock = FakeClock()
++        with self.assertRaises(ValueError):
++            TtlCache(-1, clock=clock)
++        with self.assertRaises(ValueError):
++            TtlCache(10, max_size=0, clock=clock)
++
++    def test_threaded_smoke(self):
++        cache = TtlCache(ttl_seconds=60, max_size=50, clock=FakeClock())
++        errors = []
++
++        def worker():
++            try:
++                for i in range(2000):
++                    k = i % 100
++                    cache.set(k, i)
++                    cache.get(k)
++                    cache.delete(i % 7)
++                    _ = k in cache
++            except Exception as e:
++                errors.append(e)
++
++        threads = [threading.Thread(target=worker) for _ in range(8)]
++        for t in threads:
++            t.start()
++        for t in threads:
++            t.join()
++
++        self.assertEqual(errors, [])
++        self.assertLessEqual(len(cache), 50)
++
++    def test_ttl_zero(self):
++        clock = FakeClock()
++        cache = TtlCache(ttl_seconds=0, clock=clock)
++        cache.set("a", 1)
++        self.assertIsNone(cache.get("a"))
++        self.assertEqual(cache.get("a", "d"), "d")
++        self.assertNotIn("a", cache)
++        self.assertEqual(len(cache), 0)
++
++    def test_reset_expired_key(self):
++        clock = FakeClock()
++        cache = TtlCache(ttl_seconds=10, clock=clock)
++        cache.set("a", 1)
++        clock.advance(10)
++        cache.set("a", 2)
++        self.assertEqual(cache.get("a"), 2)
++        clock.now = 19.999
++        self.assertEqual(cache.get("a"), 2)
++        clock.now = 20.0
++        self.assertNotIn("a", cache)
++
++    def test_full_cache_with_every_entry_expired(self):
++        clock = FakeClock()
++        cache = TtlCache(ttl_seconds=10, max_size=2, clock=clock)
++        cache.set("a", 1)
++        cache.set("b", 2)
++        clock.advance(10)
++        cache.set("c", 3)
++        self.assertEqual(len(cache), 1)
++        self.assertIn("c", cache)
++        self.assertNotIn("a", cache)
++        self.assertNotIn("b", cache)
++
++
++if __name__ == "__main__":
++    unittest.main()

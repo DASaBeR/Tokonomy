@@ -1,0 +1,126 @@
+diff --git a/shop/pricing.py b/shop/pricing.py
+index 7fc9613..3552dbe 100644
+--- a/shop/pricing.py
++++ b/shop/pricing.py
+@@ -22,3 +22,34 @@ def apply_coupon(amount: float, coupon):
+     if coupon["type"] == "fixed":
+         return round2(amount - coupon["value"])
+     raise ValueError(f"unknown coupon type: {coupon['type']}")
++
++
++def apply_coupons(amount: float, coupons=None) -> float:
++    """Apply coupons to an amount.
++
++    At most one percent coupon (highest value) applies first,
++    then each fixed coupon in order.
++    """
++    if not coupons:
++        return amount
++    if isinstance(coupons, dict):
++        coupons = [coupons]
++
++    coupon_list = list(coupons)
++
++    for coupon in coupon_list:
++        if coupon.get("type") not in ("percent", "fixed"):
++            apply_coupon(amount, coupon)
++
++    percent_coupons = [c for c in coupon_list if c["type"] == "percent"]
++    result = amount
++    if percent_coupons:
++        best_percent = max(percent_coupons, key=lambda c: c["value"])
++        result = apply_coupon(result, best_percent)
++
++    for coupon in coupon_list:
++        if coupon["type"] == "fixed":
++            result = apply_coupon(result, coupon)
++
++    return round2(max(0.0, result))
++
+diff --git a/tests/test_pricing.py b/tests/test_pricing.py
+index 2669bc2..ee34fc3 100644
+--- a/tests/test_pricing.py
++++ b/tests/test_pricing.py
+@@ -1,7 +1,8 @@
++import copy
+ import unittest
+ 
+ from shop.money import fmt, round2
+-from shop.pricing import apply_coupon, sale_price
++from shop.pricing import apply_coupon, apply_coupons, sale_price
+ 
+ 
+ class PricingTests(unittest.TestCase):
+@@ -17,6 +18,67 @@ class PricingTests(unittest.TestCase):
+         with self.assertRaises(ValueError):
+             apply_coupon(100.0, {"type": "bogus", "value": 1})
+ 
++    def test_apply_coupons_combinations(self):
++        self.assertEqual(
++            apply_coupons(100.0, [{"type": "fixed", "value": 5}, {"type": "percent", "value": 10}]),
++            85.0,
++        )
++        self.assertEqual(
++            apply_coupons(
++                100.0,
++                [
++                    {"type": "percent", "value": 10},
++                    {"type": "percent", "value": 25},
++                    {"type": "fixed", "value": 5},
++                ],
++            ),
++            70.0,
++        )
++        self.assertEqual(
++            apply_coupons(100.0, [{"type": "fixed", "value": 3}, {"type": "fixed", "value": 2}]),
++            95.0,
++        )
++        self.assertEqual(
++            apply_coupons(10.0, [{"type": "fixed", "value": 50}]),
++            0.0,
++        )
++        self.assertEqual(apply_coupons(100.0, None), 100.0)
++        self.assertEqual(apply_coupons(100.0, []), 100.0)
++
++    def test_apply_coupons_unknown_type(self):
++        bogus_coupon = {"type": "bogus", "value": 1}
++        with self.assertRaises(ValueError) as cm_single:
++            apply_coupon(100.0, bogus_coupon)
++
++        coupons = [{"type": "fixed", "value": 5}, bogus_coupon]
++        with self.assertRaises(ValueError) as cm_multi:
++            apply_coupons(100.0, coupons)
++
++        self.assertEqual(str(cm_multi.exception), str(cm_single.exception))
++        self.assertEqual(str(cm_multi.exception), "unknown coupon type: bogus")
++
++    def test_apply_coupons_does_not_mutate_input(self):
++        coupons = [
++            {"type": "fixed", "value": 5},
++            {"type": "percent", "value": 10},
++            {"type": "percent", "value": 25},
++        ]
++        original = copy.deepcopy(coupons)
++        result = apply_coupons(100.0, coupons)
++        self.assertEqual(result, 70.0)
++        self.assertEqual(coupons, original)
++
++    def test_apply_coupons_tie_percent(self):
++        coupons = [
++            {"type": "percent", "value": 20, "order": 1},
++            {"type": "percent", "value": 20, "order": 2},
++        ]
++        self.assertEqual(apply_coupons(100.0, coupons), 80.0)
++
++    def test_apply_coupons_single_dict(self):
++        self.assertEqual(apply_coupons(100.0, {"type": "percent", "value": 10}), 90.0)
++        self.assertEqual(apply_coupons(100.0, {"type": "fixed", "value": 5}), 95.0)
++
+     def test_money_helpers(self):
+         self.assertEqual(round2(1.005), 1.01)
+         self.assertEqual(fmt(1234.5), "$1,234.50")
+@@ -24,3 +86,4 @@ class PricingTests(unittest.TestCase):
+ 
+ if __name__ == "__main__":
+     unittest.main()
++

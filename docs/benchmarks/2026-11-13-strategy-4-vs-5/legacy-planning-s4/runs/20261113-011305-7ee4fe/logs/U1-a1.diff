@@ -1,0 +1,25 @@
+diff --git a/shop/cart.py b/shop/cart.py
+index aa13329..cf34da0 100644
+--- a/shop/cart.py
++++ b/shop/cart.py
+@@ -1,7 +1,7 @@
+ """A shopping cart."""
+ 
+ from shop.money import round2
+-from shop.pricing import apply_coupon, sale_price
++from shop.pricing import SALE_PERCENT, apply_coupon
+ 
+ 
+ class Cart:
+@@ -13,8 +13,9 @@ class Cart:
+         self.items.append({"sku": sku, "unit_price": unit_price, "qty": qty})
+ 
+     def line_total(self, item: dict) -> float:
+-        price = sale_price(item["unit_price"]) if self.on_sale else item["unit_price"]
+-        return round2(price * item["qty"])
++        if self.on_sale:
++            return round2(item["unit_price"] * (100 - SALE_PERCENT) / 100 * item["qty"])
++        return round2(item["unit_price"] * item["qty"])
+ 
+     def subtotal(self) -> float:
+         return round2(sum(self.line_total(item) for item in self.items))

@@ -1,0 +1,18 @@
+{
+  "status": "completed",
+  "reason": null,
+  "description": "Completed work unit U1: Updated Cart.line_total to round once per line when on sale, updated imports in shop/cart.py, and added unit tests in tests/test_cart.py and tests/test_pricing.py.",
+  "evidence": [
+    "shop/cart.py",
+    "tests/test_cart.py",
+    "tests/test_pricing.py"
+  ],
+  "attempted_actions": [
+    "Updated imports in shop/cart.py to import SALE_PERCENT and apply_coupon from shop.pricing",
+    "Updated Cart.line_total in shop/cart.py to compute line total with single round2 when on sale",
+    "Added test_sale_line_rounded_once, test_sale_single_unit_matches_sale_price, and test_non_sale_line to CartTests in tests/test_cart.py",
+    "Added test_sale_price_single_unit_rounding to PricingTests in tests/test_pricing.py"
+  ],
+  "discoveries": [],
+  "decision_required": false
+}

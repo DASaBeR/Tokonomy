@@ -1,0 +1,58 @@
+diff --git a/shop/money.py b/shop/money.py
+index 105bb6b..6f56a0a 100644
+--- a/shop/money.py
++++ b/shop/money.py
+@@ -1,4 +1,5 @@
+ """Money helpers. Amounts are floats in dollars."""
++from decimal import ROUND_HALF_UP, Decimal
+ 
+ 
+ def round2(amount: float) -> float:
+@@ -8,3 +9,14 @@ def round2(amount: float) -> float:
+ 
+ def fmt(amount: float) -> str:
+     return f"${amount:,.2f}"
++
++
++def to_cents(amount: float) -> int:
++    """Convert dollars to integer cents, rounding half up."""
++    cents = (Decimal(repr(amount)) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
++    return int(cents)
++
++
++def from_cents(cents: int) -> float:
++    """Convert integer cents to dollars."""
++    return cents / 100
+diff --git a/tests/test_money.py b/tests/test_money.py
+new file mode 100644
+index 0000000..7f86e18
+--- /dev/null
++++ b/tests/test_money.py
+@@ -0,0 +1,27 @@
++import unittest
++
++from shop.money import from_cents, to_cents
++
++
++class MoneyTests(unittest.TestCase):
++    def test_to_cents(self):
++        self.assertEqual(to_cents(19.99), 1999)
++        self.assertEqual(to_cents(0.1 + 0.2), 30)
++        self.assertEqual(to_cents(1.005), 101)
++        self.assertEqual(to_cents(0.285), 29)
++        self.assertEqual(to_cents(0.0), 0)
++        self.assertEqual(to_cents(12), 1200)
++        self.assertTrue(isinstance(to_cents(19.99), int))
++        self.assertIsInstance(to_cents(19.99), int)
++
++    def test_from_cents(self):
++        self.assertEqual(from_cents(1999), 19.99)
++        self.assertEqual(from_cents(0), 0.0)
++        self.assertEqual(from_cents(5), 0.05)
++
++    def test_round_trip(self):
++        self.assertEqual(from_cents(to_cents(2.5)), 2.5)
++
++
++if __name__ == "__main__":
++    unittest.main()

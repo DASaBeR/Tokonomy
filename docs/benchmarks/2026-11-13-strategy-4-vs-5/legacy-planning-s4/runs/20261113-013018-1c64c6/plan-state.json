@@ -1,0 +1,223 @@
+{
+  "original": {
+    "task": "Let Cart.total accept several coupons: total(coupons=None) where coupons is None, a single coupon dict (as\ntoday) or a list of coupon dicts. Reuse shop.pricing.apply_coupons(amount, coupons), which already accepts a\nlist. Rules: (1) an empty cart totals 0.0 whatever the coupons; (2) at most one percent coupon applies, the one\nwith the highest value, other percent coupons are ignored; (3) the percent coupon applies first and then every\nfixed coupon is subtracted in the order given, regardless of the order of the list; (4) the result is never\nbelow 0.0; (5) a coupon with an unknown type raises ValueError (same message as shop.pricing.apply_coupon);\n(6) do not modify the list you are given. Example: subtotal 100 with [fixed 5, percent 10] is 85.0. Add unit tests.\n",
+    "units": [
+      {
+        "id": "U1",
+        "title": "Add apply_coupons to shop/pricing.py with tests",
+        "spec": "The task text says shop.pricing.apply_coupons already exists, but shop/pricing.py at the base commit only has sale_price and apply_coupon. Add apply_coupons only if it is truly absent. Add \u0060apply_coupons(amount: float, coupons) -\u003E float\u0060 in shop/pricing.py, below apply_coupon.\n\nBehavior:\n(a) If coupons is None or an empty list, return amount unchanged.\n(b) Validate the type first. For every coupon in the list, if coupon[\u0027type\u0027] is not \u0027percent\u0027 or \u0027fixed\u0027, raise the ValueError by calling apply_coupon(amount, coupon). Do not copy the message text. This guarantees the identical message \u0060unknown coupon type: \u003Ctype\u003E\u0060.\n(c) Choose at most one percent coupon: the one with the highest \u0027value\u0027. On a tie, use the first in list order. Use max() or a loop, never list.sort(). Apply it with apply_coupon.\n(d) Then apply each fixed coupon with apply_coupon, in the order they appear in the list. Their position relative to the percent coupon does not matter.\n(e) Return round2(max(0.0, result)).\n\nNever mutate the input list or its dicts. Keep the function small; private helpers are fine.\n\nAdd tests in tests/test_pricing.py:\n- 100 with [fixed 5, percent 10] -\u003E 85.0\n- 100 with [percent 10, percent 25, fixed 5] -\u003E 70.0\n- 100 with [fixed 3, fixed 2] -\u003E 95.0\n- 10 with [fixed 50] -\u003E 0.0\n- None -\u003E 100.0\n- [] -\u003E 100.0\n- [fixed 5, bogus] raises ValueError, and the message equals the one from apply_coupon\n- the input list equals a deepcopy taken before the call",
+        "depends_on": [],
+        "files": [
+          "shop/pricing.py",
+          "tests/test_pricing.py"
+        ],
+        "acceptance": [
+          "python -m unittest discover -s tests -t . passes",
+          "apply_coupons(100.0, [{\u0027type\u0027:\u0027fixed\u0027,\u0027value\u0027:5},{\u0027type\u0027:\u0027percent\u0027,\u0027value\u0027:10}]) == 85.0",
+          "Only the highest percent coupon is applied",
+          "Result is clamped at 0.0",
+          "An unknown type raises ValueError(\u0027unknown coupon type: bogus\u0027)",
+          "The input list is not mutated",
+          "Existing apply_coupon tests still pass unchanged"
+        ],
+        "tests": [],
+        "objective": null,
+        "create": [],
+        "modify": [],
+        "avoid": [],
+        "references": [],
+        "steps": [],
+        "interfaces": [],
+        "decisions": [],
+        "constraints": [],
+        "edge_cases": [],
+        "requirements": [],
+        "verification": [],
+        "risk": "low",
+        "side_effects": [],
+        "corrections": [],
+        "split_from": null
+      },
+      {
+        "id": "U2",
+        "title": "Cart.total accepts None, a single coupon dict, or a list",
+        "spec": "In shop/cart.py, change the signature to \u0060def total(self, coupons=None) -\u003E float\u0060, and import apply_coupons from shop.pricing.\n\nBehavior:\n(1) If self.items is empty, return 0.0 immediately, whatever the coupons.\n(2) Normalize the argument:\n- None -\u003E []\n- a dict -\u003E [coupons]\n- a list (or tuple) -\u003E list(coupons), which is a shallow copy and never mutated.\n(3) Return apply_coupons(self.subtotal(), normalized).\n\nThe existing positional calls cart.total({...}) must keep working. A single fixed coupon larger than the subtotal now returns 0.0.\n\nAdd tests to tests/test_cart.py:\n- an empty cart with None, a single coupon, and a list of coupons returns 0.0\n- subtotal 100 (one item at 100.00) with [fixed 5, percent 10] returns 85.0\n- two percent coupons apply only the highest\n- fixed coupons are applied after the percent coupon regardless of list order\n- a single-dict coupon still works\n- a fixed coupon larger than the subtotal returns 0.0\n- an unknown type in a list on a non-empty cart raises ValueError\n- the list passed in is unchanged after the call (compare with a deepcopy)\n\nKeep all existing tests unchanged.",
+        "depends_on": [
+          "U1"
+        ],
+        "files": [
+          "shop/cart.py",
+          "tests/test_cart.py"
+        ],
+        "acceptance": [
+          "python -m unittest discover -s tests -t . passes",
+          "Cart with a 100.00 item: total([{\u0027type\u0027:\u0027fixed\u0027,\u0027value\u0027:5},{\u0027type\u0027:\u0027percent\u0027,\u0027value\u0027:10}]) == 85.0",
+          "An empty Cart().total([{\u0027type\u0027:\u0027fixed\u0027,\u0027value\u0027:5}]) == 0.0",
+          "Existing test_percent_coupon and test_fixed_coupon still pass",
+          "The caller\u0027s list is unchanged after total()"
+        ],
+        "tests": [],
+        "objective": null,
+        "create": [],
+        "modify": [],
+        "avoid": [],
+        "references": [],
+        "steps": [],
+        "interfaces": [],
+        "decisions": [],
+        "constraints": [],
+        "edge_cases": [],
+        "requirements": [],
+        "verification": [],
+        "risk": "low",
+        "side_effects": [],
+        "corrections": [],
+        "split_from": null
+      }
+    ],
+    "rules": [
+      {
+        "id": "R1",
+        "text": "Standard library only; tests use unittest in tests/test_\u003Cmodule\u003E.py."
+      },
+      {
+        "id": "R2",
+        "text": "Keep functions small; no module-level mutable state."
+      },
+      {
+        "id": "R3",
+        "text": "Round money with shop.money.round2; reuse apply_coupon for each individual coupon so rounding and error messages stay consistent."
+      },
+      {
+        "id": "R4",
+        "text": "Never mutate caller-supplied lists or coupon dicts."
+      }
+    ],
+    "dont_list": [
+      "Don\u0027t change apply_coupon\u0027s existing behavior or signature (no clamping inside it).",
+      "Don\u0027t sort the coupons list in place (no list.sort()); don\u0027t reorder or pop from the input.",
+      "Don\u0027t hand-write a different ValueError message for unknown coupon types.",
+      "Don\u0027t apply more than one percent coupon, and don\u0027t sum multiple percents.",
+      "Don\u0027t edit storage.py, money.py, or unrelated tests.",
+      "Don\u0027t rename the existing positional parameter in a way that breaks cart.total({...}) calls."
+    ],
+    "schema_version": 1,
+    "analysis": null,
+    "architecture": null,
+    "decisions": []
+  },
+  "current": {
+    "task": "Let Cart.total accept several coupons: total(coupons=None) where coupons is None, a single coupon dict (as\ntoday) or a list of coupon dicts. Reuse shop.pricing.apply_coupons(amount, coupons), which already accepts a\nlist. Rules: (1) an empty cart totals 0.0 whatever the coupons; (2) at most one percent coupon applies, the one\nwith the highest value, other percent coupons are ignored; (3) the percent coupon applies first and then every\nfixed coupon is subtracted in the order given, regardless of the order of the list; (4) the result is never\nbelow 0.0; (5) a coupon with an unknown type raises ValueError (same message as shop.pricing.apply_coupon);\n(6) do not modify the list you are given. Example: subtotal 100 with [fixed 5, percent 10] is 85.0. Add unit tests.\n",
+    "units": [
+      {
+        "id": "U1",
+        "title": "Add apply_coupons to shop/pricing.py with tests",
+        "spec": "The task text says shop.pricing.apply_coupons already exists, but shop/pricing.py at the base commit only has sale_price and apply_coupon. Add apply_coupons only if it is truly absent. Add \u0060apply_coupons(amount: float, coupons) -\u003E float\u0060 in shop/pricing.py, below apply_coupon.\n\nBehavior:\n(a) If coupons is None or an empty list, return amount unchanged.\n(b) Validate the type first. For every coupon in the list, if coupon[\u0027type\u0027] is not \u0027percent\u0027 or \u0027fixed\u0027, raise the ValueError by calling apply_coupon(amount, coupon). Do not copy the message text. This guarantees the identical message \u0060unknown coupon type: \u003Ctype\u003E\u0060.\n(c) Choose at most one percent coupon: the one with the highest \u0027value\u0027. On a tie, use the first in list order. Use max() or a loop, never list.sort(). Apply it with apply_coupon.\n(d) Then apply each fixed coupon with apply_coupon, in the order they appear in the list. Their position relative to the percent coupon does not matter.\n(e) Return round2(max(0.0, result)).\n\nNever mutate the input list or its dicts. Keep the function small; private helpers are fine.\n\nAdd tests in tests/test_pricing.py:\n- 100 with [fixed 5, percent 10] -\u003E 85.0\n- 100 with [percent 10, percent 25, fixed 5] -\u003E 70.0\n- 100 with [fixed 3, fixed 2] -\u003E 95.0\n- 10 with [fixed 50] -\u003E 0.0\n- None -\u003E 100.0\n- [] -\u003E 100.0\n- [fixed 5, bogus] raises ValueError, and the message equals the one from apply_coupon\n- the input list equals a deepcopy taken before the call",
+        "depends_on": [],
+        "files": [
+          "shop/pricing.py",
+          "tests/test_pricing.py"
+        ],
+        "acceptance": [
+          "python -m unittest discover -s tests -t . passes",
+          "apply_coupons(100.0, [{\u0027type\u0027:\u0027fixed\u0027,\u0027value\u0027:5},{\u0027type\u0027:\u0027percent\u0027,\u0027value\u0027:10}]) == 85.0",
+          "Only the highest percent coupon is applied",
+          "Result is clamped at 0.0",
+          "An unknown type raises ValueError(\u0027unknown coupon type: bogus\u0027)",
+          "The input list is not mutated",
+          "Existing apply_coupon tests still pass unchanged"
+        ],
+        "tests": [],
+        "objective": null,
+        "create": [],
+        "modify": [],
+        "avoid": [],
+        "references": [],
+        "steps": [],
+        "interfaces": [],
+        "decisions": [],
+        "constraints": [],
+        "edge_cases": [],
+        "requirements": [],
+        "verification": [],
+        "risk": "low",
+        "side_effects": [],
+        "corrections": [],
+        "split_from": null
+      },
+      {
+        "id": "U2",
+        "title": "Cart.total accepts None, a single coupon dict, or a list",
+        "spec": "In shop/cart.py, change the signature to \u0060def total(self, coupons=None) -\u003E float\u0060, and import apply_coupons from shop.pricing.\n\nBehavior:\n(1) If self.items is empty, return 0.0 immediately, whatever the coupons.\n(2) Normalize the argument:\n- None -\u003E []\n- a dict -\u003E [coupons]\n- a list (or tuple) -\u003E list(coupons), which is a shallow copy and never mutated.\n(3) Return apply_coupons(self.subtotal(), normalized).\n\nThe existing positional calls cart.total({...}) must keep working. A single fixed coupon larger than the subtotal now returns 0.0.\n\nAdd tests to tests/test_cart.py:\n- an empty cart with None, a single coupon, and a list of coupons returns 0.0\n- subtotal 100 (one item at 100.00) with [fixed 5, percent 10] returns 85.0\n- two percent coupons apply only the highest\n- fixed coupons are applied after the percent coupon regardless of list order\n- a single-dict coupon still works\n- a fixed coupon larger than the subtotal returns 0.0\n- an unknown type in a list on a non-empty cart raises ValueError\n- the list passed in is unchanged after the call (compare with a deepcopy)\n\nKeep all existing tests unchanged.",
+        "depends_on": [
+          "U1"
+        ],
+        "files": [
+          "shop/cart.py",
+          "tests/test_cart.py"
+        ],
+        "acceptance": [
+          "python -m unittest discover -s tests -t . passes",
+          "Cart with a 100.00 item: total([{\u0027type\u0027:\u0027fixed\u0027,\u0027value\u0027:5},{\u0027type\u0027:\u0027percent\u0027,\u0027value\u0027:10}]) == 85.0",
+          "An empty Cart().total([{\u0027type\u0027:\u0027fixed\u0027,\u0027value\u0027:5}]) == 0.0",
+          "Existing test_percent_coupon and test_fixed_coupon still pass",
+          "The caller\u0027s list is unchanged after total()"
+        ],
+        "tests": [],
+        "objective": null,
+        "create": [],
+        "modify": [],
+        "avoid": [],
+        "references": [],
+        "steps": [],
+        "interfaces": [],
+        "decisions": [],
+        "constraints": [],
+        "edge_cases": [],
+        "requirements": [],
+        "verification": [],
+        "risk": "low",
+        "side_effects": [],
+        "corrections": [],
+        "split_from": null
+      }
+    ],
+    "rules": [
+      {
+        "id": "R1",
+        "text": "Standard library only; tests use unittest in tests/test_\u003Cmodule\u003E.py."
+      },
+      {
+        "id": "R2",
+        "text": "Keep functions small; no module-level mutable state."
+      },
+      {
+        "id": "R3",
+        "text": "Round money with shop.money.round2; reuse apply_coupon for each individual coupon so rounding and error messages stay consistent."
+      },
+      {
+        "id": "R4",
+        "text": "Never mutate caller-supplied lists or coupon dicts."
+      }
+    ],
+    "dont_list": [
+      "Don\u0027t change apply_coupon\u0027s existing behavior or signature (no clamping inside it).",
+      "Don\u0027t sort the coupons list in place (no list.sort()); don\u0027t reorder or pop from the input.",
+      "Don\u0027t hand-write a different ValueError message for unknown coupon types.",
+      "Don\u0027t apply more than one percent coupon, and don\u0027t sum multiple percents.",
+      "Don\u0027t edit storage.py, money.py, or unrelated tests.",
+      "Don\u0027t rename the existing positional parameter in a way that breaks cart.total({...}) calls."
+    ],
+    "schema_version": 1,
+    "analysis": null,
+    "architecture": null,
+    "decisions": []
+  },
+  "revision": 1,
+  "revisions": [],
+  "lessons": [],
+  "progress": {
+    "U1": "accepted",
+    "U2": "accepted"
+  }
+}

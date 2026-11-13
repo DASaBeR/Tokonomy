@@ -1,0 +1,923 @@
+{
+  "original": {
+    "task": "Add shop/cache.py with class TtlCache(ttl_seconds: float, max_size: int | None = None, clock=time.monotonic),\nbuilt on the LRU class in shop/lru.py. Methods: set(key, value), get(key, default=None), delete(key) -\u003E bool,\n\u0022key in cache\u0022 and len(cache). An entry expires once clock() - stored_at \u003E= ttl_seconds, so it is already gone\nexactly at the ttl. set() on an existing key replaces the value and restarts its ttl; get() does not extend the\nttl. len() and \u0022in\u0022 count only live entries. When max_size is set and a new key is inserted into a full cache,\nexpired entries are dropped first and only if it is still full is the least recently used live entry evicted;\nboth get() hits and set() count as use. Updating an existing key never evicts anything. A stored value of None\nis a real value. delete() returns True only if a live entry was removed. The cache must be safe to use from many\nthreads, and instances must not share any state (no module-level mutable state). Add unit tests.\n",
+    "units": [
+      {
+        "id": "U1",
+        "title": "Create LRU store",
+        "spec": "shop/lru.py contains an unbounded OrderedDict-backed LRU with recency operations. tests/test_lru.py covers it.",
+        "depends_on": [],
+        "files": [
+          "shop/lru.py",
+          "tests/test_lru.py"
+        ],
+        "acceptance": [
+          "shop/lru.py exposes LRU with exactly the listed methods.",
+          "All 8 tests (a)-(h) exist in tests/test_lru.py and pass."
+        ],
+        "tests": [],
+        "objective": "Provide the LRU class that TtlCache builds on.",
+        "create": [
+          "shop/lru.py",
+          "tests/test_lru.py"
+        ],
+        "modify": [],
+        "avoid": [
+          "shop/cart.py",
+          "shop/money.py",
+          "shop/pricing.py",
+          "shop/storage.py",
+          "shop/__init__.py"
+        ],
+        "references": [
+          "shop/money.py",
+          "tests/test_pricing.py"
+        ],
+        "steps": [
+          "Create shop/lru.py with the docstring \u0022\u0022\u0022A minimal least-recently-used ordered store (not thread-safe).\u0022\u0022\u0022 and \u0060from collections import OrderedDict\u0060.",
+          "Define class LRU. __init__ sets self._data = OrderedDict().",
+          "__len__ returns len(self._data). __contains__(key) returns \u0060key in self._data\u0060 and does not reorder.",
+          "get(key, default=None): if key in self._data, call self._data.move_to_end(key) and return self._data[key]. Otherwise return default.",
+          "peek(key, default=None): return self._data.get(key, default) without reordering.",
+          "put(key, value): set self._data[key] = value, then call self._data.move_to_end(key).",
+          "remove(key) -\u003E bool: if key in self._data, delete it and return True. Otherwise return False.",
+          "pop_oldest(): return self._data.popitem(last=False). This returns a (key, value) tuple and raises KeyError when empty.",
+          "keys() -\u003E list: return list(self._data.keys()), ordered least to most recently used.",
+          "Create tests/test_lru.py with \u0060import unittest\u0060, \u0060from shop.lru import LRU\u0060, and class LRUTests(unittest.TestCase) containing these tests: (a) test_put_get: put(\u0027a\u0027, 1); assertEqual(lru.get(\u0027a\u0027), 1); assertEqual(lru.get(\u0027x\u0027, \u0027d\u0027), \u0027d\u0027). (b) test_get_marks_used: put(\u0027a\u0027, 1), put(\u0027b\u0027, 2), get(\u0027a\u0027), then assertEqual(lru.pop_oldest(), (\u0027b\u0027, 2)). (c) test_peek_does_not_reorder: put(\u0027a\u0027, 1), put(\u0027b\u0027, 2), assertEqual(lru.peek(\u0027a\u0027), 1), then assertEqual(lru.pop_oldest(), (\u0027a\u0027, 1)). (d) test_put_existing_replaces_and_marks_used: put(\u0027a\u0027, 1), put(\u0027b\u0027, 2), put(\u0027a\u0027, 3); assertEqual(lru.keys(), [\u0027b\u0027, \u0027a\u0027]); assertEqual(lru.peek(\u0027a\u0027), 3); assertEqual(len(lru), 2). (e) test_remove: put(\u0027a\u0027, 1); assertTrue(lru.remove(\u0027a\u0027)); assertFalse(lru.remove(\u0027a\u0027)); assertNotIn(\u0027a\u0027, lru). (f) test_pop_oldest_empty: with self.assertRaises(KeyError): LRU().pop_oldest(). (g) test_len_contains: put(\u0027a\u0027, 1), put(\u0027b\u0027, 2); assertEqual(len(lru), 2); assertIn(\u0027a\u0027, lru); assertNotIn(\u0027z\u0027, lru). (h) test_none_value: put(\u0027k\u0027, None); assertIsNone(lru.get(\u0027k\u0027, \u0027d\u0027)); assertIn(\u0027k\u0027, lru). Add the \u0060if __name__ == \u0022__main__\u0022: unittest.main()\u0060 footer."
+        ],
+        "interfaces": [
+          "class LRU:",
+          "def __init__(self) -\u003E None",
+          "def __len__(self) -\u003E int",
+          "def __contains__(self, key) -\u003E bool",
+          "def get(self, key, default=None)",
+          "def peek(self, key, default=None)",
+          "def put(self, key, value) -\u003E None",
+          "def remove(self, key) -\u003E bool",
+          "def pop_oldest(self) -\u003E tuple",
+          "def keys(self) -\u003E list"
+        ],
+        "decisions": [
+          "ADR-1"
+        ],
+        "constraints": [
+          "Standard library only.",
+          "No module-level mutable state."
+        ],
+        "edge_cases": [
+          "None stored as a value",
+          "pop_oldest on an empty store"
+        ],
+        "requirements": [
+          "REQ-1",
+          "REQ-11",
+          "REQ-12"
+        ],
+        "verification": [
+          "python -m unittest discover -s tests -t ."
+        ],
+        "risk": "low",
+        "side_effects": [],
+        "corrections": [],
+        "split_from": null
+      },
+      {
+        "id": "U2",
+        "title": "Create TtlCache and tests",
+        "spec": "shop/cache.py contains TtlCache using a per-instance LRU and Lock, an injected clock, the expiry rule now - stored_at \u003E= ttl, and expired-first then LRU eviction for new keys. tests/test_cache.py covers every requirement with a fake clock and includes a threaded smoke test.",
+        "depends_on": [
+          "U1"
+        ],
+        "files": [
+          "shop/cache.py",
+          "tests/test_cache.py"
+        ],
+        "acceptance": [
+          "All 17 listed tests exist in tests/test_cache.py and pass.",
+          "The full suite passes, including the existing cart, pricing and storage tests and tests/test_lru.py.",
+          "shop/cache.py has no module-level mutable state; only _MISSING = object() is at module level."
+        ],
+        "tests": [],
+        "objective": "Implement the thread-safe TTL cache on top of LRU, with full unit tests.",
+        "create": [
+          "shop/cache.py",
+          "tests/test_cache.py"
+        ],
+        "modify": [],
+        "avoid": [
+          "shop/lru.py",
+          "shop/cart.py",
+          "shop/money.py",
+          "shop/pricing.py",
+          "shop/storage.py"
+        ],
+        "references": [
+          "shop/lru.py"
+        ],
+        "steps": [
+          "Create shop/cache.py with the docstring \u0022\u0022\u0022A thread-safe cache whose entries expire after a fixed time-to-live.\u0022\u0022\u0022, then \u0060from __future__ import annotations\u0060, \u0060import threading\u0060, \u0060import time\u0060, \u0060from shop.lru import LRU\u0060, and the constant \u0060_MISSING = object()\u0060.",
+          "class TtlCache, __init__(self, ttl_seconds: float, max_size: int | None = None, clock=time.monotonic): if ttl_seconds \u003C 0, raise ValueError(\u0022ttl_seconds must be \u003E= 0\u0022). If max_size is not None and max_size \u003C 1, raise ValueError(\u0022max_size must be \u003E= 1\u0022). Then set self._ttl = ttl_seconds, self._max_size = max_size, self._clock = clock, self._store = LRU(), self._lock = threading.Lock().",
+          "Private helper _expired(self, stored_at, now) -\u003E bool: return now - stored_at \u003E= self._ttl.",
+          "Private helper _purge_expired(self, now) -\u003E None: for key in self._store.keys(): entry = self._store.peek(key); if self._expired(entry[1], now): self._store.remove(key).",
+          "Private helper _live_entry(self, key, now): entry = self._store.peek(key, _MISSING). If entry is _MISSING, return _MISSING. If self._expired(entry[1], now), call self._store.remove(key) and return _MISSING. Otherwise return entry. This does not reorder.",
+          "set(self, key, value) -\u003E None: with self._lock: now = self._clock(). If key in self._store, call self._store.put(key, (value, now)) and return. Otherwise, if self._max_size is not None and len(self._store) \u003E= self._max_size: call self._purge_expired(now), then \u0060while len(self._store) \u003E= self._max_size: self._store.pop_oldest()\u0060. Finally call self._store.put(key, (value, now)).",
+          "get(self, key, default=None): with self._lock: now = self._clock(); entry = self._live_entry(key, now). If entry is _MISSING, return default. Otherwise call self._store.get(key) to mark it used and return entry[0]. Never modify stored_at.",
+          "delete(self, key) -\u003E bool: with self._lock: now = self._clock(); entry = self._live_entry(key, now). If entry is _MISSING, return False. Otherwise call self._store.remove(key) and return True.",
+          "__contains__(self, key) -\u003E bool: with self._lock: return self._live_entry(key, self._clock()) is not _MISSING.",
+          "__len__(self) -\u003E int: with self._lock: self._purge_expired(self._clock()); return len(self._store).",
+          "Create tests/test_cache.py with \u0060import threading\u0060, \u0060import unittest\u0060, \u0060from shop.cache import TtlCache\u0060. Define class FakeClock: __init__ sets self.now = 0.0; __call__(self) returns self.now; advance(self, seconds) does self.now \u002B= seconds. Define class TtlCacheTests(unittest.TestCase). Every test creates its own clock = FakeClock() and passes clock=clock to TtlCache.",
+          "Add these tests to TtlCacheTests: (1) set/get basic (ttl=10): set(\u0027a\u0027, 1); get(\u0027a\u0027) == 1; get(\u0027x\u0027, \u0027d\u0027) == \u0027d\u0027. (2) Expiry boundary with ttl=10: set(\u0027a\u0027, 1) at 0; clock.now = 9.999 -\u003E get(\u0027a\u0027) == 1; clock.now = 10 -\u003E get(\u0027a\u0027, \u0027d\u0027) == \u0027d\u0027, \u0027a\u0027 not in cache, len(cache) == 0. (3) set restarts the ttl (ttl=10): set(\u0027a\u0027, 1) at 0; advance 5; set(\u0027a\u0027, 2); advance 7 (now 12) -\u003E get(\u0027a\u0027) == 2; advance 3 (now 15, 10 since re-set) -\u003E \u0027a\u0027 not in cache. (4) get does not extend the ttl (ttl=10): set(\u0027a\u0027, 1) at 0; clock.now = 9 -\u003E get(\u0027a\u0027) == 1; clock.now = 10 -\u003E \u0027a\u0027 not in cache. (5) len and \u0060in\u0060 ignore expired entries (ttl=10): set(\u0027a\u0027, 1) at 0; clock.now = 5; set(\u0027b\u0027, 2); clock.now = 10 -\u003E len(cache) == 1, \u0027a\u0027 not in cache, \u0027b\u0027 in cache. (6) None value (ttl=10): set(\u0027k\u0027, None); assertIn(\u0027k\u0027, cache); assertIsNone(cache.get(\u0027k\u0027, \u0027d\u0027)). (7) delete (ttl=10): set(\u0027a\u0027, 1); assertTrue(delete(\u0027a\u0027)); \u0027a\u0027 not in cache; assertFalse(delete(\u0027a\u0027)); assertFalse(delete(\u0027missing\u0027)); set(\u0027b\u0027, 2); clock.now = 10; assertFalse(delete(\u0027b\u0027)). (8) LRU eviction (ttl=100, max_size=2): set a, set b, get(\u0027a\u0027), set c -\u003E \u0027b\u0027 not in cache, \u0027a\u0027 and \u0027c\u0027 in cache. (9) set counts as use (ttl=100, max_size=2): set a=1, set b=2, set a=3, set c=4 -\u003E \u0027b\u0027 not in cache, get(\u0027a\u0027) == 3, \u0027c\u0027 in cache. (10) Updating never evicts (ttl=100, max_size=2): set a=1, set b=2, set a=3 -\u003E len(cache) == 2, get(\u0027a\u0027) == 3, get(\u0027b\u0027) == 2. (11) Expired first (ttl=10, max_size=2): set a at 0; advance 1; set b; get(\u0027a\u0027); advance 9.5 (now 10.5: a expired, b live); set c -\u003E \u0027a\u0027 not in cache, \u0027b\u0027 in cache, \u0027c\u0027 in cache. (12) Instances do not share data: c1 = TtlCache(10, clock=clock), c2 = TtlCache(10, clock=clock); c1.set(\u0027a\u0027, 1) -\u003E \u0027a\u0027 not in c2, len(c2) == 0. (13) Constructor validation: assertRaises(ValueError) for TtlCache(-1) and for TtlCache(10, max_size=0).",
+          "Add (14) the threaded smoke test: cache = TtlCache(ttl_seconds=60, max_size=50, clock=FakeClock()) with the clock never advanced; errors = [] (a list shared by all workers). Define a nested function \u0060def worker():\u0060 whose body is \u0060try:\u0060 around the whole loop \u0060for i in range(2000): k = i % 100; cache.set(k, i); cache.get(k); cache.delete(i % 7); _ = k in cache\u0060, followed by \u0060except Exception as e: errors.append(e)\u0060. Create threads = [threading.Thread(target=worker) for _ in range(8)]; start each; join each. Then assertEqual(errors, []) and assertLessEqual(len(cache), 50).",
+          "Add (15) ttl == 0: cache = TtlCache(ttl_seconds=0, clock=clock); set(\u0027a\u0027, 1) -\u003E get(\u0027a\u0027) is None (default), assertEqual(cache.get(\u0027a\u0027, \u0027d\u0027), \u0027d\u0027), \u0027a\u0027 not in cache, len(cache) == 0.",
+          "Add (16) re-set an expired key (ttl=10): set(\u0027a\u0027, 1) at 0; advance 10 (now 10, a expired); set(\u0027a\u0027, 2) -\u003E get(\u0027a\u0027) == 2; clock.now = 19.999 -\u003E get(\u0027a\u0027) == 2; clock.now = 20 -\u003E \u0027a\u0027 not in cache.",
+          "Add (17) full cache with every entry expired (ttl=10, max_size=2): set a, set b at 0; advance 10; set c -\u003E len(cache) == 1, \u0027c\u0027 in cache, \u0027a\u0027 not in cache, \u0027b\u0027 not in cache.",
+          "Add the \u0060if __name__ == \u0022__main__\u0022: unittest.main()\u0060 footer."
+        ],
+        "interfaces": [
+          "class TtlCache:",
+          "def __init__(self, ttl_seconds: float, max_size: int | None = None, clock=time.monotonic) -\u003E None",
+          "def set(self, key, value) -\u003E None",
+          "def get(self, key, default=None)",
+          "def delete(self, key) -\u003E bool",
+          "def __contains__(self, key) -\u003E bool",
+          "def __len__(self) -\u003E int"
+        ],
+        "decisions": [
+          "ADR-2",
+          "ADR-3",
+          "ADR-4",
+          "ADR-5",
+          "ADR-6"
+        ],
+        "constraints": [
+          "Only private helpers touch internal state without acquiring the lock, and they are called only from public methods that hold it.",
+          "Call clock() exactly once per public call.",
+          "Every test, including the threaded test (14), passes a FakeClock instance as clock; never use time.sleep or the real clock in tests."
+        ],
+        "edge_cases": [
+          "Exactly at the ttl means expired",
+          "None values",
+          "ttl_seconds == 0 (every entry immediately expired)",
+          "Re-setting an expired key",
+          "A full cache where every entry is expired",
+          "Updating a key in a full cache"
+        ],
+        "requirements": [
+          "REQ-1",
+          "REQ-2",
+          "REQ-3",
+          "REQ-4",
+          "REQ-5",
+          "REQ-6",
+          "REQ-7",
+          "REQ-8",
+          "REQ-9",
+          "REQ-10",
+          "REQ-11",
+          "REQ-12"
+        ],
+        "verification": [
+          "python -m unittest discover -s tests -t ."
+        ],
+        "risk": "medium",
+        "side_effects": [],
+        "corrections": [],
+        "split_from": null
+      }
+    ],
+    "rules": [
+      {
+        "id": "R1",
+        "text": "Standard library only. Use unittest for tests."
+      },
+      {
+        "id": "R2",
+        "text": "No module-level mutable state. All state lives on the instance."
+      },
+      {
+        "id": "R3",
+        "text": "Time comes only from the injected clock."
+      }
+    ],
+    "dont_list": [
+      "Don\u0027t use \u0060\u003E\u0060 for expiry. Use \u0060now - stored_at \u003E= ttl\u0060.",
+      "Don\u0027t use None to detect a missing entry. Use _MISSING.",
+      "Don\u0027t call public methods (or acquire self._lock) from inside other locked methods or helpers.",
+      "Don\u0027t evict when updating an existing key.",
+      "Don\u0027t evict a live LRU entry before purging expired ones.",
+      "Don\u0027t refresh stored_at on get().",
+      "Don\u0027t compare pop_oldest() to a bare key; it returns a (key, value) tuple.",
+      "Don\u0027t modify existing shop/ modules or their tests.",
+      "Don\u0027t use time.sleep in tests."
+    ],
+    "schema_version": 2,
+    "analysis": {
+      "facts": [
+        {
+          "text": "The task says TtlCache is built on \u0027the LRU class in shop/lru.py\u0027, but shop/lru.py is not in the repository. Only shop/__init__.py, cart.py, money.py, pricing.py and storage.py exist under shop/. The LRU class has to be created first.",
+          "evidence": [
+            "shop/__init__.py",
+            "shop/cart.py",
+            "shop/money.py",
+            "shop/pricing.py",
+            "shop/storage.py"
+          ]
+        },
+        {
+          "text": "The project uses only the standard library. Tests use unittest and run with \u0060python -m unittest discover -s tests -t .\u0060.",
+          "evidence": [
+            "README.md",
+            "tests/test_pricing.py"
+          ]
+        },
+        {
+          "text": "Test files are named tests/test_\u003Cmodule\u003E.py. Each has a unittest.TestCase subclass and an \u0060if __name__ == \u0022__main__\u0022: unittest.main()\u0060 footer. They import from the \u0060shop.\u0060 package.",
+          "evidence": [
+            "tests/test_cart.py",
+            "tests/test_pricing.py",
+            "tests/test_storage.py"
+          ]
+        },
+        {
+          "text": "Project conventions: keep functions small, no module-level mutable state, take clocks as parameters, and add tests in tests/test_\u003Cmodule\u003E.py.",
+          "evidence": [
+            "README.md"
+          ]
+        },
+        {
+          "text": "tests/__init__.py exists, so tests is a package.",
+          "evidence": [
+            "tests/__init__.py"
+          ]
+        },
+        {
+          "text": "Modules start with a one-line docstring and use type hints in signatures.",
+          "evidence": [
+            "shop/money.py",
+            "shop/pricing.py",
+            "shop/storage.py"
+          ]
+        }
+      ],
+      "assumptions": [
+        "Because shop/lru.py does not exist, the plan creates it with a minimal, unbounded LRU ordering store. TtlCache adds TTL, capacity and locking on top of it.",
+        "The Python version supports \u0060int | None\u0060 in annotations (3.10\u002B), because the task signature uses it. \u0060from __future__ import annotations\u0060 is added anyway for safety.",
+        "Argument validation is not specified. ttl_seconds \u003C 0 and max_size \u003C 1 raise ValueError. ttl_seconds == 0 is allowed and means every entry is expired immediately."
+      ],
+      "requirements": [
+        {
+          "id": "REQ-1",
+          "text": "shop/cache.py defines class TtlCache(ttl_seconds: float, max_size: int | None = None, clock=time.monotonic), built on an LRU class in shop/lru.py.",
+          "kind": "functional"
+        },
+        {
+          "id": "REQ-2",
+          "text": "Methods: set(key, value), get(key, default=None), delete(key) -\u003E bool, __contains__, __len__.",
+          "kind": "functional"
+        },
+        {
+          "id": "REQ-3",
+          "text": "An entry is expired when clock() - stored_at \u003E= ttl_seconds, so it is already gone exactly at the ttl.",
+          "kind": "edge_case"
+        },
+        {
+          "id": "REQ-4",
+          "text": "set() on an existing key replaces the value and restarts its ttl. get() does not extend the ttl.",
+          "kind": "functional"
+        },
+        {
+          "id": "REQ-5",
+          "text": "len() and \u0060in\u0060 count only live entries.",
+          "kind": "functional"
+        },
+        {
+          "id": "REQ-6",
+          "text": "When max_size is set and a new key is inserted into a full cache, all expired entries are dropped first. Only if the cache is still full is the least recently used live entry evicted. Both get() hits and set() count as use.",
+          "kind": "functional"
+        },
+        {
+          "id": "REQ-7",
+          "text": "Updating an existing key never evicts anything.",
+          "kind": "edge_case"
+        },
+        {
+          "id": "REQ-8",
+          "text": "A stored value of None is a real value: \u0060in\u0060 is True and get returns None rather than the default.",
+          "kind": "edge_case"
+        },
+        {
+          "id": "REQ-9",
+          "text": "delete() returns True only if a live entry was removed.",
+          "kind": "edge_case"
+        },
+        {
+          "id": "REQ-10",
+          "text": "The cache is safe to use from many threads.",
+          "kind": "non_functional"
+        },
+        {
+          "id": "REQ-11",
+          "text": "Instances share no state and there is no module-level mutable state.",
+          "kind": "non_functional"
+        },
+        {
+          "id": "REQ-12",
+          "text": "Add unit tests.",
+          "kind": "functional"
+        }
+      ],
+      "preserve": [
+        "Existing modules shop/cart.py, money.py, pricing.py and storage.py and their tests stay unchanged and keep passing."
+      ],
+      "risks": [
+        "Off-by-one at the ttl boundary: the check must use \u003E=, not \u003E.",
+        "Treating a None value as missing. A private sentinel object must be used instead.",
+        "Deadlock if a private helper acquires a non-reentrant lock while the caller already holds it.",
+        "Evicting on an update of an existing key, or evicting a live LRU entry while expired entries still exist."
+      ],
+      "open_questions": []
+    },
+    "architecture": {
+      "summary": "shop/lru.py provides LRU, an unbounded, non-thread-safe ordering store wrapping collections.OrderedDict (least recently used first). shop/cache.py provides TtlCache. It stores (value, stored_at) tuples in a per-instance LRU and guards every public method with a per-instance threading.Lock. It reads clock() once per public call, while holding the lock. Expiry, purging and eviction live in small private helpers that assume the lock is already held.",
+      "components": [
+        {
+          "name": "LRU",
+          "path": "shop/lru.py",
+          "change": "create",
+          "responsibility": "Ordered key/value store with recency operations: get (marks used), peek (no reorder), put (insert/replace, marks used), remove, pop_oldest, keys, len, contains."
+        },
+        {
+          "name": "TtlCache",
+          "path": "shop/cache.py",
+          "change": "create",
+          "responsibility": "Thread-safe TTL cache with optional max_size, built on LRU."
+        },
+        {
+          "name": "LRU tests",
+          "path": "tests/test_lru.py",
+          "change": "create",
+          "responsibility": "Unit tests for LRU."
+        },
+        {
+          "name": "TtlCache tests",
+          "path": "tests/test_cache.py",
+          "change": "create",
+          "responsibility": "Unit tests for TtlCache using a fake clock, including a multithreaded smoke test."
+        }
+      ],
+      "invariants": [
+        "When max_size is set, len(self._store) \u003C= max_size after every public call.",
+        "Each LRU value inside TtlCache is a (value, stored_at) tuple.",
+        "Every read or mutation of self._store happens while holding self._lock.",
+        "clock() is called at most once per public method call."
+      ],
+      "error_handling": "The constructor raises ValueError if ttl_seconds \u003C 0, or if max_size is not None and max_size \u003C 1. All other operations do not raise for missing or expired keys. LRU.pop_oldest raises KeyError when empty, but TtlCache only calls it when the store is non-empty.",
+      "security": "No module-level mutable state. The sentinel \u0060_MISSING = object()\u0060 is an immutable identity marker and is allowed.",
+      "performance": "get, set, delete and contains are O(1), except when inserting into a full cache: that does an O(n) purge of expired entries. len() also purges in O(n)."
+    },
+    "decisions": [
+      {
+        "id": "ADR-1",
+        "title": "Create shop/lru.py because it is missing",
+        "decision": "Create shop/lru.py containing class LRU, an unbounded OrderedDict wrapper with no capacity and no locking.",
+        "rationale": "The task requires building on shop/lru.py, which does not exist. Keeping LRU free of capacity rules lets TtlCache apply its own rule: drop expired entries first, then evict the least recently used.",
+        "alternatives_rejected": [
+          "Implementing TtlCache directly on OrderedDict (violates \u0027built on the LRU class\u0027).",
+          "Giving LRU its own max_size auto-eviction (it would evict live entries before expired ones)."
+        ],
+        "constraints": [
+          "LRU has no lock and no capacity.",
+          "LRU uses only collections.OrderedDict."
+        ]
+      },
+      {
+        "id": "ADR-2",
+        "title": "One per-instance threading.Lock",
+        "decision": "TtlCache.__init__ creates self._lock = threading.Lock(). Each public method (set, get, delete, __contains__, __len__) wraps its whole body in \u0060with self._lock:\u0060. Private helpers never acquire the lock.",
+        "rationale": "Simple, correct mutual exclusion. A non-reentrant lock is fine because helpers never re-acquire it.",
+        "alternatives_rejected": [
+          "RLock (not needed)",
+          "Locking inside LRU (double locking, harder to reason about)"
+        ],
+        "constraints": [
+          "Public methods must not call other public methods of the same instance."
+        ]
+      },
+      {
+        "id": "ADR-3",
+        "title": "Storage format and None handling",
+        "decision": "Store the tuple (value, stored_at) in the LRU. Detect absence with the module constant \u0060_MISSING = object()\u0060 passed as the default to LRU.peek.",
+        "rationale": "None is a real value, so it cannot also signal absence.",
+        "alternatives_rejected": [
+          "Using None as the absent marker",
+          "Catching KeyError"
+        ],
+        "constraints": [
+          "Never test \u0060is None\u0060 to check presence."
+        ]
+      },
+      {
+        "id": "ADR-4",
+        "title": "Expiry semantics",
+        "decision": "An entry is expired iff now - stored_at \u003E= self._ttl. Expired entries found by get, delete or __contains__ are removed physically. len() purges all expired entries, then returns len(self._store). \u0060in\u0060 does not count as use.",
+        "rationale": "Matches the specification exactly. The spec names only get hits and set as use.",
+        "alternatives_rejected": [
+          "Using \u003E (live at exactly the ttl)",
+          "Marking an entry used on \u0060in\u0060"
+        ],
+        "constraints": [
+          "get() never changes stored_at."
+        ]
+      },
+      {
+        "id": "ADR-5",
+        "title": "set() behaviour",
+        "decision": "If the key is physically present in the store (live or expired), overwrite it via put(key, (value, now)) and do no eviction. Otherwise, if max_size is set and the store is full, purge expired entries first, then call pop_oldest() while len \u003E= max_size, then put.",
+        "rationale": "Overwriting does not grow the store, so it never needs eviction. Re-setting an expired key behaves like a fresh insert with a new ttl.",
+        "alternatives_rejected": [
+          "Evicting before any set",
+          "Evicting the LRU entry without purging expired ones first"
+        ],
+        "constraints": [
+          "Purge expired entries before any LRU eviction."
+        ]
+      },
+      {
+        "id": "ADR-6",
+        "title": "Constructor validation",
+        "decision": "Raise ValueError if ttl_seconds \u003C 0. Raise ValueError if max_size is not None and max_size \u003C 1.",
+        "rationale": "Prevents nonsensical configurations at low cost.",
+        "alternatives_rejected": [
+          "No validation"
+        ],
+        "constraints": [
+          "ttl_seconds == 0 is allowed."
+        ]
+      }
+    ]
+  },
+  "current": {
+    "task": "Add shop/cache.py with class TtlCache(ttl_seconds: float, max_size: int | None = None, clock=time.monotonic),\nbuilt on the LRU class in shop/lru.py. Methods: set(key, value), get(key, default=None), delete(key) -\u003E bool,\n\u0022key in cache\u0022 and len(cache). An entry expires once clock() - stored_at \u003E= ttl_seconds, so it is already gone\nexactly at the ttl. set() on an existing key replaces the value and restarts its ttl; get() does not extend the\nttl. len() and \u0022in\u0022 count only live entries. When max_size is set and a new key is inserted into a full cache,\nexpired entries are dropped first and only if it is still full is the least recently used live entry evicted;\nboth get() hits and set() count as use. Updating an existing key never evicts anything. A stored value of None\nis a real value. delete() returns True only if a live entry was removed. The cache must be safe to use from many\nthreads, and instances must not share any state (no module-level mutable state). Add unit tests.\n",
+    "units": [
+      {
+        "id": "U1",
+        "title": "Create LRU store",
+        "spec": "shop/lru.py contains an unbounded OrderedDict-backed LRU with recency operations. tests/test_lru.py covers it.",
+        "depends_on": [],
+        "files": [
+          "shop/lru.py",
+          "tests/test_lru.py"
+        ],
+        "acceptance": [
+          "shop/lru.py exposes LRU with exactly the listed methods.",
+          "All 8 tests (a)-(h) exist in tests/test_lru.py and pass."
+        ],
+        "tests": [],
+        "objective": "Provide the LRU class that TtlCache builds on.",
+        "create": [
+          "shop/lru.py",
+          "tests/test_lru.py"
+        ],
+        "modify": [],
+        "avoid": [
+          "shop/cart.py",
+          "shop/money.py",
+          "shop/pricing.py",
+          "shop/storage.py",
+          "shop/__init__.py"
+        ],
+        "references": [
+          "shop/money.py",
+          "tests/test_pricing.py"
+        ],
+        "steps": [
+          "Create shop/lru.py with the docstring \u0022\u0022\u0022A minimal least-recently-used ordered store (not thread-safe).\u0022\u0022\u0022 and \u0060from collections import OrderedDict\u0060.",
+          "Define class LRU. __init__ sets self._data = OrderedDict().",
+          "__len__ returns len(self._data). __contains__(key) returns \u0060key in self._data\u0060 and does not reorder.",
+          "get(key, default=None): if key in self._data, call self._data.move_to_end(key) and return self._data[key]. Otherwise return default.",
+          "peek(key, default=None): return self._data.get(key, default) without reordering.",
+          "put(key, value): set self._data[key] = value, then call self._data.move_to_end(key).",
+          "remove(key) -\u003E bool: if key in self._data, delete it and return True. Otherwise return False.",
+          "pop_oldest(): return self._data.popitem(last=False). This returns a (key, value) tuple and raises KeyError when empty.",
+          "keys() -\u003E list: return list(self._data.keys()), ordered least to most recently used.",
+          "Create tests/test_lru.py with \u0060import unittest\u0060, \u0060from shop.lru import LRU\u0060, and class LRUTests(unittest.TestCase) containing these tests: (a) test_put_get: put(\u0027a\u0027, 1); assertEqual(lru.get(\u0027a\u0027), 1); assertEqual(lru.get(\u0027x\u0027, \u0027d\u0027), \u0027d\u0027). (b) test_get_marks_used: put(\u0027a\u0027, 1), put(\u0027b\u0027, 2), get(\u0027a\u0027), then assertEqual(lru.pop_oldest(), (\u0027b\u0027, 2)). (c) test_peek_does_not_reorder: put(\u0027a\u0027, 1), put(\u0027b\u0027, 2), assertEqual(lru.peek(\u0027a\u0027), 1), then assertEqual(lru.pop_oldest(), (\u0027a\u0027, 1)). (d) test_put_existing_replaces_and_marks_used: put(\u0027a\u0027, 1), put(\u0027b\u0027, 2), put(\u0027a\u0027, 3); assertEqual(lru.keys(), [\u0027b\u0027, \u0027a\u0027]); assertEqual(lru.peek(\u0027a\u0027), 3); assertEqual(len(lru), 2). (e) test_remove: put(\u0027a\u0027, 1); assertTrue(lru.remove(\u0027a\u0027)); assertFalse(lru.remove(\u0027a\u0027)); assertNotIn(\u0027a\u0027, lru). (f) test_pop_oldest_empty: with self.assertRaises(KeyError): LRU().pop_oldest(). (g) test_len_contains: put(\u0027a\u0027, 1), put(\u0027b\u0027, 2); assertEqual(len(lru), 2); assertIn(\u0027a\u0027, lru); assertNotIn(\u0027z\u0027, lru). (h) test_none_value: put(\u0027k\u0027, None); assertIsNone(lru.get(\u0027k\u0027, \u0027d\u0027)); assertIn(\u0027k\u0027, lru). Add the \u0060if __name__ == \u0022__main__\u0022: unittest.main()\u0060 footer."
+        ],
+        "interfaces": [
+          "class LRU:",
+          "def __init__(self) -\u003E None",
+          "def __len__(self) -\u003E int",
+          "def __contains__(self, key) -\u003E bool",
+          "def get(self, key, default=None)",
+          "def peek(self, key, default=None)",
+          "def put(self, key, value) -\u003E None",
+          "def remove(self, key) -\u003E bool",
+          "def pop_oldest(self) -\u003E tuple",
+          "def keys(self) -\u003E list"
+        ],
+        "decisions": [
+          "ADR-1"
+        ],
+        "constraints": [
+          "Standard library only.",
+          "No module-level mutable state."
+        ],
+        "edge_cases": [
+          "None stored as a value",
+          "pop_oldest on an empty store"
+        ],
+        "requirements": [
+          "REQ-1",
+          "REQ-11",
+          "REQ-12"
+        ],
+        "verification": [
+          "python -m unittest discover -s tests -t ."
+        ],
+        "risk": "low",
+        "side_effects": [],
+        "corrections": [],
+        "split_from": null
+      },
+      {
+        "id": "U2",
+        "title": "Create TtlCache and tests",
+        "spec": "shop/cache.py contains TtlCache using a per-instance LRU and Lock, an injected clock, the expiry rule now - stored_at \u003E= ttl, and expired-first then LRU eviction for new keys. tests/test_cache.py covers every requirement with a fake clock and includes a threaded smoke test.",
+        "depends_on": [
+          "U1"
+        ],
+        "files": [
+          "shop/cache.py",
+          "tests/test_cache.py"
+        ],
+        "acceptance": [
+          "All 17 listed tests exist in tests/test_cache.py and pass.",
+          "The full suite passes, including the existing cart, pricing and storage tests and tests/test_lru.py.",
+          "shop/cache.py has no module-level mutable state; only _MISSING = object() is at module level."
+        ],
+        "tests": [],
+        "objective": "Implement the thread-safe TTL cache on top of LRU, with full unit tests.",
+        "create": [
+          "shop/cache.py",
+          "tests/test_cache.py"
+        ],
+        "modify": [],
+        "avoid": [
+          "shop/lru.py",
+          "shop/cart.py",
+          "shop/money.py",
+          "shop/pricing.py",
+          "shop/storage.py"
+        ],
+        "references": [
+          "shop/lru.py"
+        ],
+        "steps": [
+          "Create shop/cache.py with the docstring \u0022\u0022\u0022A thread-safe cache whose entries expire after a fixed time-to-live.\u0022\u0022\u0022, then \u0060from __future__ import annotations\u0060, \u0060import threading\u0060, \u0060import time\u0060, \u0060from shop.lru import LRU\u0060, and the constant \u0060_MISSING = object()\u0060.",
+          "class TtlCache, __init__(self, ttl_seconds: float, max_size: int | None = None, clock=time.monotonic): if ttl_seconds \u003C 0, raise ValueError(\u0022ttl_seconds must be \u003E= 0\u0022). If max_size is not None and max_size \u003C 1, raise ValueError(\u0022max_size must be \u003E= 1\u0022). Then set self._ttl = ttl_seconds, self._max_size = max_size, self._clock = clock, self._store = LRU(), self._lock = threading.Lock().",
+          "Private helper _expired(self, stored_at, now) -\u003E bool: return now - stored_at \u003E= self._ttl.",
+          "Private helper _purge_expired(self, now) -\u003E None: for key in self._store.keys(): entry = self._store.peek(key); if self._expired(entry[1], now): self._store.remove(key).",
+          "Private helper _live_entry(self, key, now): entry = self._store.peek(key, _MISSING). If entry is _MISSING, return _MISSING. If self._expired(entry[1], now), call self._store.remove(key) and return _MISSING. Otherwise return entry. This does not reorder.",
+          "set(self, key, value) -\u003E None: with self._lock: now = self._clock(). If key in self._store, call self._store.put(key, (value, now)) and return. Otherwise, if self._max_size is not None and len(self._store) \u003E= self._max_size: call self._purge_expired(now), then \u0060while len(self._store) \u003E= self._max_size: self._store.pop_oldest()\u0060. Finally call self._store.put(key, (value, now)).",
+          "get(self, key, default=None): with self._lock: now = self._clock(); entry = self._live_entry(key, now). If entry is _MISSING, return default. Otherwise call self._store.get(key) to mark it used and return entry[0]. Never modify stored_at.",
+          "delete(self, key) -\u003E bool: with self._lock: now = self._clock(); entry = self._live_entry(key, now). If entry is _MISSING, return False. Otherwise call self._store.remove(key) and return True.",
+          "__contains__(self, key) -\u003E bool: with self._lock: return self._live_entry(key, self._clock()) is not _MISSING.",
+          "__len__(self) -\u003E int: with self._lock: self._purge_expired(self._clock()); return len(self._store).",
+          "Create tests/test_cache.py with \u0060import threading\u0060, \u0060import unittest\u0060, \u0060from shop.cache import TtlCache\u0060. Define class FakeClock: __init__ sets self.now = 0.0; __call__(self) returns self.now; advance(self, seconds) does self.now \u002B= seconds. Define class TtlCacheTests(unittest.TestCase). Every test creates its own clock = FakeClock() and passes clock=clock to TtlCache.",
+          "Add these tests to TtlCacheTests: (1) set/get basic (ttl=10): set(\u0027a\u0027, 1); get(\u0027a\u0027) == 1; get(\u0027x\u0027, \u0027d\u0027) == \u0027d\u0027. (2) Expiry boundary with ttl=10: set(\u0027a\u0027, 1) at 0; clock.now = 9.999 -\u003E get(\u0027a\u0027) == 1; clock.now = 10 -\u003E get(\u0027a\u0027, \u0027d\u0027) == \u0027d\u0027, \u0027a\u0027 not in cache, len(cache) == 0. (3) set restarts the ttl (ttl=10): set(\u0027a\u0027, 1) at 0; advance 5; set(\u0027a\u0027, 2); advance 7 (now 12) -\u003E get(\u0027a\u0027) == 2; advance 3 (now 15, 10 since re-set) -\u003E \u0027a\u0027 not in cache. (4) get does not extend the ttl (ttl=10): set(\u0027a\u0027, 1) at 0; clock.now = 9 -\u003E get(\u0027a\u0027) == 1; clock.now = 10 -\u003E \u0027a\u0027 not in cache. (5) len and \u0060in\u0060 ignore expired entries (ttl=10): set(\u0027a\u0027, 1) at 0; clock.now = 5; set(\u0027b\u0027, 2); clock.now = 10 -\u003E len(cache) == 1, \u0027a\u0027 not in cache, \u0027b\u0027 in cache. (6) None value (ttl=10): set(\u0027k\u0027, None); assertIn(\u0027k\u0027, cache); assertIsNone(cache.get(\u0027k\u0027, \u0027d\u0027)). (7) delete (ttl=10): set(\u0027a\u0027, 1); assertTrue(delete(\u0027a\u0027)); \u0027a\u0027 not in cache; assertFalse(delete(\u0027a\u0027)); assertFalse(delete(\u0027missing\u0027)); set(\u0027b\u0027, 2); clock.now = 10; assertFalse(delete(\u0027b\u0027)). (8) LRU eviction (ttl=100, max_size=2): set a, set b, get(\u0027a\u0027), set c -\u003E \u0027b\u0027 not in cache, \u0027a\u0027 and \u0027c\u0027 in cache. (9) set counts as use (ttl=100, max_size=2): set a=1, set b=2, set a=3, set c=4 -\u003E \u0027b\u0027 not in cache, get(\u0027a\u0027) == 3, \u0027c\u0027 in cache. (10) Updating never evicts (ttl=100, max_size=2): set a=1, set b=2, set a=3 -\u003E len(cache) == 2, get(\u0027a\u0027) == 3, get(\u0027b\u0027) == 2. (11) Expired first (ttl=10, max_size=2): set a at 0; advance 1; set b; get(\u0027a\u0027); advance 9.5 (now 10.5: a expired, b live); set c -\u003E \u0027a\u0027 not in cache, \u0027b\u0027 in cache, \u0027c\u0027 in cache. (12) Instances do not share data: c1 = TtlCache(10, clock=clock), c2 = TtlCache(10, clock=clock); c1.set(\u0027a\u0027, 1) -\u003E \u0027a\u0027 not in c2, len(c2) == 0. (13) Constructor validation: assertRaises(ValueError) for TtlCache(-1) and for TtlCache(10, max_size=0).",
+          "Add (14) the threaded smoke test: cache = TtlCache(ttl_seconds=60, max_size=50, clock=FakeClock()) with the clock never advanced; errors = [] (a list shared by all workers). Define a nested function \u0060def worker():\u0060 whose body is \u0060try:\u0060 around the whole loop \u0060for i in range(2000): k = i % 100; cache.set(k, i); cache.get(k); cache.delete(i % 7); _ = k in cache\u0060, followed by \u0060except Exception as e: errors.append(e)\u0060. Create threads = [threading.Thread(target=worker) for _ in range(8)]; start each; join each. Then assertEqual(errors, []) and assertLessEqual(len(cache), 50).",
+          "Add (15) ttl == 0: cache = TtlCache(ttl_seconds=0, clock=clock); set(\u0027a\u0027, 1) -\u003E get(\u0027a\u0027) is None (default), assertEqual(cache.get(\u0027a\u0027, \u0027d\u0027), \u0027d\u0027), \u0027a\u0027 not in cache, len(cache) == 0.",
+          "Add (16) re-set an expired key (ttl=10): set(\u0027a\u0027, 1) at 0; advance 10 (now 10, a expired); set(\u0027a\u0027, 2) -\u003E get(\u0027a\u0027) == 2; clock.now = 19.999 -\u003E get(\u0027a\u0027) == 2; clock.now = 20 -\u003E \u0027a\u0027 not in cache.",
+          "Add (17) full cache with every entry expired (ttl=10, max_size=2): set a, set b at 0; advance 10; set c -\u003E len(cache) == 1, \u0027c\u0027 in cache, \u0027a\u0027 not in cache, \u0027b\u0027 not in cache.",
+          "Add the \u0060if __name__ == \u0022__main__\u0022: unittest.main()\u0060 footer."
+        ],
+        "interfaces": [
+          "class TtlCache:",
+          "def __init__(self, ttl_seconds: float, max_size: int | None = None, clock=time.monotonic) -\u003E None",
+          "def set(self, key, value) -\u003E None",
+          "def get(self, key, default=None)",
+          "def delete(self, key) -\u003E bool",
+          "def __contains__(self, key) -\u003E bool",
+          "def __len__(self) -\u003E int"
+        ],
+        "decisions": [
+          "ADR-2",
+          "ADR-3",
+          "ADR-4",
+          "ADR-5",
+          "ADR-6"
+        ],
+        "constraints": [
+          "Only private helpers touch internal state without acquiring the lock, and they are called only from public methods that hold it.",
+          "Call clock() exactly once per public call.",
+          "Every test, including the threaded test (14), passes a FakeClock instance as clock; never use time.sleep or the real clock in tests."
+        ],
+        "edge_cases": [
+          "Exactly at the ttl means expired",
+          "None values",
+          "ttl_seconds == 0 (every entry immediately expired)",
+          "Re-setting an expired key",
+          "A full cache where every entry is expired",
+          "Updating a key in a full cache"
+        ],
+        "requirements": [
+          "REQ-1",
+          "REQ-2",
+          "REQ-3",
+          "REQ-4",
+          "REQ-5",
+          "REQ-6",
+          "REQ-7",
+          "REQ-8",
+          "REQ-9",
+          "REQ-10",
+          "REQ-11",
+          "REQ-12"
+        ],
+        "verification": [
+          "python -m unittest discover -s tests -t ."
+        ],
+        "risk": "medium",
+        "side_effects": [],
+        "corrections": [],
+        "split_from": null
+      }
+    ],
+    "rules": [
+      {
+        "id": "R1",
+        "text": "Standard library only. Use unittest for tests."
+      },
+      {
+        "id": "R2",
+        "text": "No module-level mutable state. All state lives on the instance."
+      },
+      {
+        "id": "R3",
+        "text": "Time comes only from the injected clock."
+      }
+    ],
+    "dont_list": [
+      "Don\u0027t use \u0060\u003E\u0060 for expiry. Use \u0060now - stored_at \u003E= ttl\u0060.",
+      "Don\u0027t use None to detect a missing entry. Use _MISSING.",
+      "Don\u0027t call public methods (or acquire self._lock) from inside other locked methods or helpers.",
+      "Don\u0027t evict when updating an existing key.",
+      "Don\u0027t evict a live LRU entry before purging expired ones.",
+      "Don\u0027t refresh stored_at on get().",
+      "Don\u0027t compare pop_oldest() to a bare key; it returns a (key, value) tuple.",
+      "Don\u0027t modify existing shop/ modules or their tests.",
+      "Don\u0027t use time.sleep in tests."
+    ],
+    "schema_version": 2,
+    "analysis": {
+      "facts": [
+        {
+          "text": "The task says TtlCache is built on \u0027the LRU class in shop/lru.py\u0027, but shop/lru.py is not in the repository. Only shop/__init__.py, cart.py, money.py, pricing.py and storage.py exist under shop/. The LRU class has to be created first.",
+          "evidence": [
+            "shop/__init__.py",
+            "shop/cart.py",
+            "shop/money.py",
+            "shop/pricing.py",
+            "shop/storage.py"
+          ]
+        },
+        {
+          "text": "The project uses only the standard library. Tests use unittest and run with \u0060python -m unittest discover -s tests -t .\u0060.",
+          "evidence": [
+            "README.md",
+            "tests/test_pricing.py"
+          ]
+        },
+        {
+          "text": "Test files are named tests/test_\u003Cmodule\u003E.py. Each has a unittest.TestCase subclass and an \u0060if __name__ == \u0022__main__\u0022: unittest.main()\u0060 footer. They import from the \u0060shop.\u0060 package.",
+          "evidence": [
+            "tests/test_cart.py",
+            "tests/test_pricing.py",
+            "tests/test_storage.py"
+          ]
+        },
+        {
+          "text": "Project conventions: keep functions small, no module-level mutable state, take clocks as parameters, and add tests in tests/test_\u003Cmodule\u003E.py.",
+          "evidence": [
+            "README.md"
+          ]
+        },
+        {
+          "text": "tests/__init__.py exists, so tests is a package.",
+          "evidence": [
+            "tests/__init__.py"
+          ]
+        },
+        {
+          "text": "Modules start with a one-line docstring and use type hints in signatures.",
+          "evidence": [
+            "shop/money.py",
+            "shop/pricing.py",
+            "shop/storage.py"
+          ]
+        }
+      ],
+      "assumptions": [
+        "Because shop/lru.py does not exist, the plan creates it with a minimal, unbounded LRU ordering store. TtlCache adds TTL, capacity and locking on top of it.",
+        "The Python version supports \u0060int | None\u0060 in annotations (3.10\u002B), because the task signature uses it. \u0060from __future__ import annotations\u0060 is added anyway for safety.",
+        "Argument validation is not specified. ttl_seconds \u003C 0 and max_size \u003C 1 raise ValueError. ttl_seconds == 0 is allowed and means every entry is expired immediately."
+      ],
+      "requirements": [
+        {
+          "id": "REQ-1",
+          "text": "shop/cache.py defines class TtlCache(ttl_seconds: float, max_size: int | None = None, clock=time.monotonic), built on an LRU class in shop/lru.py.",
+          "kind": "functional"
+        },
+        {
+          "id": "REQ-2",
+          "text": "Methods: set(key, value), get(key, default=None), delete(key) -\u003E bool, __contains__, __len__.",
+          "kind": "functional"
+        },
+        {
+          "id": "REQ-3",
+          "text": "An entry is expired when clock() - stored_at \u003E= ttl_seconds, so it is already gone exactly at the ttl.",
+          "kind": "edge_case"
+        },
+        {
+          "id": "REQ-4",
+          "text": "set() on an existing key replaces the value and restarts its ttl. get() does not extend the ttl.",
+          "kind": "functional"
+        },
+        {
+          "id": "REQ-5",
+          "text": "len() and \u0060in\u0060 count only live entries.",
+          "kind": "functional"
+        },
+        {
+          "id": "REQ-6",
+          "text": "When max_size is set and a new key is inserted into a full cache, all expired entries are dropped first. Only if the cache is still full is the least recently used live entry evicted. Both get() hits and set() count as use.",
+          "kind": "functional"
+        },
+        {
+          "id": "REQ-7",
+          "text": "Updating an existing key never evicts anything.",
+          "kind": "edge_case"
+        },
+        {
+          "id": "REQ-8",
+          "text": "A stored value of None is a real value: \u0060in\u0060 is True and get returns None rather than the default.",
+          "kind": "edge_case"
+        },
+        {
+          "id": "REQ-9",
+          "text": "delete() returns True only if a live entry was removed.",
+          "kind": "edge_case"
+        },
+        {
+          "id": "REQ-10",
+          "text": "The cache is safe to use from many threads.",
+          "kind": "non_functional"
+        },
+        {
+          "id": "REQ-11",
+          "text": "Instances share no state and there is no module-level mutable state.",
+          "kind": "non_functional"
+        },
+        {
+          "id": "REQ-12",
+          "text": "Add unit tests.",
+          "kind": "functional"
+        }
+      ],
+      "preserve": [
+        "Existing modules shop/cart.py, money.py, pricing.py and storage.py and their tests stay unchanged and keep passing."
+      ],
+      "risks": [
+        "Off-by-one at the ttl boundary: the check must use \u003E=, not \u003E.",
+        "Treating a None value as missing. A private sentinel object must be used instead.",
+        "Deadlock if a private helper acquires a non-reentrant lock while the caller already holds it.",
+        "Evicting on an update of an existing key, or evicting a live LRU entry while expired entries still exist."
+      ],
+      "open_questions": []
+    },
+    "architecture": {
+      "summary": "shop/lru.py provides LRU, an unbounded, non-thread-safe ordering store wrapping collections.OrderedDict (least recently used first). shop/cache.py provides TtlCache. It stores (value, stored_at) tuples in a per-instance LRU and guards every public method with a per-instance threading.Lock. It reads clock() once per public call, while holding the lock. Expiry, purging and eviction live in small private helpers that assume the lock is already held.",
+      "components": [
+        {
+          "name": "LRU",
+          "path": "shop/lru.py",
+          "change": "create",
+          "responsibility": "Ordered key/value store with recency operations: get (marks used), peek (no reorder), put (insert/replace, marks used), remove, pop_oldest, keys, len, contains."
+        },
+        {
+          "name": "TtlCache",
+          "path": "shop/cache.py",
+          "change": "create",
+          "responsibility": "Thread-safe TTL cache with optional max_size, built on LRU."
+        },
+        {
+          "name": "LRU tests",
+          "path": "tests/test_lru.py",
+          "change": "create",
+          "responsibility": "Unit tests for LRU."
+        },
+        {
+          "name": "TtlCache tests",
+          "path": "tests/test_cache.py",
+          "change": "create",
+          "responsibility": "Unit tests for TtlCache using a fake clock, including a multithreaded smoke test."
+        }
+      ],
+      "invariants": [
+        "When max_size is set, len(self._store) \u003C= max_size after every public call.",
+        "Each LRU value inside TtlCache is a (value, stored_at) tuple.",
+        "Every read or mutation of self._store happens while holding self._lock.",
+        "clock() is called at most once per public method call."
+      ],
+      "error_handling": "The constructor raises ValueError if ttl_seconds \u003C 0, or if max_size is not None and max_size \u003C 1. All other operations do not raise for missing or expired keys. LRU.pop_oldest raises KeyError when empty, but TtlCache only calls it when the store is non-empty.",
+      "security": "No module-level mutable state. The sentinel \u0060_MISSING = object()\u0060 is an immutable identity marker and is allowed.",
+      "performance": "get, set, delete and contains are O(1), except when inserting into a full cache: that does an O(n) purge of expired entries. len() also purges in O(n)."
+    },
+    "decisions": [
+      {
+        "id": "ADR-1",
+        "title": "Create shop/lru.py because it is missing",
+        "decision": "Create shop/lru.py containing class LRU, an unbounded OrderedDict wrapper with no capacity and no locking.",
+        "rationale": "The task requires building on shop/lru.py, which does not exist. Keeping LRU free of capacity rules lets TtlCache apply its own rule: drop expired entries first, then evict the least recently used.",
+        "alternatives_rejected": [
+          "Implementing TtlCache directly on OrderedDict (violates \u0027built on the LRU class\u0027).",
+          "Giving LRU its own max_size auto-eviction (it would evict live entries before expired ones)."
+        ],
+        "constraints": [
+          "LRU has no lock and no capacity.",
+          "LRU uses only collections.OrderedDict."
+        ]
+      },
+      {
+        "id": "ADR-2",
+        "title": "One per-instance threading.Lock",
+        "decision": "TtlCache.__init__ creates self._lock = threading.Lock(). Each public method (set, get, delete, __contains__, __len__) wraps its whole body in \u0060with self._lock:\u0060. Private helpers never acquire the lock.",
+        "rationale": "Simple, correct mutual exclusion. A non-reentrant lock is fine because helpers never re-acquire it.",
+        "alternatives_rejected": [
+          "RLock (not needed)",
+          "Locking inside LRU (double locking, harder to reason about)"
+        ],
+        "constraints": [
+          "Public methods must not call other public methods of the same instance."
+        ]
+      },
+      {
+        "id": "ADR-3",
+        "title": "Storage format and None handling",
+        "decision": "Store the tuple (value, stored_at) in the LRU. Detect absence with the module constant \u0060_MISSING = object()\u0060 passed as the default to LRU.peek.",
+        "rationale": "None is a real value, so it cannot also signal absence.",
+        "alternatives_rejected": [
+          "Using None as the absent marker",
+          "Catching KeyError"
+        ],
+        "constraints": [
+          "Never test \u0060is None\u0060 to check presence."
+        ]
+      },
+      {
+        "id": "ADR-4",
+        "title": "Expiry semantics",
+        "decision": "An entry is expired iff now - stored_at \u003E= self._ttl. Expired entries found by get, delete or __contains__ are removed physically. len() purges all expired entries, then returns len(self._store). \u0060in\u0060 does not count as use.",
+        "rationale": "Matches the specification exactly. The spec names only get hits and set as use.",
+        "alternatives_rejected": [
+          "Using \u003E (live at exactly the ttl)",
+          "Marking an entry used on \u0060in\u0060"
+        ],
+        "constraints": [
+          "get() never changes stored_at."
+        ]
+      },
+      {
+        "id": "ADR-5",
+        "title": "set() behaviour",
+        "decision": "If the key is physically present in the store (live or expired), overwrite it via put(key, (value, now)) and do no eviction. Otherwise, if max_size is set and the store is full, purge expired entries first, then call pop_oldest() while len \u003E= max_size, then put.",
+        "rationale": "Overwriting does not grow the store, so it never needs eviction. Re-setting an expired key behaves like a fresh insert with a new ttl.",
+        "alternatives_rejected": [
+          "Evicting before any set",
+          "Evicting the LRU entry without purging expired ones first"
+        ],
+        "constraints": [
+          "Purge expired entries before any LRU eviction."
+        ]
+      },
+      {
+        "id": "ADR-6",
+        "title": "Constructor validation",
+        "decision": "Raise ValueError if ttl_seconds \u003C 0. Raise ValueError if max_size is not None and max_size \u003C 1.",
+        "rationale": "Prevents nonsensical configurations at low cost.",
+        "alternatives_rejected": [
+          "No validation"
+        ],
+        "constraints": [
+          "ttl_seconds == 0 is allowed."
+        ]
+      }
+    ]
+  },
+  "revision": 1,
+  "revisions": [],
+  "lessons": [],
+  "progress": {
+    "U1": "accepted",
+    "U2": "accepted"
+  }
+}

@@ -1,0 +1,209 @@
+{
+  "original": {
+    "task": "Sale prices are rounded per unit, which makes multi-quantity lines wrong by a cent. The rounding lives in the\nhelper shop.money.round_line(price, qty); fix it there. In shop/cart.py a line on sale must be computed as\nround2(unit_price * (100 - SALE_PERCENT) / 100 * qty): rounded once on the line total, not per unit. Example:\nunit price 0.99, qty 3, on sale (20% off) is 2.38, not 2.37. Lines not on sale are plain round2(unit_price * qty).\nKeep shop.pricing.sale_price(unit_price) unchanged for single units. Add unit tests.\n",
+    "units": [
+      {
+        "id": "U1",
+        "title": "Round sale lines once on the line total in Cart.line_total",
+        "spec": "The task names a helper shop.money.round_line(price, qty), but it does not exist. shop/money.py only defines round2 and fmt. The per-unit rounding actually happens in shop/cart.py, in Cart.line_total, which calls sale_price(unit_price) (already rounded) and then multiplies by qty. Fix it there and do not create round_line. In shop/cart.py, change the import to \u0060from shop.pricing import SALE_PERCENT, apply_coupon\u0060 and drop the now-unused sale_price import. Rewrite Cart.line_total(item) so that: (1) when self.on_sale is true it returns round2(item[\u0022unit_price\u0022] * (100 - SALE_PERCENT) / 100 * item[\u0022qty\u0022]); (2) otherwise it returns round2(item[\u0022unit_price\u0022] * item[\u0022qty\u0022]). Keep the signature unchanged and keep subtotal and total unchanged. Leave shop/pricing.py and shop/money.py untouched.",
+        "depends_on": [],
+        "files": [
+          "shop/cart.py"
+        ],
+        "acceptance": [
+          "Cart(on_sale=True) with add(\u0027x\u0027, 0.99, 3) gives line_total == 2.38 and subtotal() == 2.38",
+          "Existing tests in tests/test_cart.py and tests/test_pricing.py still pass",
+          "shop.pricing.sale_price(10.0) == 8.0 and sale_price(0.99) == 0.79 (unchanged)",
+          "python -m unittest discover -s tests -t . passes"
+        ],
+        "tests": [],
+        "objective": null,
+        "create": [],
+        "modify": [],
+        "avoid": [],
+        "references": [],
+        "steps": [],
+        "interfaces": [],
+        "decisions": [],
+        "constraints": [],
+        "edge_cases": [],
+        "requirements": [],
+        "verification": [],
+        "risk": "low",
+        "side_effects": [],
+        "corrections": [],
+        "split_from": null
+      },
+      {
+        "id": "U2",
+        "title": "Unit tests for line-level sale rounding",
+        "spec": "In tests/test_cart.py, add tests to CartTests using unittest. (a) test_sale_line_rounded_once: Cart(on_sale=True) with add(\u0027pen\u0027, 0.99, 3) gives subtotal() == 2.38 and line_total(cart.items[0]) == 2.38. (b) test_sale_single_unit_matches_sale_price: Cart(on_sale=True) with add(\u0027pen\u0027, 0.99, 1) gives subtotal() == sale_price(0.99) == 0.79. (c) test_non_sale_line: Cart() with add(\u0027pen\u0027, 0.99, 3) gives subtotal() == 2.97. (d) test_sale_multi_line_subtotal: Cart(on_sale=True) with add(\u0027a\u0027, 0.99, 3) and add(\u0027b\u0027, 10.00, 2) gives subtotal() == 18.38. Import sale_price from shop.pricing for test (b). Keep every existing test.",
+        "depends_on": [
+          "U1"
+        ],
+        "files": [
+          "tests/test_cart.py"
+        ],
+        "acceptance": [
+          "All new tests pass after U1",
+          "test_sale_line_rounded_once would fail against the old per-unit implementation (it would give 2.37)",
+          "python -m unittest discover -s tests -t . passes"
+        ],
+        "tests": [],
+        "objective": null,
+        "create": [],
+        "modify": [],
+        "avoid": [],
+        "references": [],
+        "steps": [],
+        "interfaces": [],
+        "decisions": [],
+        "constraints": [],
+        "edge_cases": [],
+        "requirements": [],
+        "verification": [],
+        "risk": "low",
+        "side_effects": [],
+        "corrections": [],
+        "split_from": null
+      }
+    ],
+    "rules": [
+      {
+        "id": "R1",
+        "text": "Standard library only; use unittest, and run tests with \u0060python -m unittest discover -s tests -t .\u0060."
+      },
+      {
+        "id": "R2",
+        "text": "Round exactly once per line with shop.money.round2; never multiply an already-rounded unit price by qty."
+      },
+      {
+        "id": "R3",
+        "text": "shop.pricing.sale_price keeps its signature and behavior for single units."
+      },
+      {
+        "id": "R4",
+        "text": "Keep functions small and add no module-level mutable state."
+      }
+    ],
+    "dont_list": [
+      "Don\u0027t invent shop.money.round_line or any new helper in money.py; the helper named in the task does not exist, so fix Cart.line_total",
+      "Don\u0027t modify sale_price, apply_coupon, round2, or SALE_PERCENT",
+      "Don\u0027t call sale_price() inside line_total for sale lines; that reintroduces per-unit rounding",
+      "Don\u0027t leave an unused sale_price import in shop/cart.py",
+      "Don\u0027t use Decimal or change the float money representation",
+      "Don\u0027t delete or weaken existing tests"
+    ],
+    "schema_version": 1,
+    "analysis": null,
+    "architecture": null,
+    "decisions": []
+  },
+  "current": {
+    "task": "Sale prices are rounded per unit, which makes multi-quantity lines wrong by a cent. The rounding lives in the\nhelper shop.money.round_line(price, qty); fix it there. In shop/cart.py a line on sale must be computed as\nround2(unit_price * (100 - SALE_PERCENT) / 100 * qty): rounded once on the line total, not per unit. Example:\nunit price 0.99, qty 3, on sale (20% off) is 2.38, not 2.37. Lines not on sale are plain round2(unit_price * qty).\nKeep shop.pricing.sale_price(unit_price) unchanged for single units. Add unit tests.\n",
+    "units": [
+      {
+        "id": "U1",
+        "title": "Round sale lines once on the line total in Cart.line_total",
+        "spec": "The task names a helper shop.money.round_line(price, qty), but it does not exist. shop/money.py only defines round2 and fmt. The per-unit rounding actually happens in shop/cart.py, in Cart.line_total, which calls sale_price(unit_price) (already rounded) and then multiplies by qty. Fix it there and do not create round_line. In shop/cart.py, change the import to \u0060from shop.pricing import SALE_PERCENT, apply_coupon\u0060 and drop the now-unused sale_price import. Rewrite Cart.line_total(item) so that: (1) when self.on_sale is true it returns round2(item[\u0022unit_price\u0022] * (100 - SALE_PERCENT) / 100 * item[\u0022qty\u0022]); (2) otherwise it returns round2(item[\u0022unit_price\u0022] * item[\u0022qty\u0022]). Keep the signature unchanged and keep subtotal and total unchanged. Leave shop/pricing.py and shop/money.py untouched.",
+        "depends_on": [],
+        "files": [
+          "shop/cart.py"
+        ],
+        "acceptance": [
+          "Cart(on_sale=True) with add(\u0027x\u0027, 0.99, 3) gives line_total == 2.38 and subtotal() == 2.38",
+          "Existing tests in tests/test_cart.py and tests/test_pricing.py still pass",
+          "shop.pricing.sale_price(10.0) == 8.0 and sale_price(0.99) == 0.79 (unchanged)",
+          "python -m unittest discover -s tests -t . passes"
+        ],
+        "tests": [],
+        "objective": null,
+        "create": [],
+        "modify": [],
+        "avoid": [],
+        "references": [],
+        "steps": [],
+        "interfaces": [],
+        "decisions": [],
+        "constraints": [],
+        "edge_cases": [],
+        "requirements": [],
+        "verification": [],
+        "risk": "low",
+        "side_effects": [],
+        "corrections": [],
+        "split_from": null
+      },
+      {
+        "id": "U2",
+        "title": "Unit tests for line-level sale rounding",
+        "spec": "In tests/test_cart.py, add tests to CartTests using unittest. (a) test_sale_line_rounded_once: Cart(on_sale=True) with add(\u0027pen\u0027, 0.99, 3) gives subtotal() == 2.38 and line_total(cart.items[0]) == 2.38. (b) test_sale_single_unit_matches_sale_price: Cart(on_sale=True) with add(\u0027pen\u0027, 0.99, 1) gives subtotal() == sale_price(0.99) == 0.79. (c) test_non_sale_line: Cart() with add(\u0027pen\u0027, 0.99, 3) gives subtotal() == 2.97. (d) test_sale_multi_line_subtotal: Cart(on_sale=True) with add(\u0027a\u0027, 0.99, 3) and add(\u0027b\u0027, 10.00, 2) gives subtotal() == 18.38. Import sale_price from shop.pricing for test (b). Keep every existing test.",
+        "depends_on": [
+          "U1"
+        ],
+        "files": [
+          "tests/test_cart.py"
+        ],
+        "acceptance": [
+          "All new tests pass after U1",
+          "test_sale_line_rounded_once would fail against the old per-unit implementation (it would give 2.37)",
+          "python -m unittest discover -s tests -t . passes"
+        ],
+        "tests": [],
+        "objective": null,
+        "create": [],
+        "modify": [],
+        "avoid": [],
+        "references": [],
+        "steps": [],
+        "interfaces": [],
+        "decisions": [],
+        "constraints": [],
+        "edge_cases": [],
+        "requirements": [],
+        "verification": [],
+        "risk": "low",
+        "side_effects": [],
+        "corrections": [],
+        "split_from": null
+      }
+    ],
+    "rules": [
+      {
+        "id": "R1",
+        "text": "Standard library only; use unittest, and run tests with \u0060python -m unittest discover -s tests -t .\u0060."
+      },
+      {
+        "id": "R2",
+        "text": "Round exactly once per line with shop.money.round2; never multiply an already-rounded unit price by qty."
+      },
+      {
+        "id": "R3",
+        "text": "shop.pricing.sale_price keeps its signature and behavior for single units."
+      },
+      {
+        "id": "R4",
+        "text": "Keep functions small and add no module-level mutable state."
+      }
+    ],
+    "dont_list": [
+      "Don\u0027t invent shop.money.round_line or any new helper in money.py; the helper named in the task does not exist, so fix Cart.line_total",
+      "Don\u0027t modify sale_price, apply_coupon, round2, or SALE_PERCENT",
+      "Don\u0027t call sale_price() inside line_total for sale lines; that reintroduces per-unit rounding",
+      "Don\u0027t leave an unused sale_price import in shop/cart.py",
+      "Don\u0027t use Decimal or change the float money representation",
+      "Don\u0027t delete or weaken existing tests"
+    ],
+    "schema_version": 1,
+    "analysis": null,
+    "architecture": null,
+    "decisions": []
+  },
+  "revision": 1,
+  "revisions": [],
+  "lessons": [],
+  "progress": {
+    "U1": "accepted",
+    "U2": "accepted"
+  }
+}

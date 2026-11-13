@@ -136,6 +136,7 @@ public sealed class BenchRunner(
         Dictionary<(string Task, int Repeat), (PlannedTask Planned, string RunId)>? plans, bool judge, CancellationToken ct)
     {
         decimal sharedPlanUsd = 0;
+        var judgeTime = TimeSpan.Zero; // the judge is measurement, not part of the trial
         var started = _clock.UtcNow;
         var runId = RunArtifacts.NewRunId(started);
         var clone = Path.Combine(Path.GetTempPath(), "tokonomy", "bench", runId);
@@ -228,7 +229,7 @@ public sealed class BenchRunner(
             note = string.Join("; ", new[] { note, acceptanceNote }.Where(s => !string.IsNullOrEmpty(s)));
             if (outcome.Branch.Length > 0)
             {
-                await MeasureQualityAsync(task, clone, baseSha, outcome.Branch, artifacts.LoadPlanState()?.Current ?? planned.Contract, runId, policy, judge, ct);
+                judgeTime = await MeasureQualityAsync(task, clone, baseSha, outcome.Branch, artifacts.LoadPlanState()?.Current ?? planned.Contract, runId, policy, judge, ct);
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
@@ -253,7 +254,7 @@ public sealed class BenchRunner(
             Accepted = accepted,
             Usd = (run?.TotalUsd ?? 0) + sharedPlanUsd,
             CostSource = run?.CostSource ?? CostSource.Estimated,
-            Duration = _clock.UtcNow - started,
+            Duration = _clock.UtcNow - started - judgeTime,
             Note = string.IsNullOrEmpty(note) ? null : note,
         };
     }
@@ -343,7 +344,7 @@ public sealed class BenchRunner(
     /// final plan never named (tests excluded), and optionally an independent review of the diff against the task
     /// alone. Stored as a <c>bench_quality</c> event; the judge's tokens are never charged to the trial.
     /// </summary>
-    private async Task MeasureQualityAsync(
+    private async Task<TimeSpan> MeasureQualityAsync(
         BenchTask task, string clone, string baseSha, string branch, Contract plan, string runId, Policy policy, bool judge, CancellationToken ct)
     {
         var changed = (await _git.RunAsync(clone, ["diff", "--name-only", "--no-renames", baseSha, branch], ct))
@@ -361,6 +362,7 @@ public sealed class BenchRunner(
         IReadOnlyList<string> concerns = [];
         decimal judgeUsd = 0;
         long judgeTokens = 0;
+        var judgeStarted = _clock.UtcNow;
         if (judge && provider is not null)
         {
             var patch = await _git.RunAsync(clone, ["diff", "--no-renames", baseSha, branch], ct);
@@ -388,7 +390,9 @@ public sealed class BenchRunner(
             concerns,
             judge_usd = judgeUsd,
             judge_tokens = judgeTokens,
+            judge_seconds = (int)(_clock.UtcNow - judgeStarted).TotalSeconds,
         }));
+        return judge ? _clock.UtcNow - judgeStarted : TimeSpan.Zero;
     }
 
     private void WriteManifest(string benchId, Taskset taskset, TokonomyConfig config, BenchOptions options, IReadOnlyList<BenchTask> tasks, int trials)

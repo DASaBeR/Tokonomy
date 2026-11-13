@@ -121,6 +121,18 @@ Both strategies passed every trial on 7 of the 8 tasks (3/3 each). `ttl-cache` i
 Needed before any public claim: harder tasks where the cheap worker fails, more than one repository, a second executor, and more repeats.
 
 
+## Results: strategy 4 vs strategy 5 (2026-11-13)
+
+> **Four tasks, one repeat, subscriptions (Opus plans and supervises, Gemini 3.8 Flash writes code).** Full report,
+> methodology and raw data: [benchmarks/2026-11-13-strategy-4-vs-5](benchmarks/2026-11-13-strategy-4-vs-5/README.md).
+
+On `examples/tasks-adaptive.yaml` (tasks with a planted false assumption), with the same plan executed by both
+strategies, both passed 4/4 hidden acceptance tests with no unplanned changes. Strategy 5 cost 16% more per task
+($0.828 vs $0.713, API-equivalent) and took 37% longer to execute. The planner removed every planted assumption itself,
+so strategy 5 never intervened (0 blocker reports, 0 interventions, 0 plan revisions). The benchmark therefore shows
+strategy 5's overhead, not its value. **Strategy 5 stays opt-in.** The legacy planner also passed 4/4, at 11% lower
+cost per task: its planning was 4.7× cheaper, but its worker needed 44% more cost and time.
+
 ## Results so far: Claude Opus + Gemini Flash on subscriptions (pilot)
 
 > **A pilot on tasks that turned out to be easy for Opus.** Two tasks, one trial per cell, run on 2026-11-10. It checks the setup and gives a first look at token use; it does not test whether supervision pays off.

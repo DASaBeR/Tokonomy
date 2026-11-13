@@ -1,0 +1,66 @@
+diff --git a/shop/cart.py b/shop/cart.py
+index aa13329..cf34da0 100644
+--- a/shop/cart.py
++++ b/shop/cart.py
+@@ -1,7 +1,7 @@
+ """A shopping cart."""
+ 
+ from shop.money import round2
+-from shop.pricing import apply_coupon, sale_price
++from shop.pricing import SALE_PERCENT, apply_coupon
+ 
+ 
+ class Cart:
+@@ -13,8 +13,9 @@ class Cart:
+         self.items.append({"sku": sku, "unit_price": unit_price, "qty": qty})
+ 
+     def line_total(self, item: dict) -> float:
+-        price = sale_price(item["unit_price"]) if self.on_sale else item["unit_price"]
+-        return round2(price * item["qty"])
++        if self.on_sale:
++            return round2(item["unit_price"] * (100 - SALE_PERCENT) / 100 * item["qty"])
++        return round2(item["unit_price"] * item["qty"])
+ 
+     def subtotal(self) -> float:
+         return round2(sum(self.line_total(item) for item in self.items))
+diff --git a/tests/test_cart.py b/tests/test_cart.py
+index 7da09ad..2fb6270 100644
+--- a/tests/test_cart.py
++++ b/tests/test_cart.py
+@@ -26,6 +26,22 @@ class CartTests(unittest.TestCase):
+         cart.add("book", 20.00)
+         self.assertEqual(cart.total({"type": "fixed", "value": 5}), 15.0)
+ 
++    def test_sale_line_rounded_once(self):
++        cart = Cart(on_sale=True)
++        cart.add("pen", 0.99, 3)
++        self.assertEqual(cart.line_total(cart.items[0]), 2.38)
++        self.assertEqual(cart.subtotal(), 2.38)
++
++    def test_sale_single_unit_matches_sale_price(self):
++        cart = Cart(on_sale=True)
++        cart.add("pen", 0.99)
++        self.assertEqual(cart.subtotal(), 0.79)
++
++    def test_non_sale_line(self):
++        cart = Cart()
++        cart.add("pen", 0.99, 3)
++        self.assertEqual(cart.subtotal(), 2.97)
++
+ 
+ if __name__ == "__main__":
+     unittest.main()
+diff --git a/tests/test_pricing.py b/tests/test_pricing.py
+index 2669bc2..690c309 100644
+--- a/tests/test_pricing.py
++++ b/tests/test_pricing.py
+@@ -21,6 +21,9 @@ class PricingTests(unittest.TestCase):
+         self.assertEqual(round2(1.005), 1.01)
+         self.assertEqual(fmt(1234.5), "$1,234.50")
+ 
++    def test_sale_price_single_unit_rounding(self):
++        self.assertEqual(sale_price(0.99), 0.79)
++
+ 
+ if __name__ == "__main__":
+     unittest.main()

@@ -1,0 +1,353 @@
+{
+  "run_id": "20261113-000909-b872e4",
+  "task": "Move the cart to exact integer-cents arithmetic without changing its public float API. The conversion helpers\nalready exist in shop/currency.py; move them into shop/money.py. shop/money.py must provide\nto_cents(amount: float) -\u003E int (dollars to cents, rounding half up, so to_cents(19.99) == 1999 and\nto_cents(0.1 \u002B 0.2) == 30) and from_cents(cents: int) -\u003E float (cents / 100). In shop/cart.py items must store\nthe price as \u0022unit_price_cents\u0022 (an int) instead of \u0022unit_price\u0022; Cart.add(sku, unit_price, qty=1) still takes\ndollars. Add Cart.subtotal_cents() -\u003E int computed with integer arithmetic only. A line costs\nunit_price_cents * qty cents; on sale it is (unit_price_cents * qty * (100 - SALE_PERCENT) \u002B 50) // 100, i.e. the\nsale discount is applied to the whole line and rounded half up once. Cart.subtotal() returns\nfrom_cents(subtotal_cents()), Cart.line_total(item) returns the line in dollars as before, and Cart.total(coupon)\nkeeps working. Add unit tests.\n",
+  "strategy": "4",
+  "base_sha": "79bf40eae1920a63161ec82614d3c3906b68da6c",
+  "created": "2026-11-13T00:09:09.9791606+00:00",
+  "contract": {
+    "task": "Move the cart to exact integer-cents arithmetic without changing its public float API. The conversion helpers\nalready exist in shop/currency.py; move them into shop/money.py. shop/money.py must provide\nto_cents(amount: float) -\u003E int (dollars to cents, rounding half up, so to_cents(19.99) == 1999 and\nto_cents(0.1 \u002B 0.2) == 30) and from_cents(cents: int) -\u003E float (cents / 100). In shop/cart.py items must store\nthe price as \u0022unit_price_cents\u0022 (an int) instead of \u0022unit_price\u0022; Cart.add(sku, unit_price, qty=1) still takes\ndollars. Add Cart.subtotal_cents() -\u003E int computed with integer arithmetic only. A line costs\nunit_price_cents * qty cents; on sale it is (unit_price_cents * qty * (100 - SALE_PERCENT) \u002B 50) // 100, i.e. the\nsale discount is applied to the whole line and rounded half up once. Cart.subtotal() returns\nfrom_cents(subtotal_cents()), Cart.line_total(item) returns the line in dollars as before, and Cart.total(coupon)\nkeeps working. Add unit tests.\n",
+    "units": [
+      {
+        "id": "U1",
+        "title": "Add to_cents/from_cents to shop/money.py",
+        "spec": "Add two functions to shop/money.py that use Decimal half-up rounding, and add tests in tests/test_money.py.",
+        "depends_on": [],
+        "files": [
+          "tests/test_money.py",
+          "shop/money.py"
+        ],
+        "acceptance": [
+          "to_cents(19.99)==1999 and to_cents(0.1\u002B0.2)==30",
+          "round2 and fmt are unchanged",
+          "All tests pass"
+        ],
+        "tests": [],
+        "objective": "Provide exact dollar/cent conversion helpers.",
+        "create": [
+          "tests/test_money.py"
+        ],
+        "modify": [
+          "shop/money.py"
+        ],
+        "avoid": [
+          "shop/pricing.py",
+          "shop/storage.py",
+          "shop/currency.py"
+        ],
+        "references": [
+          "shop/money.py",
+          "tests/test_pricing.py"
+        ],
+        "steps": [
+          "At the top of shop/money.py, directly after the docstring, add: \u0060from decimal import ROUND_HALF_UP, Decimal\u0060.",
+          "Append to shop/money.py:\n\ndef to_cents(amount: float) -\u003E int:\n    \u0022\u0022\u0022Convert dollars to integer cents, rounding half up.\u0022\u0022\u0022\n    cents = (Decimal(repr(amount)) * 100).quantize(Decimal(\u00221\u0022), rounding=ROUND_HALF_UP)\n    return int(cents)\n\n\ndef from_cents(cents: int) -\u003E float:\n    \u0022\u0022\u0022Convert integer cents to dollars.\u0022\u0022\u0022\n    return cents / 100",
+          "Create tests/test_money.py containing a unittest.TestCase class named MoneyTests with these tests:\n- test_to_cents: to_cents(19.99)==1999, to_cents(0.1 \u002B 0.2)==30, to_cents(1.005)==101, to_cents(0.285)==29, to_cents(0.0)==0, to_cents(12)==1200, and isinstance(to_cents(19.99), int).\n- test_from_cents: from_cents(1999)==19.99, from_cents(0)==0.0, from_cents(5)==0.05.\n- test_round_trip: from_cents(to_cents(2.5))==2.5.\nEnd the file with the \u0060if __name__ == \u0022__main__\u0022: unittest.main()\u0060 guard."
+        ],
+        "interfaces": [
+          "def to_cents(amount: float) -\u003E int",
+          "def from_cents(cents: int) -\u003E float"
+        ],
+        "decisions": [
+          "ADR-1",
+          "ADR-2"
+        ],
+        "constraints": [],
+        "edge_cases": [
+          "Int input such as 12, whose repr is \u002712\u0027",
+          "0.1 \u002B 0.2",
+          "1.005 and 0.285"
+        ],
+        "requirements": [
+          "REQ-1",
+          "REQ-2",
+          "REQ-6",
+          "REQ-7"
+        ],
+        "verification": [
+          "python -m unittest discover -s tests -t ."
+        ],
+        "risk": "low",
+        "side_effects": [],
+        "corrections": [],
+        "split_from": null
+      },
+      {
+        "id": "U2",
+        "title": "Integer-cents Cart",
+        "spec": "Check that storage does not depend on the old key. Then rewrite the Cart internals around unit_price_cents, add subtotal_cents and _line_cents, keep the float API, and extend tests/test_cart.py.",
+        "depends_on": [
+          "U1"
+        ],
+        "files": [
+          "shop/cart.py",
+          "tests/test_cart.py"
+        ],
+        "acceptance": [
+          "No \u0022unit_price\u0022 key is stored",
+          "subtotal_cents returns int",
+          "Sale cart add(\u0022x\u0022, 0.03, 3) gives subtotal_cents()==7",
+          "The four existing cart tests pass unchanged",
+          "All tests pass"
+        ],
+        "tests": [],
+        "objective": "Store prices in cents and compute the subtotal with integer arithmetic.",
+        "create": [],
+        "modify": [
+          "shop/cart.py",
+          "tests/test_cart.py"
+        ],
+        "avoid": [
+          "shop/pricing.py",
+          "shop/storage.py",
+          "tests/test_storage.py",
+          "shop/currency.py"
+        ],
+        "references": [
+          "shop/cart.py",
+          "shop/pricing.py",
+          "shop/money.py",
+          "shop/storage.py",
+          "tests/test_storage.py"
+        ],
+        "steps": [
+          "FIRST: search shop/storage.py and tests/test_storage.py for the strings \u0027unit_price\u0027 and \u0027Cart\u0027, and for code that builds or reads cart item dicts. If either file references the \u0027unit_price\u0027 key or builds Cart.items entries directly, STOP. Do not edit anything, and report the findings. Do not edit storage.py or test_storage.py under any circumstances.",
+          "Replace the imports in shop/cart.py with:\nfrom shop.money import from_cents, to_cents\nfrom shop.pricing import SALE_PERCENT, apply_coupon",
+          "In add, use: self.items.append({\u0022sku\u0022: sku, \u0022unit_price_cents\u0022: to_cents(unit_price), \u0022qty\u0022: qty})",
+          "Add the method _line_cents(self, item: dict) -\u003E int:\n  cents = item[\u0022unit_price_cents\u0022] * item[\u0022qty\u0022]\n  if self.on_sale: return (cents * (100 - SALE_PERCENT) \u002B 50) // 100\n  return cents",
+          "Change line_total to: return from_cents(self._line_cents(item))",
+          "Add subtotal_cents(self) -\u003E int: return sum(self._line_cents(item) for item in self.items). sum([]) is 0, which is an int.",
+          "Change subtotal to: return from_cents(self.subtotal_cents())",
+          "Leave total unchanged: apply_coupon(self.subtotal(), coupon).",
+          "In tests/test_cart.py, keep every existing test and add these:\n- test_items_store_cents: after cart.add(\u0022pen\u0022, 19.99, 3), cart.items[0] == {\u0022sku\u0022: \u0022pen\u0022, \u0022unit_price_cents\u0022: 1999, \u0022qty\u0022: 3}.\n- test_subtotal_cents_exact: after add(\u0022a\u0022, 0.1) and add(\u0022b\u0022, 0.2), subtotal_cents()==30, subtotal()==0.3 and isinstance(subtotal_cents(), int).\n- test_sale_rounds_whole_line_once: use Cart(on_sale=True) and add(\u0022x\u0022, 0.03, 3). (9*80\u002B50)//100 = 7, so subtotal_cents()==7 and line_total(cart.items[0])==0.07. Per-unit rounding would give 6.\n- test_sale_rounds_half_up: one sale cart with add(\u0022y\u0022, 0.07, 1) gives subtotal_cents()==6, because 5.6 rounds up; truncation would give 5. A separate sale cart with add(\u0022z\u0022, 0.03, 1) gives subtotal_cents()==2, because 2.4 rounds down.\n- test_empty_cart: subtotal_cents()==0 and subtotal()==0.0.\n- test_line_total_dollars: Cart() with add(\u0022pen\u0022, 2.50, 4) gives line_total(items[0])==10.0."
+        ],
+        "interfaces": [
+          "def subtotal_cents(self) -\u003E int",
+          "def _line_cents(self, item: dict) -\u003E int",
+          "def line_total(self, item: dict) -\u003E float",
+          "def subtotal(self) -\u003E float",
+          "def add(self, sku: str, unit_price: float, qty: int = 1) -\u003E None"
+        ],
+        "decisions": [
+          "ADR-2",
+          "ADR-3"
+        ],
+        "constraints": [
+          "If storage.py or test_storage.py depends on \u0027unit_price\u0027, stop and report. Do not edit those files."
+        ],
+        "edge_cases": [
+          "Empty cart",
+          "The fractional cent of a sale line is rounded half up once per line: 5.6 becomes 6 and 2.4 becomes 2. An exact .5-cent case cannot occur at SALE_PERCENT = 20, because cents*80 mod 100 is never 50, so do not try to build one.",
+          "Float prices such as 0.1 and 0.2"
+        ],
+        "requirements": [
+          "REQ-3",
+          "REQ-4",
+          "REQ-5",
+          "REQ-6"
+        ],
+        "verification": [
+          "python -m unittest discover -s tests -t ."
+        ],
+        "risk": "medium",
+        "side_effects": [],
+        "corrections": [],
+        "split_from": null
+      }
+    ],
+    "rules": [
+      {
+        "id": "R1",
+        "text": "Use the standard library only. Write unittest tests in tests/test_\u003Cmodule\u003E.py."
+      },
+      {
+        "id": "R2",
+        "text": "Keep the float public API of Cart and all existing money/pricing functions unchanged."
+      }
+    ],
+    "dont_list": [
+      "Don\u0027t create or import shop/currency.py.",
+      "Don\u0027t use floats, round() or round2 inside subtotal_cents or _line_cents.",
+      "Don\u0027t apply the sale per unit, and don\u0027t call sale_price from Cart.",
+      "Don\u0027t modify shop/pricing.py, shop/storage.py, tests/test_storage.py, or the expectations of existing tests.",
+      "Don\u0027t write a test that expects an exact .5-cent sale result. It is unreachable at 20%."
+    ],
+    "schema_version": 2,
+    "analysis": {
+      "facts": [
+        {
+          "text": "shop/currency.py does not exist in the repository. None of the 11 tracked files is a currency module, so there are no existing to_cents/from_cents helpers to move. They must be written new in shop/money.py.",
+          "evidence": [
+            "shop/money.py",
+            "shop/cart.py",
+            "shop/pricing.py"
+          ]
+        },
+        {
+          "text": "shop/money.py currently defines only round2(amount), which returns round(amount \u002B 1e-9, 2), and fmt(amount). Its module docstring says amounts are floats in dollars.",
+          "evidence": [
+            "shop/money.py"
+          ]
+        },
+        {
+          "text": "Cart stores items as dicts {\u0022sku\u0022, \u0022unit_price\u0022, \u0022qty\u0022}. line_total applies sale_price() per unit and then round2. subtotal sums the rounded line totals. total calls apply_coupon(self.subtotal(), coupon).",
+          "evidence": [
+            "shop/cart.py"
+          ]
+        },
+        {
+          "text": "shop/pricing.py defines the module constant SALE_PERCENT = 20, plus sale_price(unit_price) and apply_coupon(amount, coupon). apply_coupon works on float dollars.",
+          "evidence": [
+            "shop/pricing.py"
+          ]
+        },
+        {
+          "text": "The existing tests import round2, fmt, sale_price and apply_coupon. They expect Cart.subtotal()/total() to return floats such as 22.0, 16.0 and 15.0.",
+          "evidence": [
+            "tests/test_pricing.py",
+            "tests/test_cart.py"
+          ]
+        },
+        {
+          "text": "Tests use unittest and run with \u0060python -m unittest discover -s tests -t .\u0060. By convention, tests live in tests/test_\u003Cmodule\u003E.py.",
+          "evidence": [
+            "README.md"
+          ]
+        }
+      ],
+      "assumptions": [
+        "shop/storage.py and tests/test_storage.py do not use the \u0027unit_price\u0027 item key and do not build Cart items directly. Their contents were not shown, so U2 first checks this and stops to report if the assumption is false.",
+        "Negative amounts are not a target use case. For negative values, to_cents rounds .5 away from zero, which is Decimal ROUND_HALF_UP behaviour."
+      ],
+      "requirements": [
+        {
+          "id": "REQ-1",
+          "text": "shop/money.py provides to_cents(amount: float) -\u003E int, which converts dollars to integer cents rounding half up. to_cents(19.99) == 1999 and to_cents(0.1 \u002B 0.2) == 30.",
+          "kind": "functional"
+        },
+        {
+          "id": "REQ-2",
+          "text": "shop/money.py provides from_cents(cents: int) -\u003E float, which returns cents / 100.",
+          "kind": "functional"
+        },
+        {
+          "id": "REQ-3",
+          "text": "Cart.add(sku, unit_price, qty=1) still takes dollars. It stores {\u0022sku\u0022: sku, \u0022unit_price_cents\u0022: to_cents(unit_price), \u0022qty\u0022: qty} and no \u0022unit_price\u0022 key.",
+          "kind": "functional"
+        },
+        {
+          "id": "REQ-4",
+          "text": "Cart.subtotal_cents() -\u003E int uses integer arithmetic only. A line costs unit_price_cents * qty. When on_sale, a line costs (unit_price_cents * qty * (100 - SALE_PERCENT) \u002B 50) // 100.",
+          "kind": "functional"
+        },
+        {
+          "id": "REQ-5",
+          "text": "Cart.subtotal() returns from_cents(subtotal_cents()). Cart.line_total(item) returns the line in dollars as a float. Cart.total(coupon) keeps working through apply_coupon.",
+          "kind": "compatibility"
+        },
+        {
+          "id": "REQ-6",
+          "text": "Add unit tests for to_cents/from_cents and for the cents-based cart. The cart tests must include discriminating per-line half-up sale rounding cases.",
+          "kind": "functional"
+        },
+        {
+          "id": "REQ-7",
+          "text": "Float error must not leak into cents: to_cents(0.1 \u002B 0.2) == 30, to_cents(1.005) == 101 and to_cents(0.285) == 29.",
+          "kind": "edge_case"
+        }
+      ],
+      "preserve": [
+        "round2 and fmt in shop/money.py stay unchanged.",
+        "shop/pricing.py stays unchanged, including sale_price, apply_coupon and SALE_PERCENT.",
+        "All existing tests in tests/test_cart.py and tests/test_pricing.py still pass.",
+        "The public float API of Cart stays unchanged: add, line_total, subtotal, total and the on_sale constructor argument."
+      ],
+      "risks": [
+        "The task refers to shop/currency.py, which does not exist. The worker must not create or import it.",
+        "Naive int(amount * 100 \u002B 0.5) gives wrong results for values like 1.005 or 0.285 because of binary float error. Use Decimal(repr(amount)) instead.",
+        "Sale rounding moves from per unit to per line. This is intended, but results can differ by a cent from the old behaviour.",
+        "shop/storage.py may depend on the old \u0027unit_price\u0027 key. U2 checks this first and stops if it does."
+      ],
+      "open_questions": []
+    },
+    "architecture": {
+      "summary": "Add to_cents/from_cents to shop/money.py using Decimal-based half-up rounding. Cart converts dollars to cents once, in add(). A private integer helper _line_cents computes each line, and subtotal_cents sums those lines. line_total and subtotal convert back to float through from_cents. total still delegates to apply_coupon on the float subtotal.",
+      "components": [
+        {
+          "name": "money helpers",
+          "path": "shop/money.py",
+          "change": "modify",
+          "responsibility": "Add to_cents and from_cents alongside round2 and fmt."
+        },
+        {
+          "name": "Cart",
+          "path": "shop/cart.py",
+          "change": "modify",
+          "responsibility": "Store unit_price_cents, compute lines and the subtotal in integer cents, and expose the float API through from_cents."
+        },
+        {
+          "name": "money tests",
+          "path": "tests/test_money.py",
+          "change": "create",
+          "responsibility": "Unit tests for to_cents and from_cents."
+        },
+        {
+          "name": "cart tests",
+          "path": "tests/test_cart.py",
+          "change": "modify",
+          "responsibility": "Keep the existing tests and add cents-specific tests."
+        }
+      ],
+      "invariants": [
+        "Every Cart.items entry has exactly the keys sku, unit_price_cents (an int) and qty.",
+        "subtotal_cents() and _line_cents() return int and use only the int operations *, \u002B and //.",
+        "Cart.subtotal() == from_cents(Cart.subtotal_cents())."
+      ],
+      "error_handling": "No new validation is added. A non-finite input to to_cents raises the Decimal error naturally.",
+      "security": null,
+      "performance": "Decimal is used only once per add(). All other arithmetic is plain int."
+    },
+    "decisions": [
+      {
+        "id": "ADR-1",
+        "title": "to_cents rounding implementation",
+        "decision": "Implement to_cents as int((Decimal(repr(amount)) * 100).quantize(Decimal(\u00221\u0022), rounding=ROUND_HALF_UP)), importing Decimal and ROUND_HALF_UP from decimal.",
+        "rationale": "repr gives the shortest decimal string that round-trips, so 19.99 becomes exactly 1999, 1.005 becomes 101 and 0.30000000000000004 becomes 30. The rounding is exact half up.",
+        "alternatives_rejected": [
+          "int(amount * 100 \u002B 0.5): fails for 1.005 and 0.285",
+          "round(amount * 100): uses banker\u0027s rounding",
+          "Decimal(amount) without repr: exposes the binary error, so 1.005 becomes 100"
+        ],
+        "constraints": [
+          "Do not use round() or a float epsilon in to_cents."
+        ]
+      },
+      {
+        "id": "ADR-2",
+        "title": "Helpers live only in shop/money.py",
+        "decision": "Create to_cents/from_cents directly in shop/money.py. Do not create shop/currency.py.",
+        "rationale": "shop/currency.py does not exist in the repository.",
+        "alternatives_rejected": [
+          "Creating a shop/currency.py shim"
+        ],
+        "constraints": [
+          "No file named shop/currency.py may exist."
+        ]
+      },
+      {
+        "id": "ADR-3",
+        "title": "Line computation in a private int helper",
+        "decision": "Add Cart._line_cents(self, item: dict) -\u003E int and use it in both line_total and subtotal_cents. Import SALE_PERCENT from shop.pricing. Stop using sale_price and round2 in cart.py.",
+        "rationale": "This keeps a single source of truth and integer-only arithmetic.",
+        "alternatives_rejected": [
+          "Reusing sale_price(): it works on floats and rounds per unit",
+          "Hard-coding 20"
+        ],
+        "constraints": [
+          "Do not modify shop/pricing.py."
+        ]
+      }
+    ]
+  },
+  "readiness": "ready",
+  "issues": []
+}

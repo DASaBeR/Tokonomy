@@ -1,0 +1,210 @@
+diff --git a/shop/lru.py b/shop/lru.py
+new file mode 100644
+index 0000000..5fea06f
+--- /dev/null
++++ b/shop/lru.py
+@@ -0,0 +1,52 @@
++"""Recency-ordered map backed by collections.OrderedDict."""
++
++from collections import OrderedDict
++
++
++class LRU:
++    """A plain recency-ordered map backed by collections.OrderedDict."""
++
++    def __init__(self):
++        """Initialize an empty LRU mapping."""
++        self._data = OrderedDict()
++
++    def put(self, key, value) -> None:
++        """Insert or replace the value and mark the key most recently used."""
++        self._data[key] = value
++        self._data.move_to_end(key)
++
++    def get(self, key, default=None):
++        """Return the value for key and mark it most recently used, or default if missing."""
++        if key in self._data:
++            self._data.move_to_end(key)
++            return self._data[key]
++        return default
++
++    def peek(self, key, default=None):
++        """Return the value for key without changing recency order, or default if missing."""
++        if key in self._data:
++            return self._data[key]
++        return default
++
++    def remove(self, key) -> bool:
++        """Delete key. Return True if it was present, otherwise False."""
++        if key in self._data:
++            del self._data[key]
++            return True
++        return False
++
++    def pop_lru(self) -> tuple:
++        """Remove and return (key, value) for the least recently used entry. Raise KeyError if empty."""
++        return self._data.popitem(last=False)
++
++    def keys(self) -> list:
++        """Return a snapshot list of keys, least recent first."""
++        return list(self._data.keys())
++
++    def __len__(self) -> int:
++        """Return the number of entries in the LRU."""
++        return len(self._data)
++
++    def __contains__(self, key) -> bool:
++        """Return True if the key is present without changing the recency order."""
++        return key in self._data
+diff --git a/tests/test_lru.py b/tests/test_lru.py
+new file mode 100644
+index 0000000..cedf764
+--- /dev/null
++++ b/tests/test_lru.py
+@@ -0,0 +1,146 @@
++import unittest
++
++from shop.lru import LRU
++
++
++class LRUTests(unittest.TestCase):
++    def test_put_get_round_trip(self):
++        lru = LRU()
++        lru.put("a", 1)
++        lru.put("b", 2)
++        self.assertEqual(lru.get("a"), 1)
++        self.assertEqual(lru.get("b"), 2)
++        self.assertEqual(len(lru), 2)
++        self.assertIn("a", lru)
++        self.assertIn("b", lru)
++        self.assertNotIn("c", lru)
++
++    def test_get_missing_key_returns_default(self):
++        lru = LRU()
++        lru.put("a", 1)
++        self.assertIsNone(lru.get("missing"))
++        self.assertEqual(lru.get("missing", "fallback"), "fallback")
++        self.assertEqual(lru.get("missing", 42), 42)
++
++    def test_get_moves_key_to_most_recent(self):
++        lru = LRU()
++        lru.put("a", 1)
++        lru.put("b", 2)
++        lru.put("c", 3)
++        self.assertEqual(lru.keys(), ["a", "b", "c"])
++
++        val = lru.get("a")
++        self.assertEqual(val, 1)
++        self.assertEqual(lru.keys(), ["b", "c", "a"])
++        self.assertEqual(lru.pop_lru(), ("b", 2))
++        self.assertEqual(lru.keys(), ["c", "a"])
++
++        self.assertEqual(lru.get("c"), 3)
++        self.assertEqual(lru.keys(), ["a", "c"])
++        self.assertEqual(lru.pop_lru(), ("a", 1))
++        self.assertEqual(lru.pop_lru(), ("c", 3))
++
++    def test_peek_does_not_reorder(self):
++        lru = LRU()
++        lru.put("a", 1)
++        lru.put("b", 2)
++        lru.put("c", 3)
++        self.assertEqual(lru.keys(), ["a", "b", "c"])
++
++        self.assertEqual(lru.peek("a"), 1)
++        self.assertEqual(lru.keys(), ["a", "b", "c"])
++
++        self.assertEqual(lru.peek("b"), 2)
++        self.assertEqual(lru.keys(), ["a", "b", "c"])
++
++        self.assertEqual(lru.peek("missing", "default_val"), "default_val")
++        self.assertIsNone(lru.peek("missing"))
++        self.assertEqual(lru.keys(), ["a", "b", "c"])
++
++        self.assertEqual(lru.pop_lru(), ("a", 1))
++        self.assertEqual(lru.keys(), ["b", "c"])
++
++    def test_put_existing_key_replaces_value_and_moves_to_most_recent(self):
++        lru = LRU()
++        lru.put("a", 1)
++        lru.put("b", 2)
++        lru.put("c", 3)
++        self.assertEqual(lru.keys(), ["a", "b", "c"])
++
++        lru.put("a", 100)
++        self.assertEqual(lru.get("a"), 100)
++        self.assertEqual(len(lru), 3)
++        self.assertEqual(lru.keys(), ["b", "c", "a"])
++        self.assertEqual(lru.pop_lru(), ("b", 2))
++        self.assertEqual(lru.keys(), ["c", "a"])
++
++    def test_remove_returns_true_false(self):
++        lru = LRU()
++        lru.put("a", 1)
++        lru.put("b", 2)
++        self.assertTrue(lru.remove("a"))
++        self.assertFalse(lru.remove("a"))
++        self.assertFalse(lru.remove("nonexistent"))
++        self.assertNotIn("a", lru)
++        self.assertEqual(len(lru), 1)
++        self.assertEqual(lru.keys(), ["b"])
++
++    def test_pop_lru_empty_raises_key_error(self):
++        lru = LRU()
++        with self.assertRaises(KeyError):
++            lru.pop_lru()
++
++        lru.put("x", 10)
++        self.assertEqual(lru.pop_lru(), ("x", 10))
++        with self.assertRaises(KeyError):
++            lru.pop_lru()
++
++    def test_none_stored_and_returned(self):
++        lru = LRU()
++        lru.put("null_key", None)
++        self.assertIn("null_key", lru)
++        self.assertEqual(len(lru), 1)
++        self.assertIsNone(lru.get("null_key", "default"))
++        self.assertIsNone(lru.peek("null_key", "default"))
++        self.assertEqual(lru.pop_lru(), ("null_key", None))
++        self.assertEqual(len(lru), 0)
++        self.assertNotIn("null_key", lru)
++
++    def test_two_instances_do_not_share_state(self):
++        lru1 = LRU()
++        lru2 = LRU()
++        lru1.put("k", "v1")
++        self.assertIn("k", lru1)
++        self.assertNotIn("k", lru2)
++        self.assertEqual(len(lru1), 1)
++        self.assertEqual(len(lru2), 0)
++
++        lru2.put("k", "v2")
++        self.assertEqual(lru1.get("k"), "v1")
++        self.assertEqual(lru2.get("k"), "v2")
++
++        lru1.remove("k")
++        self.assertNotIn("k", lru1)
++        self.assertIn("k", lru2)
++        self.assertEqual(lru2.get("k"), "v2")
++
++    def test_contains_does_not_reorder(self):
++        lru = LRU()
++        lru.put("a", 1)
++        lru.put("b", 2)
++        self.assertTrue("a" in lru)
++        self.assertFalse("c" in lru)
++        self.assertEqual(lru.keys(), ["a", "b"])
++
++    def test_keys_returns_snapshot(self):
++        lru = LRU()
++        lru.put("a", 1)
++        snapshot = lru.keys()
++        self.assertEqual(snapshot, ["a"])
++        lru.put("b", 2)
++        self.assertEqual(snapshot, ["a"])
++        self.assertEqual(lru.keys(), ["a", "b"])
++
++
++if __name__ == "__main__":
++    unittest.main()

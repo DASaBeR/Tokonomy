@@ -1,0 +1,348 @@
+{
+  "run_id": "20261112-235824-6a1a03",
+  "task": "Let Cart.total accept several coupons: total(coupons=None) where coupons is None, a single coupon dict (as\ntoday) or a list of coupon dicts. Reuse shop.pricing.apply_coupons(amount, coupons), which already accepts a\nlist. Rules: (1) an empty cart totals 0.0 whatever the coupons; (2) at most one percent coupon applies, the one\nwith the highest value, other percent coupons are ignored; (3) the percent coupon applies first and then every\nfixed coupon is subtracted in the order given, regardless of the order of the list; (4) the result is never\nbelow 0.0; (5) a coupon with an unknown type raises ValueError (same message as shop.pricing.apply_coupon);\n(6) do not modify the list you are given. Example: subtotal 100 with [fixed 5, percent 10] is 85.0. Add unit tests.\n",
+  "strategy": "4",
+  "base_sha": "489eeca10ccb764b7da06696ed7d4a936771ba6c",
+  "created": "2026-11-12T23:58:24.115317+00:00",
+  "contract": {
+    "task": "Let Cart.total accept several coupons: total(coupons=None) where coupons is None, a single coupon dict (as\ntoday) or a list of coupon dicts. Reuse shop.pricing.apply_coupons(amount, coupons), which already accepts a\nlist. Rules: (1) an empty cart totals 0.0 whatever the coupons; (2) at most one percent coupon applies, the one\nwith the highest value, other percent coupons are ignored; (3) the percent coupon applies first and then every\nfixed coupon is subtracted in the order given, regardless of the order of the list; (4) the result is never\nbelow 0.0; (5) a coupon with an unknown type raises ValueError (same message as shop.pricing.apply_coupon);\n(6) do not modify the list you are given. Example: subtotal 100 with [fixed 5, percent 10] is 85.0. Add unit tests.\n",
+    "units": [
+      {
+        "id": "U1",
+        "title": "Add pricing.apply_coupons with tests",
+        "spec": "Add apply_coupons below apply_coupon in shop/pricing.py and add tests to tests/test_pricing.py.",
+        "depends_on": [],
+        "files": [
+          "shop/pricing.py",
+          "tests/test_pricing.py"
+        ],
+        "acceptance": [
+          "apply_coupons(100.0, [{\u0022type\u0022:\u0022fixed\u0022,\u0022value\u0022:5},{\u0022type\u0022:\u0022percent\u0022,\u0022value\u0022:10}]) == 85.0",
+          "All tests pass"
+        ],
+        "tests": [],
+        "objective": "Provide a multi-coupon pricing function that follows rules 2-6.",
+        "create": [],
+        "modify": [
+          "shop/pricing.py",
+          "tests/test_pricing.py"
+        ],
+        "avoid": [
+          "shop/money.py",
+          "shop/storage.py",
+          ".tokonomy/"
+        ],
+        "references": [
+          "shop/pricing.py",
+          "shop/money.py"
+        ],
+        "steps": [
+          "In shop/pricing.py, after apply_coupon, add \u0060def apply_coupons(amount: float, coupons) -\u003E float:\u0060 with a docstring that explains the rules.",
+          "Body: \u0060if coupons is None: coupons = []\u0060. Then \u0060for coupon in coupons: if coupon[\u0022type\u0022] not in (\u0022percent\u0022, \u0022fixed\u0022): raise ValueError(f\u0022unknown coupon type: {coupon[\u0027type\u0027]}\u0022)\u0060.",
+          "\u0060percents = [c for c in coupons if c[\u0022type\u0022] == \u0022percent\u0022]\u0060 and \u0060fixeds = [c for c in coupons if c[\u0022type\u0022] == \u0022fixed\u0022]\u0060.",
+          "\u0060if percents: amount = apply_coupon(amount, max(percents, key=lambda c: c[\u0022value\u0022]))\u0060.",
+          "\u0060for coupon in fixeds: amount = apply_coupon(amount, coupon)\u0060.",
+          "\u0060return max(0.0, amount)\u0060.",
+          "In tests/test_pricing.py, import apply_coupons and add these tests: test_apply_coupons_none_and_empty (None and [] on 100.0 give 100.0); test_apply_coupons_percent_before_fixed ([fixed 5, percent 10] on 100.0 gives 85.0); test_apply_coupons_best_percent_only ([percent 10, percent 30, percent 20] on 100.0 gives 70.0); test_apply_coupons_fixed_in_order ([fixed 5, fixed 3] on 100.0 gives 92.0); test_apply_coupons_floor_zero ([fixed 150] on 100.0 gives 0.0); test_apply_coupons_unknown_type (assertRaisesRegex(ValueError, \u0027unknown coupon type: bogus\u0027) for [fixed 1, {type bogus}]); test_apply_coupons_does_not_mutate (a list copy compared before and after the call, including that the dicts are unchanged)."
+        ],
+        "interfaces": [
+          "def apply_coupons(amount: float, coupons) -\u003E float"
+        ],
+        "decisions": [
+          "ADR-1",
+          "ADR-2"
+        ],
+        "constraints": [
+          "Do not change apply_coupon or sale_price"
+        ],
+        "edge_cases": [
+          "None coupons",
+          "empty list",
+          "multiple percents with equal value",
+          "fixed total above amount",
+          "unknown type mixed with valid coupons"
+        ],
+        "requirements": [
+          "REQ-3",
+          "REQ-4",
+          "REQ-5",
+          "REQ-6",
+          "REQ-7",
+          "REQ-8"
+        ],
+        "verification": [
+          "python -m unittest discover -s tests -t ."
+        ],
+        "risk": "low",
+        "side_effects": [],
+        "corrections": [],
+        "split_from": null
+      },
+      {
+        "id": "U2",
+        "title": "Cart.total accepts multiple coupons",
+        "spec": "Rewrite Cart.total per ADR-3 and add cart tests.",
+        "depends_on": [
+          "U1"
+        ],
+        "files": [
+          "shop/cart.py",
+          "tests/test_cart.py"
+        ],
+        "acceptance": [
+          "Cart with a 100.0 item: total([fixed 5, percent 10]) == 85.0",
+          "Cart().total([...]) == 0.0",
+          "All tests pass"
+        ],
+        "tests": [],
+        "objective": "Make Cart.total accept None, a dict or a list, and delegate to apply_coupons.",
+        "create": [],
+        "modify": [
+          "shop/cart.py",
+          "tests/test_cart.py"
+        ],
+        "avoid": [
+          "shop/pricing.py",
+          ".tokonomy/"
+        ],
+        "references": [
+          "shop/pricing.py"
+        ],
+        "steps": [
+          "In shop/cart.py, change the import to \u0060from shop.pricing import apply_coupons, sale_price\u0060, dropping apply_coupon if it is no longer used.",
+          "Replace total with: \u0060def total(self, coupons=None) -\u003E float:\u0060 then \u0060if not self.items: return 0.0\u0060, \u0060if coupons is None: coupons = []\u0060, \u0060elif isinstance(coupons, dict): coupons = [coupons]\u0060, \u0060return apply_coupons(self.subtotal(), coupons)\u0060.",
+          "In tests/test_cart.py, add: test_multiple_coupons (book 100.0, total([fixed 5, percent 10]) == 85.0); test_only_best_percent (book 100.0, [percent 10, percent 25] gives 75.0); test_total_never_negative (book 10.0, [fixed 15] gives 0.0); test_empty_cart_is_zero (Cart().total([percent 10, fixed 5]) == 0.0, and Cart().total() == 0.0); test_unknown_coupon_type_raises (non-empty cart, assertRaisesRegex(ValueError, \u0027unknown coupon type: bogus\u0027)); test_coupons_list_not_mutated (copy compare after the call)."
+        ],
+        "interfaces": [
+          "def total(self, coupons=None) -\u003E float"
+        ],
+        "decisions": [
+          "ADR-3"
+        ],
+        "constraints": [
+          "Existing cart tests stay unchanged and pass"
+        ],
+        "edge_cases": [
+          "empty cart with coupons",
+          "single dict",
+          "None"
+        ],
+        "requirements": [
+          "REQ-1",
+          "REQ-2",
+          "REQ-5",
+          "REQ-6",
+          "REQ-7",
+          "REQ-8",
+          "REQ-9"
+        ],
+        "verification": [
+          "python -m unittest discover -s tests -t ."
+        ],
+        "risk": "low",
+        "side_effects": [],
+        "corrections": [],
+        "split_from": null
+      }
+    ],
+    "rules": [
+      {
+        "id": "R1",
+        "text": "Standard library only. Use unittest-style tests in tests/test_\u003Cmodule\u003E.py."
+      },
+      {
+        "id": "R2",
+        "text": "No module-level mutable state. Keep functions small."
+      }
+    ],
+    "dont_list": [
+      "Don\u0027t assume apply_coupons already exists. U1 creates it.",
+      "Don\u0027t sort, pop or otherwise mutate the caller\u0027s coupon list or dicts.",
+      "Don\u0027t modify apply_coupon or its error message.",
+      "Don\u0027t validate coupons for an empty cart. Return 0.0 first.",
+      "Don\u0027t edit README.md or files under .tokonomy/."
+    ],
+    "schema_version": 2,
+    "analysis": {
+      "facts": [
+        {
+          "text": "shop/pricing.py defines only sale_price(unit_price) and apply_coupon(amount, coupon). There is NO apply_coupons function, although the task says one exists. apply_coupon handles None, \u0027percent\u0027 (amount*(100-value)/100) and \u0027fixed\u0027 (amount-value), rounds with round2, and otherwise raises ValueError(f\u0022unknown coupon type: {coupon[\u0027type\u0027]}\u0022).",
+          "evidence": [
+            "shop/pricing.py"
+          ]
+        },
+        {
+          "text": "Cart.total(self, coupon=None) currently returns apply_coupon(self.subtotal(), coupon). Cart.items is a list, and it is empty for a new cart.",
+          "evidence": [
+            "shop/cart.py"
+          ]
+        },
+        {
+          "text": "round2(amount) is round(amount \u002B 1e-9, 2). It lives in shop.money.",
+          "evidence": [
+            "shop/money.py"
+          ]
+        },
+        {
+          "text": "Tests use unittest and run with \u0060python -m unittest discover -s tests -t .\u0060. Existing cart tests pass single coupon dicts positionally to total().",
+          "evidence": [
+            "README.md",
+            "tests/test_cart.py",
+            "tests/test_pricing.py"
+          ]
+        },
+        {
+          "text": "Project conventions: keep functions small, no module-level mutable state, and put tests in tests/test_\u003Cmodule\u003E.py.",
+          "evidence": [
+            "README.md"
+          ]
+        }
+      ],
+      "assumptions": [
+        "The task premise that shop.pricing.apply_coupons already exists is false. It will be created in shop/pricing.py so that the reuse the task intends is possible.",
+        "Rule 1 is read literally: a cart with no items returns 0.0 without inspecting the coupons, so an unknown coupon type on an empty cart does not raise.",
+        "When several percent coupons share the highest value, the first one in the list wins. The result is the same either way.",
+        "Renaming the keyword argument from coupon to coupons is accepted by the task. No repository caller uses the keyword form."
+      ],
+      "requirements": [
+        {
+          "id": "REQ-1",
+          "text": "Cart.total(coupons=None) accepts None, a single coupon dict, or a list of coupon dicts.",
+          "kind": "functional"
+        },
+        {
+          "id": "REQ-2",
+          "text": "A cart with no items totals 0.0 whatever coupons are passed.",
+          "kind": "edge_case"
+        },
+        {
+          "id": "REQ-3",
+          "text": "At most one percent coupon applies: the one with the highest value. Other percent coupons are ignored.",
+          "kind": "functional"
+        },
+        {
+          "id": "REQ-4",
+          "text": "The chosen percent coupon applies first. Then every fixed coupon is subtracted in list order, regardless of where the percent coupons sit in the list.",
+          "kind": "functional"
+        },
+        {
+          "id": "REQ-5",
+          "text": "The result is never below 0.0.",
+          "kind": "edge_case"
+        },
+        {
+          "id": "REQ-6",
+          "text": "A coupon of unknown type raises ValueError with the message \u0027unknown coupon type: \u003Ctype\u003E\u0027, the same message apply_coupon uses.",
+          "kind": "functional"
+        },
+        {
+          "id": "REQ-7",
+          "text": "The coupon list passed in is never mutated.",
+          "kind": "non_functional"
+        },
+        {
+          "id": "REQ-8",
+          "text": "Unit tests cover the new behaviour, including the example: subtotal 100 with [fixed 5, percent 10] gives 85.0.",
+          "kind": "non_functional"
+        },
+        {
+          "id": "REQ-9",
+          "text": "Existing behaviour is kept: total() with no coupon and with a single dict gives the same results as before for non-negative outcomes.",
+          "kind": "compatibility"
+        }
+      ],
+      "preserve": [
+        "apply_coupon and sale_price are unchanged, including their signatures and messages.",
+        "Cart.add, line_total and subtotal are unchanged.",
+        "All existing tests pass unchanged."
+      ],
+      "risks": [
+        "The worker may assume apply_coupons exists and only import it. It must be created first.",
+        "Sorting or popping on the caller\u0027s list would violate REQ-7.",
+        "Clamping must not produce -0.0. Use max(0.0, result)."
+      ],
+      "open_questions": []
+    },
+    "architecture": {
+      "summary": "Add a pure function apply_coupons(amount, coupons) to shop/pricing.py. It validates all coupon types, picks the highest percent coupon, applies it with apply_coupon, then applies each fixed coupon in order with apply_coupon, and clamps the result at 0.0. Cart.total normalizes its argument to a list, returns 0.0 for an empty cart, and otherwise delegates to apply_coupons.",
+      "components": [
+        {
+          "name": "apply_coupons",
+          "path": "shop/pricing.py",
+          "change": "modify",
+          "responsibility": "Apply several coupons to an amount following rules 2-5, without mutating the input."
+        },
+        {
+          "name": "Cart.total",
+          "path": "shop/cart.py",
+          "change": "modify",
+          "responsibility": "Normalize None/dict/list, handle the empty cart, and delegate to apply_coupons."
+        },
+        {
+          "name": "pricing tests",
+          "path": "tests/test_pricing.py",
+          "change": "modify",
+          "responsibility": "Tests for apply_coupons."
+        },
+        {
+          "name": "cart tests",
+          "path": "tests/test_cart.py",
+          "change": "modify",
+          "responsibility": "Tests for multi-coupon Cart.total."
+        }
+      ],
+      "invariants": [
+        "apply_coupons never mutates its coupons argument.",
+        "The return value is \u003E= 0.0 and rounded via round2/apply_coupon.",
+        "Unknown coupon types raise ValueError before any arithmetic."
+      ],
+      "error_handling": "apply_coupons raises ValueError(f\u0022unknown coupon type: {coupon[\u0027type\u0027]}\u0022) for the first coupon whose type is neither \u0027percent\u0027 nor \u0027fixed\u0027. Cart.total lets it propagate, except when the cart is empty, where it returns 0.0 first.",
+      "security": null,
+      "performance": null
+    },
+    "decisions": [
+      {
+        "id": "ADR-1",
+        "title": "Create apply_coupons in shop/pricing.py",
+        "decision": "Implement apply_coupons(amount: float, coupons) -\u003E float in shop/pricing.py, built on the existing apply_coupon.",
+        "rationale": "The function the task refers to does not exist. pricing.py is where coupon logic lives.",
+        "alternatives_rejected": [
+          "Putting the logic inside Cart.total, which mixes pricing into the cart",
+          "Changing apply_coupon to accept lists, which changes an existing contract"
+        ],
+        "constraints": [
+          "apply_coupon must not be modified",
+          "coupons may be None (treated as empty) or any list of dicts"
+        ]
+      },
+      {
+        "id": "ADR-2",
+        "title": "Validate first, then select, then apply",
+        "decision": "Step 1: loop over coupons and raise on an unknown type. Step 2: percents = [c for c in coupons if c[\u0027type\u0027]==\u0027percent\u0027] and fixeds likewise, both new lists. Step 3: if percents, amount = apply_coupon(amount, max(percents, key=lambda c: c[\u0027value\u0027])). Step 4: for c in fixeds: amount = apply_coupon(amount, c). Step 5: return max(0.0, amount).",
+        "rationale": "Deterministic order, no mutation, and the same error message as apply_coupon. Clamping only at the end gives the same result as clamping per step, because only subtraction follows the percent step.",
+        "alternatives_rejected": [
+          "Sorting the input list in place, which mutates the caller\u0027s list",
+          "Clamping after each step, which is unnecessary"
+        ],
+        "constraints": [
+          "Never call .sort/.pop/.remove/.append on the input",
+          "Use max(0.0, amount), not max(amount, 0.0), to avoid returning -0.0"
+        ]
+      },
+      {
+        "id": "ADR-3",
+        "title": "Normalization and the empty cart live in Cart.total",
+        "decision": "Cart.total(self, coupons=None): if not self.items: return 0.0; if coupons is None: coupons = []; elif isinstance(coupons, dict): coupons = [coupons]; return apply_coupons(self.subtotal(), coupons).",
+        "rationale": "Rule 1 is literal: an empty cart returns 0.0 even if the coupons are invalid. Wrapping a dict creates a new list, so nothing is mutated.",
+        "alternatives_rejected": [
+          "Letting apply_coupons accept a single dict, which blurs its contract"
+        ],
+        "constraints": [
+          "Return the float literal 0.0 for an empty cart"
+        ]
+      }
+    ]
+  },
+  "readiness": "ready",
+  "issues": []
+}

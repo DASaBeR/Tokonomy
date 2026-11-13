@@ -1,0 +1,94 @@
+diff --git a/shop/pricing.py b/shop/pricing.py
+index 7fc9613..135bba6 100644
+--- a/shop/pricing.py
++++ b/shop/pricing.py
+@@ -22,3 +22,29 @@ def apply_coupon(amount: float, coupon):
+     if coupon["type"] == "fixed":
+         return round2(amount - coupon["value"])
+     raise ValueError(f"unknown coupon type: {coupon['type']}")
++
++
++def apply_coupons(amount: float, coupons) -> float:
++    """Apply several coupons to an amount.
++
++    Rules:
++    - At most one percent coupon applies (the one with the highest value);
++      other percent coupons are ignored.
++    - The percent coupon applies first, followed by each fixed coupon in order.
++    - The resulting total is clamped at 0.0 minimum.
++    - Unknown coupon types raise ValueError before any calculations.
++    - Input coupons list and dicts are not mutated.
++    """
++    if coupons is None:
++        coupons = []
++    for coupon in coupons:
++        if coupon["type"] not in ("percent", "fixed"):
++            raise ValueError(f"unknown coupon type: {coupon['type']}")
++    percents = [c for c in coupons if c["type"] == "percent"]
++    fixeds = [c for c in coupons if c["type"] == "fixed"]
++    if percents:
++        amount = apply_coupon(amount, max(percents, key=lambda c: c["value"]))
++    for coupon in fixeds:
++        amount = apply_coupon(amount, coupon)
++    return max(0.0, amount)
++
+diff --git a/tests/test_pricing.py b/tests/test_pricing.py
+index 2669bc2..946ecff 100644
+--- a/tests/test_pricing.py
++++ b/tests/test_pricing.py
+@@ -1,7 +1,8 @@
++import copy
+ import unittest
+ 
+ from shop.money import fmt, round2
+-from shop.pricing import apply_coupon, sale_price
++from shop.pricing import apply_coupon, apply_coupons, sale_price
+ 
+ 
+ class PricingTests(unittest.TestCase):
+@@ -21,6 +22,45 @@ class PricingTests(unittest.TestCase):
+         self.assertEqual(round2(1.005), 1.01)
+         self.assertEqual(fmt(1234.5), "$1,234.50")
+ 
++    def test_apply_coupons_none_and_empty(self):
++        self.assertEqual(apply_coupons(100.0, None), 100.0)
++        self.assertEqual(apply_coupons(100.0, []), 100.0)
++
++    def test_apply_coupons_percent_before_fixed(self):
++        coupons = [{"type": "fixed", "value": 5}, {"type": "percent", "value": 10}]
++        self.assertEqual(apply_coupons(100.0, coupons), 85.0)
++
++    def test_apply_coupons_best_percent_only(self):
++        coupons = [
++            {"type": "percent", "value": 10},
++            {"type": "percent", "value": 30},
++            {"type": "percent", "value": 20},
++        ]
++        self.assertEqual(apply_coupons(100.0, coupons), 70.0)
++
++    def test_apply_coupons_fixed_in_order(self):
++        coupons = [{"type": "fixed", "value": 5}, {"type": "fixed", "value": 3}]
++        self.assertEqual(apply_coupons(100.0, coupons), 92.0)
++
++    def test_apply_coupons_floor_zero(self):
++        coupons = [{"type": "fixed", "value": 150}]
++        self.assertEqual(apply_coupons(100.0, coupons), 0.0)
++
++    def test_apply_coupons_unknown_type(self):
++        coupons = [{"type": "fixed", "value": 1}, {"type": "bogus", "value": 1}]
++        with self.assertRaisesRegex(ValueError, "unknown coupon type: bogus"):
++            apply_coupons(100.0, coupons)
++
++    def test_apply_coupons_does_not_mutate(self):
++        coupons = [
++            {"type": "fixed", "value": 5},
++            {"type": "percent", "value": 10},
++        ]
++        snapshot = copy.deepcopy(coupons)
++        apply_coupons(100.0, coupons)
++        self.assertEqual(coupons, snapshot)
++
++
+ 
+ if __name__ == "__main__":
+     unittest.main()

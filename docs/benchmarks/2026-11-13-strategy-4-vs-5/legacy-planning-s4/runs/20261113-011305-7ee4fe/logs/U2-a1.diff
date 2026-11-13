@@ -1,0 +1,43 @@
+diff --git a/tests/test_cart.py b/tests/test_cart.py
+index 7da09ad..aa3e50f 100644
+--- a/tests/test_cart.py
++++ b/tests/test_cart.py
+@@ -1,6 +1,7 @@
+ import unittest
+ 
+ from shop.cart import Cart
++from shop.pricing import sale_price
+ 
+ 
+ class CartTests(unittest.TestCase):
+@@ -26,6 +27,30 @@ class CartTests(unittest.TestCase):
+         cart.add("book", 20.00)
+         self.assertEqual(cart.total({"type": "fixed", "value": 5}), 15.0)
+ 
++    def test_sale_line_rounded_once(self):
++        cart = Cart(on_sale=True)
++        cart.add("pen", 0.99, 3)
++        self.assertEqual(cart.subtotal(), 2.38)
++        self.assertEqual(cart.line_total(cart.items[0]), 2.38)
++
++    def test_sale_single_unit_matches_sale_price(self):
++        cart = Cart(on_sale=True)
++        cart.add("pen", 0.99, 1)
++        self.assertEqual(cart.subtotal(), sale_price(0.99))
++        self.assertEqual(cart.subtotal(), 0.79)
++        self.assertEqual(sale_price(0.99), 0.79)
++
++    def test_non_sale_line(self):
++        cart = Cart()
++        cart.add("pen", 0.99, 3)
++        self.assertEqual(cart.subtotal(), 2.97)
++
++    def test_sale_multi_line_subtotal(self):
++        cart = Cart(on_sale=True)
++        cart.add("a", 0.99, 3)
++        cart.add("b", 10.00, 2)
++        self.assertEqual(cart.subtotal(), 18.38)
++
+ 
+ if __name__ == "__main__":
+     unittest.main()

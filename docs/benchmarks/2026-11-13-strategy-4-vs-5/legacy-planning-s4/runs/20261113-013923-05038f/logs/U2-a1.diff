@@ -1,0 +1,107 @@
+diff --git a/shop/cart.py b/shop/cart.py
+index aa13329..28cdb93 100644
+--- a/shop/cart.py
++++ b/shop/cart.py
+@@ -1,7 +1,7 @@
+ """A shopping cart."""
+ 
+-from shop.money import round2
+-from shop.pricing import apply_coupon, sale_price
++from shop.money import from_cents, to_cents
++from shop.pricing import SALE_PERCENT, apply_coupon
+ 
+ 
+ class Cart:
+@@ -10,14 +10,23 @@ class Cart:
+         self.items = []
+ 
+     def add(self, sku: str, unit_price: float, qty: int = 1) -> None:
+-        self.items.append({"sku": sku, "unit_price": unit_price, "qty": qty})
++        self.items.append({"sku": sku, "unit_price_cents": to_cents(unit_price), "qty": qty})
++
++    def _line_cents(self, item: dict) -> int:
++        base = item["unit_price_cents"] * item["qty"]
++        if self.on_sale:
++            return (base * (100 - SALE_PERCENT) + 50) // 100
++        return base
+ 
+     def line_total(self, item: dict) -> float:
+-        price = sale_price(item["unit_price"]) if self.on_sale else item["unit_price"]
+-        return round2(price * item["qty"])
++        return from_cents(self._line_cents(item))
++
++    def subtotal_cents(self) -> int:
++        return sum(self._line_cents(i) for i in self.items)
+ 
+     def subtotal(self) -> float:
+-        return round2(sum(self.line_total(item) for item in self.items))
++        return from_cents(self.subtotal_cents())
+ 
+     def total(self, coupon=None) -> float:
+         return apply_coupon(self.subtotal(), coupon)
++
+diff --git a/tests/test_cart.py b/tests/test_cart.py
+index 7da09ad..4ed00b2 100644
+--- a/tests/test_cart.py
++++ b/tests/test_cart.py
+@@ -15,6 +15,7 @@ class CartTests(unittest.TestCase):
+         cart = Cart(on_sale=True)
+         cart.add("book", 10.00, 2)
+         self.assertEqual(cart.subtotal(), 16.0)
++        self.assertEqual(cart.subtotal_cents(), 1600)
+ 
+     def test_percent_coupon(self):
+         cart = Cart()
+@@ -26,6 +27,52 @@ class CartTests(unittest.TestCase):
+         cart.add("book", 20.00)
+         self.assertEqual(cart.total({"type": "fixed", "value": 5}), 15.0)
+ 
++    def test_items_store_unit_price_cents(self):
++        cart = Cart()
++        cart.add("pen", 19.99)
++        self.assertEqual(cart.items, [{"sku": "pen", "unit_price_cents": 1999, "qty": 1}])
++        self.assertNotIn("unit_price", cart.items[0])
++        self.assertIsInstance(cart.items[0]["unit_price_cents"], int)
++
++    def test_exact_sum_without_float_drift(self):
++        cart = Cart()
++        cart.add("a", 0.1)
++        cart.add("b", 0.1)
++        cart.add("c", 0.1)
++        self.assertEqual(cart.subtotal_cents(), 30)
++        self.assertEqual(cart.subtotal(), 0.3)
++
++    def test_sale_discount_line_and_rounding(self):
++        cart1 = Cart(on_sale=True)
++        cart1.add("x", 0.05, 3)
++        self.assertEqual(cart1.subtotal_cents(), 12)
++
++        cart2 = Cart(on_sale=True)
++        cart2.add("x", 0.99, 3)
++        self.assertEqual(cart2.subtotal_cents(), 238)
++
++    def test_half_up_rounding(self):
++        cart1 = Cart(on_sale=True)
++        cart1.add("x", 0.01, 5)
++        self.assertEqual(cart1.subtotal_cents(), 4)
++
++        cart2 = Cart(on_sale=True)
++        cart2.add("x", 0.01, 1)
++        self.assertEqual(cart2.subtotal_cents(), 1)
++
++    def test_line_total_dollars(self):
++        cart = Cart()
++        cart.add("pen", 2.50, 4)
++        self.assertEqual(cart.line_total(cart.items[0]), 10.0)
++        self.assertIsInstance(cart.line_total(cart.items[0]), float)
++
++    def test_subtotal_cents_returns_int(self):
++        cart = Cart()
++        cart.add("pen", 2.50, 4)
++        self.assertIsInstance(cart.subtotal_cents(), int)
++        self.assertTrue(isinstance(cart.subtotal_cents(), int))
++
+ 
+ if __name__ == "__main__":
+     unittest.main()
++

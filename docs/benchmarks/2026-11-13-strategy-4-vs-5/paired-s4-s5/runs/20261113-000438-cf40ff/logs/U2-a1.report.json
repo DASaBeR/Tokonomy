@@ -1,0 +1,16 @@
+{
+  "status": "completed",
+  "reason": "other",
+  "description": "Updated Cart.total in shop/cart.py to accept None, a dict, or a list of coupons and delegate to apply_coupons. Added tests in tests/test_cart.py.",
+  "evidence": [
+    "shop/cart.py",
+    "tests/test_cart.py"
+  ],
+  "attempted_actions": [
+    "Updated imports in shop/cart.py",
+    "Implemented Cart.total according to ADR-3 in shop/cart.py",
+    "Added unit tests in tests/test_cart.py covering multiple coupons, best percent only, non-negative total, empty cart behavior, unknown coupon types, and input immutability"
+  ],
+  "discoveries": [],
+  "decision_required": false
+}

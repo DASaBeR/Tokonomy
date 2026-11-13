@@ -1,0 +1,16 @@
+{
+  "status": "completed",
+  "reason": "other",
+  "description": "Completed work unit U2: converted Cart internals to use unit_price_cents, implemented _line_cents and subtotal_cents using integer arithmetic, preserved the public float API via from_cents, and added new unit tests in tests/test_cart.py.",
+  "evidence": [
+    "shop/cart.py",
+    "tests/test_cart.py"
+  ],
+  "attempted_actions": [
+    "Searched shop/storage.py and tests/test_storage.py for 'unit_price' and 'Cart' usage",
+    "Updated imports and methods in shop/cart.py",
+    "Added unit tests to tests/test_cart.py"
+  ],
+  "discoveries": [],
+  "decision_required": false
+}

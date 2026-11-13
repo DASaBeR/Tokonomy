@@ -1,0 +1,15 @@
+{
+  "status": "completed",
+  "reason": "other",
+  "description": "Implemented TtlCache in shop/cache.py with LRU backing, thread-safe locking, TTL expiry and eviction. Implemented unit tests covering all 17 specified test cases in tests/test_cache.py.",
+  "evidence": [
+    "shop/cache.py",
+    "tests/test_cache.py"
+  ],
+  "attempted_actions": [
+    "Created shop/cache.py",
+    "Created tests/test_cache.py"
+  ],
+  "discoveries": [],
+  "decision_required": false
+}

@@ -1,0 +1,15 @@
+{
+  "status": "completed",
+  "reason": "other",
+  "description": "Implemented apply_coupons in shop/pricing.py according to specifications and added unit tests in tests/test_pricing.py covering all required cases.",
+  "evidence": [
+    "shop/pricing.py",
+    "tests/test_pricing.py"
+  ],
+  "attempted_actions": [
+    "Added apply_coupons to shop/pricing.py with coupon type validation, highest percent coupon selection, ordered fixed coupon deductions, and floor clamping at 0.0.",
+    "Added unit tests in tests/test_pricing.py covering None/empty, percent before fixed, best percent only, fixed in order, floor zero, unknown type exception, and immutability."
+  ],
+  "discoveries": [],
+  "decision_required": false
+}

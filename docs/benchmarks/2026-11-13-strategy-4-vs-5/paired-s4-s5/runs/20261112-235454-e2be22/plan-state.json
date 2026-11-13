@@ -1,0 +1,474 @@
+{
+  "original": {
+    "task": "Sale prices are rounded per unit, which makes multi-quantity lines wrong by a cent. The rounding lives in the\nhelper shop.money.round_line(price, qty); fix it there. In shop/cart.py a line on sale must be computed as\nround2(unit_price * (100 - SALE_PERCENT) / 100 * qty): rounded once on the line total, not per unit. Example:\nunit price 0.99, qty 3, on sale (20% off) is 2.38, not 2.37. Lines not on sale are plain round2(unit_price * qty).\nKeep shop.pricing.sale_price(unit_price) unchanged for single units. Add unit tests.\n",
+    "units": [
+      {
+        "id": "U1",
+        "title": "Round sale lines once per line and add tests",
+        "spec": "Replace the per-unit sale price in line_total with a single round2 over the line total. Update imports. Add tests.",
+        "depends_on": [],
+        "files": [
+          "shop/cart.py",
+          "tests/test_cart.py",
+          "tests/test_pricing.py"
+        ],
+        "acceptance": [
+          "A 0.99 x 3 line on sale totals 2.38.",
+          "sale_price(0.99) == 0.79.",
+          "All tests pass and shop/cart.py has no unused imports."
+        ],
+        "tests": [],
+        "objective": "Fix the multi-quantity sale rounding in Cart.line_total and add unit tests.",
+        "create": [],
+        "modify": [
+          "shop/cart.py",
+          "tests/test_cart.py",
+          "tests/test_pricing.py"
+        ],
+        "avoid": [
+          "shop/money.py",
+          "shop/pricing.py",
+          "shop/storage.py",
+          ".tokonomy/"
+        ],
+        "references": [
+          "shop/pricing.py",
+          "shop/money.py"
+        ],
+        "steps": [
+          "In shop/cart.py change the import line \u0060from shop.pricing import apply_coupon, sale_price\u0060 to \u0060from shop.pricing import SALE_PERCENT, apply_coupon\u0060.",
+          "Replace the body of Cart.line_total with:\n        if self.on_sale:\n            return round2(item[\u0022unit_price\u0022] * (100 - SALE_PERCENT) / 100 * item[\u0022qty\u0022])\n        return round2(item[\u0022unit_price\u0022] * item[\u0022qty\u0022])",
+          "In tests/test_cart.py add to CartTests:\n    def test_sale_line_rounded_once(self):\n        cart = Cart(on_sale=True)\n        cart.add(\u0022pen\u0022, 0.99, 3)\n        self.assertEqual(cart.line_total(cart.items[0]), 2.38)\n        self.assertEqual(cart.subtotal(), 2.38)\n\n    def test_sale_single_unit_matches_sale_price(self):\n        cart = Cart(on_sale=True)\n        cart.add(\u0022pen\u0022, 0.99)\n        self.assertEqual(cart.subtotal(), 0.79)\n\n    def test_non_sale_line(self):\n        cart = Cart()\n        cart.add(\u0022pen\u0022, 0.99, 3)\n        self.assertEqual(cart.subtotal(), 2.97)",
+          "In tests/test_pricing.py add to PricingTests:\n    def test_sale_price_single_unit_rounding(self):\n        self.assertEqual(sale_price(0.99), 0.79)"
+        ],
+        "interfaces": [
+          "Cart.line_total(self, item: dict) -\u003E float (signature unchanged)"
+        ],
+        "decisions": [
+          "ADR-1",
+          "ADR-2"
+        ],
+        "constraints": [
+          "Do not change existing tests.",
+          "Do not touch sale_price."
+        ],
+        "edge_cases": [
+          "qty 1 on sale equals sale_price(unit_price).",
+          "Non-sale multi-quantity lines are unaffected."
+        ],
+        "requirements": [
+          "REQ-1",
+          "REQ-2",
+          "REQ-3",
+          "REQ-4",
+          "REQ-5"
+        ],
+        "verification": [
+          "python -m unittest discover -s tests -t ."
+        ],
+        "risk": "low",
+        "side_effects": [],
+        "corrections": [],
+        "split_from": null
+      }
+    ],
+    "rules": [
+      {
+        "id": "R1",
+        "text": "Use only the standard library and unittest."
+      },
+      {
+        "id": "R2",
+        "text": "All rounding goes through shop.money.round2."
+      }
+    ],
+    "dont_list": [
+      "Don\u0027t create shop.money.round_line or any other new helper.",
+      "Don\u0027t modify shop/pricing.py or sale_price.",
+      "Don\u0027t hard-code the 20% sale or 0.8.",
+      "Don\u0027t leave sale_price imported in shop/cart.py.",
+      "Don\u0027t edit or delete existing tests."
+    ],
+    "schema_version": 2,
+    "analysis": {
+      "facts": [
+        {
+          "text": "shop/money.py defines only round2(amount) (round(amount \u002B 1e-9, 2)) and fmt(amount). There is no round_line function anywhere in the repository, so the task\u0027s statement that the rounding lives in shop.money.round_line(price, qty) is incorrect.",
+          "evidence": [
+            "shop/money.py"
+          ]
+        },
+        {
+          "text": "The per-unit rounding bug is in Cart.line_total. On sale it computes round2(sale_price(unit_price) * qty), and sale_price rounds the unit price first, so 0.99 x 3 gives 0.79 * 3 = 2.37.",
+          "evidence": [
+            "shop/cart.py",
+            "shop/pricing.py"
+          ]
+        },
+        {
+          "text": "shop/pricing.py defines SALE_PERCENT = 20 and sale_price(unit_price) = round2(unit_price * (100 - SALE_PERCENT) / 100).",
+          "evidence": [
+            "shop/pricing.py"
+          ]
+        },
+        {
+          "text": "shop/cart.py imports round2 from shop.money and imports apply_coupon and sale_price from shop.pricing. sale_price is used only in line_total.",
+          "evidence": [
+            "shop/cart.py"
+          ]
+        },
+        {
+          "text": "The tests use unittest. They are run with \u0060python -m unittest discover -s tests -t .\u0060. Cart tests live in tests/test_cart.py and pricing tests in tests/test_pricing.py.",
+          "evidence": [
+            "README.md",
+            "tests/test_cart.py",
+            "tests/test_pricing.py"
+          ]
+        },
+        {
+          "text": "The existing test test_sale_cart expects 16.0 for 10.00 x 2 on sale. The new formula gives 10*80/100*2 = 16.0, so this test still passes.",
+          "evidence": [
+            "tests/test_cart.py"
+          ]
+        }
+      ],
+      "assumptions": [
+        "Because shop.money.round_line does not exist, the fix goes where the task explicitly specifies the computation: Cart.line_total in shop/cart.py. No round_line helper is created, since the task does not ask for a new public API and the user\u0027s premise about it was wrong."
+      ],
+      "requirements": [
+        {
+          "id": "REQ-1",
+          "text": "A line on sale is computed as round2(unit_price * (100 - SALE_PERCENT) / 100 * qty), rounded once on the line total.",
+          "kind": "functional"
+        },
+        {
+          "id": "REQ-2",
+          "text": "Unit price 0.99, qty 3, on sale (20% off) gives a line total and subtotal of 2.38.",
+          "kind": "edge_case"
+        },
+        {
+          "id": "REQ-3",
+          "text": "Lines not on sale stay round2(unit_price * qty).",
+          "kind": "functional"
+        },
+        {
+          "id": "REQ-4",
+          "text": "shop.pricing.sale_price(unit_price) stays unchanged (sale_price(0.99) == 0.79, sale_price(10.0) == 8.0).",
+          "kind": "compatibility"
+        },
+        {
+          "id": "REQ-5",
+          "text": "Add unit tests covering the new sale line rounding, non-sale lines and the unchanged sale_price.",
+          "kind": "non_functional"
+        }
+      ],
+      "preserve": [
+        "sale_price, apply_coupon, round2 and fmt signatures and behaviour",
+        "Cart.add, Cart.subtotal and Cart.total behaviour",
+        "All existing tests pass unchanged"
+      ],
+      "risks": [
+        "Float error: 0.99*80/100*3 is about 2.376, and round2 rounds it to 2.38. The 1e-9 epsilon in round2 covers half-cent cases.",
+        "Leaving the sale_price import unused in cart.py after the change."
+      ],
+      "open_questions": []
+    },
+    "architecture": {
+      "summary": "Change Cart.line_total so that, when the cart is on sale, it applies the sale percent to unit_price * qty and calls round2 once. Non-sale lines stay round2(unit_price * qty). sale_price in pricing.py is untouched and remains the single-unit API. Add tests to tests/test_cart.py and tests/test_pricing.py.",
+      "components": [
+        {
+          "name": "Cart.line_total",
+          "path": "shop/cart.py",
+          "change": "modify",
+          "responsibility": "Compute the line total, rounding once per line."
+        },
+        {
+          "name": "cart tests",
+          "path": "tests/test_cart.py",
+          "change": "modify",
+          "responsibility": "Cover multi-quantity sale rounding and non-sale lines."
+        },
+        {
+          "name": "pricing tests",
+          "path": "tests/test_pricing.py",
+          "change": "modify",
+          "responsibility": "Pin the unchanged single-unit sale_price behaviour."
+        }
+      ],
+      "invariants": [
+        "Each line is rounded exactly once via round2.",
+        "SALE_PERCENT is defined only in shop/pricing.py."
+      ],
+      "error_handling": "No new error paths.",
+      "security": "Not applicable.",
+      "performance": "Not applicable."
+    },
+    "decisions": [
+      {
+        "id": "ADR-1",
+        "title": "Fix in Cart.line_total, not a non-existent round_line",
+        "decision": "Implement the formula inline in Cart.line_total, importing SALE_PERCENT from shop.pricing. Do not create shop.money.round_line.",
+        "rationale": "round_line does not exist. The task explicitly gives the formula for shop/cart.py, and a minimal change avoids new public API.",
+        "alternatives_rejected": [
+          "Creating round_line in money.py: it would invent an API the task assumed already existed, and money.py would need to know about the sale percent.",
+          "Changing sale_price: this is forbidden by the task."
+        ],
+        "constraints": [
+          "Do not add functions to shop/money.py.",
+          "Do not modify shop/pricing.py."
+        ]
+      },
+      {
+        "id": "ADR-2",
+        "title": "Exact expression order",
+        "decision": "Use round2(item[\u0022unit_price\u0022] * (100 - SALE_PERCENT) / 100 * item[\u0022qty\u0022]) in exactly this left-to-right order.",
+        "rationale": "It matches the spec and keeps float results predictable.",
+        "alternatives_rejected": [
+          "Multiplying by 0.8 or reordering the operations."
+        ],
+        "constraints": [
+          "Do not hard-code 20 or 0.8."
+        ]
+      }
+    ]
+  },
+  "current": {
+    "task": "Sale prices are rounded per unit, which makes multi-quantity lines wrong by a cent. The rounding lives in the\nhelper shop.money.round_line(price, qty); fix it there. In shop/cart.py a line on sale must be computed as\nround2(unit_price * (100 - SALE_PERCENT) / 100 * qty): rounded once on the line total, not per unit. Example:\nunit price 0.99, qty 3, on sale (20% off) is 2.38, not 2.37. Lines not on sale are plain round2(unit_price * qty).\nKeep shop.pricing.sale_price(unit_price) unchanged for single units. Add unit tests.\n",
+    "units": [
+      {
+        "id": "U1",
+        "title": "Round sale lines once per line and add tests",
+        "spec": "Replace the per-unit sale price in line_total with a single round2 over the line total. Update imports. Add tests.",
+        "depends_on": [],
+        "files": [
+          "shop/cart.py",
+          "tests/test_cart.py",
+          "tests/test_pricing.py"
+        ],
+        "acceptance": [
+          "A 0.99 x 3 line on sale totals 2.38.",
+          "sale_price(0.99) == 0.79.",
+          "All tests pass and shop/cart.py has no unused imports."
+        ],
+        "tests": [],
+        "objective": "Fix the multi-quantity sale rounding in Cart.line_total and add unit tests.",
+        "create": [],
+        "modify": [
+          "shop/cart.py",
+          "tests/test_cart.py",
+          "tests/test_pricing.py"
+        ],
+        "avoid": [
+          "shop/money.py",
+          "shop/pricing.py",
+          "shop/storage.py",
+          ".tokonomy/"
+        ],
+        "references": [
+          "shop/pricing.py",
+          "shop/money.py"
+        ],
+        "steps": [
+          "In shop/cart.py change the import line \u0060from shop.pricing import apply_coupon, sale_price\u0060 to \u0060from shop.pricing import SALE_PERCENT, apply_coupon\u0060.",
+          "Replace the body of Cart.line_total with:\n        if self.on_sale:\n            return round2(item[\u0022unit_price\u0022] * (100 - SALE_PERCENT) / 100 * item[\u0022qty\u0022])\n        return round2(item[\u0022unit_price\u0022] * item[\u0022qty\u0022])",
+          "In tests/test_cart.py add to CartTests:\n    def test_sale_line_rounded_once(self):\n        cart = Cart(on_sale=True)\n        cart.add(\u0022pen\u0022, 0.99, 3)\n        self.assertEqual(cart.line_total(cart.items[0]), 2.38)\n        self.assertEqual(cart.subtotal(), 2.38)\n\n    def test_sale_single_unit_matches_sale_price(self):\n        cart = Cart(on_sale=True)\n        cart.add(\u0022pen\u0022, 0.99)\n        self.assertEqual(cart.subtotal(), 0.79)\n\n    def test_non_sale_line(self):\n        cart = Cart()\n        cart.add(\u0022pen\u0022, 0.99, 3)\n        self.assertEqual(cart.subtotal(), 2.97)",
+          "In tests/test_pricing.py add to PricingTests:\n    def test_sale_price_single_unit_rounding(self):\n        self.assertEqual(sale_price(0.99), 0.79)"
+        ],
+        "interfaces": [
+          "Cart.line_total(self, item: dict) -\u003E float (signature unchanged)"
+        ],
+        "decisions": [
+          "ADR-1",
+          "ADR-2"
+        ],
+        "constraints": [
+          "Do not change existing tests.",
+          "Do not touch sale_price."
+        ],
+        "edge_cases": [
+          "qty 1 on sale equals sale_price(unit_price).",
+          "Non-sale multi-quantity lines are unaffected."
+        ],
+        "requirements": [
+          "REQ-1",
+          "REQ-2",
+          "REQ-3",
+          "REQ-4",
+          "REQ-5"
+        ],
+        "verification": [
+          "python -m unittest discover -s tests -t ."
+        ],
+        "risk": "low",
+        "side_effects": [],
+        "corrections": [],
+        "split_from": null
+      }
+    ],
+    "rules": [
+      {
+        "id": "R1",
+        "text": "Use only the standard library and unittest."
+      },
+      {
+        "id": "R2",
+        "text": "All rounding goes through shop.money.round2."
+      }
+    ],
+    "dont_list": [
+      "Don\u0027t create shop.money.round_line or any other new helper.",
+      "Don\u0027t modify shop/pricing.py or sale_price.",
+      "Don\u0027t hard-code the 20% sale or 0.8.",
+      "Don\u0027t leave sale_price imported in shop/cart.py.",
+      "Don\u0027t edit or delete existing tests."
+    ],
+    "schema_version": 2,
+    "analysis": {
+      "facts": [
+        {
+          "text": "shop/money.py defines only round2(amount) (round(amount \u002B 1e-9, 2)) and fmt(amount). There is no round_line function anywhere in the repository, so the task\u0027s statement that the rounding lives in shop.money.round_line(price, qty) is incorrect.",
+          "evidence": [
+            "shop/money.py"
+          ]
+        },
+        {
+          "text": "The per-unit rounding bug is in Cart.line_total. On sale it computes round2(sale_price(unit_price) * qty), and sale_price rounds the unit price first, so 0.99 x 3 gives 0.79 * 3 = 2.37.",
+          "evidence": [
+            "shop/cart.py",
+            "shop/pricing.py"
+          ]
+        },
+        {
+          "text": "shop/pricing.py defines SALE_PERCENT = 20 and sale_price(unit_price) = round2(unit_price * (100 - SALE_PERCENT) / 100).",
+          "evidence": [
+            "shop/pricing.py"
+          ]
+        },
+        {
+          "text": "shop/cart.py imports round2 from shop.money and imports apply_coupon and sale_price from shop.pricing. sale_price is used only in line_total.",
+          "evidence": [
+            "shop/cart.py"
+          ]
+        },
+        {
+          "text": "The tests use unittest. They are run with \u0060python -m unittest discover -s tests -t .\u0060. Cart tests live in tests/test_cart.py and pricing tests in tests/test_pricing.py.",
+          "evidence": [
+            "README.md",
+            "tests/test_cart.py",
+            "tests/test_pricing.py"
+          ]
+        },
+        {
+          "text": "The existing test test_sale_cart expects 16.0 for 10.00 x 2 on sale. The new formula gives 10*80/100*2 = 16.0, so this test still passes.",
+          "evidence": [
+            "tests/test_cart.py"
+          ]
+        }
+      ],
+      "assumptions": [
+        "Because shop.money.round_line does not exist, the fix goes where the task explicitly specifies the computation: Cart.line_total in shop/cart.py. No round_line helper is created, since the task does not ask for a new public API and the user\u0027s premise about it was wrong."
+      ],
+      "requirements": [
+        {
+          "id": "REQ-1",
+          "text": "A line on sale is computed as round2(unit_price * (100 - SALE_PERCENT) / 100 * qty), rounded once on the line total.",
+          "kind": "functional"
+        },
+        {
+          "id": "REQ-2",
+          "text": "Unit price 0.99, qty 3, on sale (20% off) gives a line total and subtotal of 2.38.",
+          "kind": "edge_case"
+        },
+        {
+          "id": "REQ-3",
+          "text": "Lines not on sale stay round2(unit_price * qty).",
+          "kind": "functional"
+        },
+        {
+          "id": "REQ-4",
+          "text": "shop.pricing.sale_price(unit_price) stays unchanged (sale_price(0.99) == 0.79, sale_price(10.0) == 8.0).",
+          "kind": "compatibility"
+        },
+        {
+          "id": "REQ-5",
+          "text": "Add unit tests covering the new sale line rounding, non-sale lines and the unchanged sale_price.",
+          "kind": "non_functional"
+        }
+      ],
+      "preserve": [
+        "sale_price, apply_coupon, round2 and fmt signatures and behaviour",
+        "Cart.add, Cart.subtotal and Cart.total behaviour",
+        "All existing tests pass unchanged"
+      ],
+      "risks": [
+        "Float error: 0.99*80/100*3 is about 2.376, and round2 rounds it to 2.38. The 1e-9 epsilon in round2 covers half-cent cases.",
+        "Leaving the sale_price import unused in cart.py after the change."
+      ],
+      "open_questions": []
+    },
+    "architecture": {
+      "summary": "Change Cart.line_total so that, when the cart is on sale, it applies the sale percent to unit_price * qty and calls round2 once. Non-sale lines stay round2(unit_price * qty). sale_price in pricing.py is untouched and remains the single-unit API. Add tests to tests/test_cart.py and tests/test_pricing.py.",
+      "components": [
+        {
+          "name": "Cart.line_total",
+          "path": "shop/cart.py",
+          "change": "modify",
+          "responsibility": "Compute the line total, rounding once per line."
+        },
+        {
+          "name": "cart tests",
+          "path": "tests/test_cart.py",
+          "change": "modify",
+          "responsibility": "Cover multi-quantity sale rounding and non-sale lines."
+        },
+        {
+          "name": "pricing tests",
+          "path": "tests/test_pricing.py",
+          "change": "modify",
+          "responsibility": "Pin the unchanged single-unit sale_price behaviour."
+        }
+      ],
+      "invariants": [
+        "Each line is rounded exactly once via round2.",
+        "SALE_PERCENT is defined only in shop/pricing.py."
+      ],
+      "error_handling": "No new error paths.",
+      "security": "Not applicable.",
+      "performance": "Not applicable."
+    },
+    "decisions": [
+      {
+        "id": "ADR-1",
+        "title": "Fix in Cart.line_total, not a non-existent round_line",
+        "decision": "Implement the formula inline in Cart.line_total, importing SALE_PERCENT from shop.pricing. Do not create shop.money.round_line.",
+        "rationale": "round_line does not exist. The task explicitly gives the formula for shop/cart.py, and a minimal change avoids new public API.",
+        "alternatives_rejected": [
+          "Creating round_line in money.py: it would invent an API the task assumed already existed, and money.py would need to know about the sale percent.",
+          "Changing sale_price: this is forbidden by the task."
+        ],
+        "constraints": [
+          "Do not add functions to shop/money.py.",
+          "Do not modify shop/pricing.py."
+        ]
+      },
+      {
+        "id": "ADR-2",
+        "title": "Exact expression order",
+        "decision": "Use round2(item[\u0022unit_price\u0022] * (100 - SALE_PERCENT) / 100 * item[\u0022qty\u0022]) in exactly this left-to-right order.",
+        "rationale": "It matches the spec and keeps float results predictable.",
+        "alternatives_rejected": [
+          "Multiplying by 0.8 or reordering the operations."
+        ],
+        "constraints": [
+          "Do not hard-code 20 or 0.8."
+        ]
+      }
+    ]
+  },
+  "revision": 1,
+  "revisions": [],
+  "lessons": [],
+  "progress": {
+    "U1": "accepted"
+  }
+}

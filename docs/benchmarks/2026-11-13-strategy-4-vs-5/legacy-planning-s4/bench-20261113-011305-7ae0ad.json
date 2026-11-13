@@ -1,0 +1,257 @@
+{
+  "bench_id": "bench-20261113-011305-7ae0ad",
+  "results": [
+    {
+      "bench_id": "bench-20261113-011305-7ae0ad",
+      "task_id": "sale-rounding-misled",
+      "strategy": "4",
+      "repeat": 1,
+      "run_id": "20261113-011305-7ee4fe",
+      "run_status": "pass",
+      "accepted": true,
+      "usd": 0.367432,
+      "cost_source": "estimated",
+      "duration": "00:17:13.2910000",
+      "note": null,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "calls": 1,
+          "input_tokens": 6698,
+          "output_tokens": 1803,
+          "cached_tokens": 0,
+          "usd": 0.063393
+        },
+        {
+          "model": "gemini-3.8-flash-high",
+          "calls": 2,
+          "input_tokens": 231426,
+          "output_tokens": 26676,
+          "cached_tokens": 37261,
+          "usd": 0.304039
+        }
+      ],
+      "stats": {
+        "units": 2,
+        "units_accepted": 2,
+        "units_accepted_without_takeover": 2,
+        "worker_attempts": 2,
+        "worker_retries": 0,
+        "takeovers": 0,
+        "interventions": 0,
+        "instruction_corrections": 0,
+        "guided_corrections": 0,
+        "plan_revisions": 0,
+        "review_change_requests": 0,
+        "architectural_violations": 0,
+        "repeated_mistakes": 0,
+        "human_decisions": 0,
+        "blocker_reports": 0,
+        "failed_takeovers": 0,
+        "splits": 0,
+        "lessons": 0,
+        "supervised_takeovers": 0,
+        "usd_by_purpose": {
+          "architect:planning": 0.063393,
+          "worker:work": 0.304039
+        },
+        "unplanned_changes": 0,
+        "judge_verdict": "Approve",
+        "judge_concerns": []
+      },
+      "input_tokens": 238124,
+      "output_tokens": 28479,
+      "cached_tokens": 37261,
+      "total_tokens": 266603
+    },
+    {
+      "bench_id": "bench-20261113-011305-7ae0ad",
+      "task_id": "coupon-stacking-misled",
+      "strategy": "4",
+      "repeat": 1,
+      "run_id": "20261113-013018-1c64c6",
+      "run_status": "pass",
+      "accepted": true,
+      "usd": 0.790217,
+      "cost_source": "estimated",
+      "duration": "00:09:04.6880000",
+      "note": null,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "calls": 1,
+          "input_tokens": 7348,
+          "output_tokens": 2516,
+          "cached_tokens": 0,
+          "usd": 0.08029
+        },
+        {
+          "model": "gemini-3.8-flash-high",
+          "calls": 2,
+          "input_tokens": 262237,
+          "output_tokens": 106319,
+          "cached_tokens": 666849,
+          "usd": 0.709927
+        }
+      ],
+      "stats": {
+        "units": 2,
+        "units_accepted": 2,
+        "units_accepted_without_takeover": 2,
+        "worker_attempts": 2,
+        "worker_retries": 0,
+        "takeovers": 0,
+        "interventions": 0,
+        "instruction_corrections": 0,
+        "guided_corrections": 0,
+        "plan_revisions": 0,
+        "review_change_requests": 0,
+        "architectural_violations": 0,
+        "repeated_mistakes": 0,
+        "human_decisions": 0,
+        "blocker_reports": 0,
+        "failed_takeovers": 0,
+        "splits": 0,
+        "lessons": 0,
+        "supervised_takeovers": 0,
+        "usd_by_purpose": {
+          "architect:planning": 0.08029,
+          "worker:work": 0.709927
+        },
+        "unplanned_changes": 0,
+        "judge_verdict": "Approve",
+        "judge_concerns": []
+      },
+      "input_tokens": 269585,
+      "output_tokens": 108835,
+      "cached_tokens": 666849,
+      "total_tokens": 378420
+    },
+    {
+      "bench_id": "bench-20261113-011305-7ae0ad",
+      "task_id": "integer-cents-misled",
+      "strategy": "4",
+      "repeat": 1,
+      "run_id": "20261113-013923-05038f",
+      "run_status": "pass",
+      "accepted": true,
+      "usd": 0.59315,
+      "cost_source": "estimated",
+      "duration": "00:06:15.0950000",
+      "note": null,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "calls": 1,
+          "input_tokens": 7068,
+          "output_tokens": 2894,
+          "cached_tokens": 0,
+          "usd": 0.0867
+        },
+        {
+          "model": "gemini-3.8-flash-high",
+          "calls": 2,
+          "input_tokens": 273464,
+          "output_tokens": 60652,
+          "cached_tokens": 371544,
+          "usd": 0.50645
+        }
+      ],
+      "stats": {
+        "units": 2,
+        "units_accepted": 2,
+        "units_accepted_without_takeover": 2,
+        "worker_attempts": 2,
+        "worker_retries": 0,
+        "takeovers": 0,
+        "interventions": 0,
+        "instruction_corrections": 0,
+        "guided_corrections": 0,
+        "plan_revisions": 0,
+        "review_change_requests": 0,
+        "architectural_violations": 0,
+        "repeated_mistakes": 0,
+        "human_decisions": 0,
+        "blocker_reports": 0,
+        "failed_takeovers": 0,
+        "splits": 0,
+        "lessons": 0,
+        "supervised_takeovers": 0,
+        "usd_by_purpose": {
+          "architect:planning": 0.0867,
+          "worker:work": 0.50645
+        },
+        "unplanned_changes": 0,
+        "judge_verdict": "Approve",
+        "judge_concerns": []
+      },
+      "input_tokens": 280532,
+      "output_tokens": 63546,
+      "cached_tokens": 371544,
+      "total_tokens": 344078
+    },
+    {
+      "bench_id": "bench-20261113-011305-7ae0ad",
+      "task_id": "ttl-cache-misled",
+      "strategy": "4",
+      "repeat": 1,
+      "run_id": "20261113-014538-7e8690",
+      "run_status": "pass",
+      "accepted": true,
+      "usd": 0.827037,
+      "cost_source": "estimated",
+      "duration": "00:09:16.7180000",
+      "note": null,
+      "models": [
+        {
+          "model": "claude-opus-5-5",
+          "calls": 1,
+          "input_tokens": 7439,
+          "output_tokens": 3893,
+          "cached_tokens": 0,
+          "usd": 0.108261
+        },
+        {
+          "model": "gemini-3.8-flash-high",
+          "calls": 2,
+          "input_tokens": 248309,
+          "output_tokens": 111118,
+          "cached_tokens": 673445,
+          "usd": 0.718776
+        }
+      ],
+      "stats": {
+        "units": 2,
+        "units_accepted": 2,
+        "units_accepted_without_takeover": 2,
+        "worker_attempts": 2,
+        "worker_retries": 0,
+        "takeovers": 0,
+        "interventions": 0,
+        "instruction_corrections": 0,
+        "guided_corrections": 0,
+        "plan_revisions": 0,
+        "review_change_requests": 0,
+        "architectural_violations": 0,
+        "repeated_mistakes": 0,
+        "human_decisions": 0,
+        "blocker_reports": 0,
+        "failed_takeovers": 0,
+        "splits": 0,
+        "lessons": 0,
+        "supervised_takeovers": 0,
+        "usd_by_purpose": {
+          "architect:planning": 0.108261,
+          "worker:work": 0.718776
+        },
+        "unplanned_changes": 0,
+        "judge_verdict": "Approve",
+        "judge_concerns": []
+      },
+      "input_tokens": 255748,
+      "output_tokens": 115011,
+      "cached_tokens": 673445,
+      "total_tokens": 370759
+    }
+  ]
+}

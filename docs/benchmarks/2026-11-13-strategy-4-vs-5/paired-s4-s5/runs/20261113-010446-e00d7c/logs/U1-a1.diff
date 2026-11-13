@@ -1,0 +1,114 @@
+diff --git a/shop/lru.py b/shop/lru.py
+new file mode 100644
+index 0000000..6c09565
+--- /dev/null
++++ b/shop/lru.py
+@@ -0,0 +1,39 @@
++"""A minimal least-recently-used ordered store (not thread-safe)."""
++
++from collections import OrderedDict
++
++
++class LRU:
++    def __init__(self) -> None:
++        self._data = OrderedDict()
++
++    def __len__(self) -> int:
++        return len(self._data)
++
++    def __contains__(self, key) -> bool:
++        return key in self._data
++
++    def get(self, key, default=None):
++        if key in self._data:
++            self._data.move_to_end(key)
++            return self._data[key]
++        return default
++
++    def peek(self, key, default=None):
++        return self._data.get(key, default)
++
++    def put(self, key, value) -> None:
++        self._data[key] = value
++        self._data.move_to_end(key)
++
++    def remove(self, key) -> bool:
++        if key in self._data:
++            del self._data[key]
++            return True
++        return False
++
++    def pop_oldest(self) -> tuple:
++        return self._data.popitem(last=False)
++
++    def keys(self) -> list:
++        return list(self._data.keys())
+diff --git a/tests/test_lru.py b/tests/test_lru.py
+new file mode 100644
+index 0000000..547540e
+--- /dev/null
++++ b/tests/test_lru.py
+@@ -0,0 +1,63 @@
++import unittest
++
++from shop.lru import LRU
++
++
++class LRUTests(unittest.TestCase):
++    def test_put_get(self):
++        lru = LRU()
++        lru.put("a", 1)
++        self.assertEqual(lru.get("a"), 1)
++        self.assertEqual(lru.get("x", "d"), "d")
++
++    def test_get_marks_used(self):
++        lru = LRU()
++        lru.put("a", 1)
++        lru.put("b", 2)
++        lru.get("a")
++        self.assertEqual(lru.pop_oldest(), ("b", 2))
++
++    def test_peek_does_not_reorder(self):
++        lru = LRU()
++        lru.put("a", 1)
++        lru.put("b", 2)
++        self.assertEqual(lru.peek("a"), 1)
++        self.assertEqual(lru.pop_oldest(), ("a", 1))
++
++    def test_put_existing_replaces_and_marks_used(self):
++        lru = LRU()
++        lru.put("a", 1)
++        lru.put("b", 2)
++        lru.put("a", 3)
++        self.assertEqual(lru.keys(), ["b", "a"])
++        self.assertEqual(lru.peek("a"), 3)
++        self.assertEqual(len(lru), 2)
++
++    def test_remove(self):
++        lru = LRU()
++        lru.put("a", 1)
++        self.assertTrue(lru.remove("a"))
++        self.assertFalse(lru.remove("a"))
++        self.assertNotIn("a", lru)
++
++    def test_pop_oldest_empty(self):
++        with self.assertRaises(KeyError):
++            LRU().pop_oldest()
++
++    def test_len_contains(self):
++        lru = LRU()
++        lru.put("a", 1)
++        lru.put("b", 2)
++        self.assertEqual(len(lru), 2)
++        self.assertIn("a", lru)
++        self.assertNotIn("z", lru)
++
++    def test_none_value(self):
++        lru = LRU()
++        lru.put("k", None)
++        self.assertIsNone(lru.get("k", "d"))
++        self.assertIn("k", lru)
++
++
++if __name__ == "__main__":
++    unittest.main()

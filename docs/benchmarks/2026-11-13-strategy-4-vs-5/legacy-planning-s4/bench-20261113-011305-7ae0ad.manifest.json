@@ -1,0 +1,117 @@
+{
+  "bench_id": "bench-20261113-011305-7ae0ad",
+  "started": "2026-11-13T01:13:05.22385+00:00",
+  "taskset": "D:\\Programming\\Windows-WPF\\Taskrail\\examples",
+  "tasks": [
+    {
+      "id": "sale-rounding-misled",
+      "repo": "shop-demo",
+      "prompt_sha": "3c56ce9aa5ce",
+      "acceptance": "acceptance/sale-rounding"
+    },
+    {
+      "id": "coupon-stacking-misled",
+      "repo": "shop-demo",
+      "prompt_sha": "210dd1f01b1c",
+      "acceptance": "acceptance/coupon-stacking"
+    },
+    {
+      "id": "integer-cents-misled",
+      "repo": "shop-demo",
+      "prompt_sha": "61d3ca183b82",
+      "acceptance": "acceptance/integer-cents"
+    },
+    {
+      "id": "ttl-cache-misled",
+      "repo": "shop-demo",
+      "prompt_sha": "72a928f1d22a",
+      "acceptance": "acceptance/ttl-cache"
+    }
+  ],
+  "strategies": [
+    {
+      "id": "4",
+      "description": "architect plan \u002B cheap worker \u002B gates \u002B supervision"
+    }
+  ],
+  "repeat": 1,
+  "trials": 4,
+  "max_usd": 20,
+  "share_plans": false,
+  "judge": true,
+  "models": {
+    "architect": "claude-opus-5-5",
+    "worker": "gemini-3.8-flash-high"
+  },
+  "architect_provider": "claude-cli",
+  "executors": {
+    "cheap": "antigravity",
+    "strong": "claude-code-sub"
+  },
+  "temperature": "provider default (not settable through the Claude Code and Antigravity CLIs)",
+  "planning": {
+    "blueprint": false,
+    "critique": false,
+    "max_revision_rounds": 0,
+    "inspect_files": false,
+    "max_inspect_files": 12,
+    "max_context_chars": 60000
+  },
+  "supervision": {
+    "max_interventions_per_unit": 2,
+    "max_interventions_per_run": 6,
+    "early_on_repeated_failure": true,
+    "resume_after_failed_takeover": true,
+    "max_splits_per_run": 2,
+    "max_plan_revisions": 20,
+    "worker_reports": true
+  },
+  "review": {
+    "mode": "risk",
+    "max_change_requests_per_unit": 1,
+    "on_unavailable": "accept",
+    "medium_risk_diff_lines": 150
+  },
+  "escalation": {
+    "max_retries_per_unit": 2,
+    "max_takeovers_per_unit": 1,
+    "protected_paths": [],
+    "max_diff_lines": 400,
+    "review_on_new_dependency": true,
+    "allowed_dependencies": [],
+    "worker_timeout_seconds": 1200,
+    "final_review": false
+  },
+  "budget": {
+    "max_usd_per_task": 8.00,
+    "max_usd_per_run": null,
+    "max_architect_token_share": 0.3
+  },
+  "gate_execution": "windows-sandbox",
+  "gates": [
+    "unittest",
+    "locked_regions"
+  ],
+  "prompts": {
+    "critic": "0a9b02be200b",
+    "decompose": "333bdae61fc7",
+    "final_review": "b06cf5507655",
+    "planner.blueprint": "70d076f9ff1a",
+    "planner.clarify": "caba95928755",
+    "planner.contract": "3cafa74e56d1",
+    "planner.inspect": "0407da97833b",
+    "supervisor": "ff73f6b516c3",
+    "takeover": "c1df4a851ea4",
+    "unit_review": "266ace23a52a"
+  },
+  "environment": {
+    "tokonomy": "0.0.1\u002B0e59d1488036f7f3f9feaa54f9d099f35beec5fa",
+    "os": "Microsoft Windows 10.0.26200",
+    "executor:antigravity": "1.5.7",
+    "executor:claude-code-sub": "2.1.316 (Claude Code)",
+    "architect_cli": "2.1.316 (Claude Code)",
+    "git_head": "41a7a802b7135dbdbffc4da0f6da10a66b9efb59",
+    "git_dirty_files": "1",
+    "git_diff_sha": "e3b0c44298fc"
+  }
+}
