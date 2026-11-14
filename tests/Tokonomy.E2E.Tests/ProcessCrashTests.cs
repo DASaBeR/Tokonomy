@@ -109,6 +109,22 @@ public sealed class ProcessCrashTests : IDisposable
         return p;
     }
 
+    /// <summary>A killed process can hold the ledger files for a moment on Windows; wait for them instead of failing.</summary>
+    private SqliteLedger OpenLedger()
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                return new SqliteLedger(Path.Combine(Config, "ledger.db"));
+            }
+            catch (Microsoft.Data.Sqlite.SqliteException) when (attempt < 40)
+            {
+                Thread.Sleep(250);
+            }
+        }
+    }
+
     private string[] LogLines() => File.Exists(Log) ? File.ReadAllLines(Log) : [];
 
     [Fact]
@@ -130,7 +146,7 @@ public sealed class ProcessCrashTests : IDisposable
             await first.WaitForExitAsync();
         }
 
-        using (var ledger = new SqliteLedger(Path.Combine(Config, "ledger.db")))
+        using (var ledger = OpenLedger())
         {
             Assert.Equal(RunStatus.Running, ledger.GetRun("run-1")!.Status); // no cleanup ran: a real crash
         }
@@ -146,7 +162,7 @@ public sealed class ProcessCrashTests : IDisposable
         var subjects = _repo.Git("log", "--format=%s", "tokonomy/run-1");
         Assert.Equal(1, subjects.Split('\n').Count(s => s == "tokonomy(U1): Feature"));
         Assert.Contains("tokonomy(U2): Docs", subjects, StringComparison.Ordinal);
-        using var after = new SqliteLedger(Path.Combine(Config, "ledger.db"));
+        using var after = OpenLedger();
         Assert.Equal(RunStatus.Pass, after.GetRun("run-1")!.Status);
     }
 }
