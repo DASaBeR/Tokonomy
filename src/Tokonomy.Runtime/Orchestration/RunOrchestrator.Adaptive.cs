@@ -91,6 +91,7 @@ public sealed partial class RunOrchestrator
         RunContext ctx, string unitId, UnitState state, UnitTrack track, SupervisionRequest call, Decision decision, WorkerReport? report,
         UnitDiff diff, List<GateResult> gateResults, PlanDeviation deviation, string unitStart, IReadOnlyList<ReviewFinding> reviewFindings, CancellationToken ct)
     {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
         var request = ctx.Request;
         var policy = request.Policy;
         var model = ArchitectModel(request);
@@ -152,8 +153,8 @@ public sealed partial class RunOrchestrator
         string text;
         try
         {
-            var response = await architect!.CompleteAsync(new ProviderRequest(model, SupervisorPrompt.System, SupervisorPrompt.Build(input)), ct);
-            RecordArchitectCall(request.RunId, unitId, response, ctx.Budget, CallPurposes.Supervision);
+            var response = await CallArchitectAsync(request, unitId, CallPurposes.Supervision, new ProviderRequest(model, SupervisorPrompt.System, SupervisorPrompt.Build(input)), ct);
+            RecordArchitectCall(request, unitId, response, ctx.Budget, CallPurposes.Supervision);
             cost = response.Usd ?? 0;
             text = response.Text;
             request.Artifacts.WriteLog($"{unitId}-supervision{track.Interventions}.reply.md", text);
@@ -256,7 +257,7 @@ public sealed partial class RunOrchestrator
                 new Step(StepKind.Human, $"the architect's correction adds dependencies ({names}); approve them with escalation.allowed_dependencies"));
         }
 
-        var verified = await VerifyArchitectEditAsync(ctx, unit, unitStart, state, model, reply.Edits, applied, kind, TakeoverTrigger.None, ct);
+        var verified = await VerifyArchitectEditAsync(ctx, unit, unitStart, state, model, reply.Edits, applied, kind, TakeoverTrigger.None, started, ct);
         var summary = reply.Summary ?? (reply.Diagnosis.Length > 0 ? Shorten(reply.Diagnosis, 200) : $"the architect {kind}");
         if (verified.Ok)
         {
@@ -369,8 +370,8 @@ public sealed partial class RunOrchestrator
                 Report = report,
                 Lessons = ctx.Plan.LessonsFor(unit.Id),
             });
-            var response = await architect!.CompleteAsync(new ProviderRequest(model, UnitReviewPrompt.System, prompt, JsonOutput: true), ct);
-            RecordArchitectCall(request.RunId, unit.Id, response, ctx.Budget, CallPurposes.Review);
+            var response = await CallArchitectAsync(request, unit.Id, CallPurposes.Review, new ProviderRequest(model, UnitReviewPrompt.System, prompt, JsonOutput: true), ct);
+            RecordArchitectCall(request, unit.Id, response, ctx.Budget, CallPurposes.Review);
             request.Artifacts.WriteLog($"{unit.Id}-review{track.ReviewRequests + 1}.reply.md", response.Text);
             reply = UnitReviewPrompt.Parse(response.Text, response.Model, unit.Id);
         }
@@ -484,8 +485,8 @@ public sealed partial class RunOrchestrator
         try
         {
             var prompt = DecomposePrompt.Build(ctx.Plan.Current, unit, decision.Reason, diff.ChangedPaths, diff.TotalLines, BriefWriter.Feedback(decision.Reason, gateResults));
-            var response = await architect!.CompleteAsync(new ProviderRequest(model, DecomposePrompt.System, prompt, JsonOutput: true), ct);
-            RecordArchitectCall(request.RunId, unit.Id, response, ctx.Budget, CallPurposes.Decomposition);
+            var response = await CallArchitectAsync(request, unit.Id, CallPurposes.Decomposition, new ProviderRequest(model, DecomposePrompt.System, prompt, JsonOutput: true), ct);
+            RecordArchitectCall(request, unit.Id, response, ctx.Budget, CallPurposes.Decomposition);
             request.Artifacts.WriteLog($"{unit.Id}-split.reply.md", response.Text);
             text = response.Text;
             cost = response.Usd ?? 0;

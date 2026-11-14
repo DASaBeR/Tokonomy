@@ -71,8 +71,10 @@ review:                        # strategy 5 only: architectural review of units 
 
 budget:
   max_usd_per_task: 3.00       # hard abort
-  max_usd_per_run: 20.00       # optional
-  max_architect_token_share: 0.30
+  max_usd_per_run: 20.00       # optional: what one `tokonomy run` may add on top of earlier spend (planning, earlier runs); the tighter cap applies
+  max_architect_token_share: 0.30   # architect share of the run's reported tokens (input + output; planning not counted)
+  on_architect_token_share: skip_architect   # warn | skip_architect (default: no more architect calls; optional ones skipped,
+                                             # a unit that needs the architect stops) | stop_run (stop before the next unit)
 
 isolation:
   worker_env_allow: ["MY_TOOL_HOME"]   # extra env var names workers may see; secret-looking names are still dropped

@@ -109,6 +109,17 @@ internal static class Ui
     public static string Money(decimal usd, bool estimated) =>
         string.Create(CultureInfo.InvariantCulture, $"${usd:0.00##}") + (estimated ? " (est.)" : "");
 
+    /// <summary>A cost with its source: unpriced usage is flagged so a partial figure is never read as the full cost.</summary>
+    public static string Money(decimal usd, Tokonomy.Core.Model.CostSource source) => source switch
+    {
+        Tokonomy.Core.Model.CostSource.Unknown => Money(usd, true) + " + unpriced usage",
+        Tokonomy.Core.Model.CostSource.Estimated => Money(usd, true),
+        _ => Money(usd, false),
+    };
+
+    /// <summary>Shown when some usage had no price, so the cost above is incomplete.</summary>
+    public const string UnpricedNote = "Some usage had no price in .tokonomy/prices.yaml, so the cost shown is incomplete. Add the model's price to fix it.";
+
     public static string Duration(TimeSpan t) =>
         t.TotalHours >= 1 ? $"{(int)t.TotalHours}h {t.Minutes}m" : t.TotalMinutes >= 1 ? $"{(int)t.TotalMinutes}m {t.Seconds}s" : $"{t.Seconds}s";
 

@@ -48,7 +48,7 @@ public sealed class Supervisor : ISupervisor
             return new(DecisionKind.Fail, $"workspace violation: {violation.Detail}");
         }
 
-        // A large diff is a size guideline, not a defect: splitting a unit is not implemented, so rejecting a big change
+        // A large diff is a size guideline, not a defect (only strategy 5 can split a unit), so rejecting a big change
         // that every gate (the architect's acceptance tests included) has verified would only throw working code away.
         // It is rejected only when nothing verified it: no gate ran, a gate failed, or the run faulted or timed out.
         var oversized = unit.DiffLines > esc.MaxDiffLines;

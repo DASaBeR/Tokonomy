@@ -127,6 +127,7 @@ public sealed class BenchRunner(
             MaxUsdPerTask = capUsd,
             MaxUsdPerRun = policy.Budget.MaxUsdPerRun,
             MaxArchitectTokenShare = policy.Budget.MaxArchitectTokenShare,
+            OnArchitectTokenShare = policy.Budget.OnArchitectTokenShare,
         },
     };
 

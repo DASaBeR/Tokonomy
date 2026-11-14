@@ -12,9 +12,24 @@ public enum RunStatus
 
 public enum CostSource
 {
+    /// <summary>An exact figure from the metering proxy or the provider's own billing data.</summary>
     Metered,
+
+    /// <summary>Tokens priced from <c>prices.yaml</c> (an API-equivalent figure), or a cost the tool itself only estimates.</summary>
     Estimated,
+
+    /// <summary>
+    /// Usage happened but no dollar figure could be determined (no price configured, or the usage was not reported).
+    /// The recorded amount is 0 only as a placeholder; reports must never present it as "free".
+    /// </summary>
+    Unknown,
 }
+
+/// <summary>
+/// Tokens (input plus output) a run's calls reported, by role, for the architect token-share cap. Worker calls that
+/// reported no tokens are counted separately: with any of them the share cannot be measured honestly.
+/// </summary>
+public sealed record TokenUse(long ArchitectTokens, long WorkerTokens, int WorkerCalls, int WorkerCallsWithoutTokens);
 
 public enum LlmRole
 {

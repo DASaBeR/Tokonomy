@@ -65,7 +65,9 @@ public static class BriefWriter
         sb.AppendLine();
         sb.AppendLine("You are implementing one unit of a larger task. Make the smallest change that satisfies this unit.");
         sb.AppendLine("Do not commit, do not create branches, and do not edit files outside this repository.");
-        sb.AppendLine("Your changes are verified by automated gates (build, lint, tests); your own report is not used.");
+        sb.AppendLine(input.RequestReport
+            ? "Your changes are verified by automated gates (build, lint, tests). Your report (see \"Report\") explains what you did and what blocked you; it never replaces the gates."
+            : "Your changes are verified by automated gates (build, lint, tests); a summary of what you did is not needed.");
         if (contract.IsBlueprint || input.RequestReport)
         {
             sb.AppendLine();

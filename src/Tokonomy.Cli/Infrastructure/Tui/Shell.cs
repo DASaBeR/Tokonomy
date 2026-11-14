@@ -155,7 +155,7 @@ internal sealed class Shell(IAnsiConsole console, Func<string[], Task<int>> runC
         }
 
         var choice = Choose<string[]>("Pick a run", runs.Select(r => (
-            Label: $"{r.Id}  {r.Started.UtcDateTime.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)}  {r.Status}  {Ui.Money(r.TotalUsd, r.CostSource == Tokonomy.Core.Model.CostSource.Estimated)}  {Truncate(r.TaskId, 40)}",
+            Label: $"{r.Id}  {r.Started.UtcDateTime.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture)}  {r.Status}  {Ui.Money(r.TotalUsd, r.CostSource)}  {Truncate(r.TaskId, 40)}",
             Value: new[] { "report", r.Id })));
         return Task.FromResult(choice);
     }

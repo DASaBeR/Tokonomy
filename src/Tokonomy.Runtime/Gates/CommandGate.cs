@@ -5,7 +5,7 @@ using Tokonomy.Runtime.Gates.Isolation;
 namespace Tokonomy.Runtime.Gates;
 
 /// <summary>Raw outcome of one gate execution, before comparison with the baseline.</summary>
-public sealed record GateRun(string Gate, bool Passed, bool TimedOut, IReadOnlySet<string>? FailingTests, string OutputTail);
+public sealed record GateRun(string Gate, bool Passed, bool TimedOut, IReadOnlySet<string>? FailingTests, string OutputTail, TimeSpan Duration = default);
 
 /// <summary>
 /// Runs a command gate in a gate environment (see <see cref="IGateExecutionProvider"/>) and compares it with the
@@ -23,6 +23,7 @@ public sealed class CommandGate(GateConfig config)
         var reportCopy = config.Report is null
             ? null
             : logFile is not null ? logFile + ".report" : Path.Combine(Path.GetTempPath(), $"tokonomy-report-{Guid.NewGuid():N}.xml");
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
             var result = await environment.RunAsync(new GateCommand
@@ -43,7 +44,7 @@ public sealed class CommandGate(GateConfig config)
                 output += $"\n[tokonomy] gate timed out after {config.TimeoutSeconds}s";
             }
 
-            return new GateRun(Name, result.Succeeded, timedOut, failing, Tail(output, FeedbackChars));
+            return new GateRun(Name, result.Succeeded, timedOut, failing, Tail(output, FeedbackChars), System.Diagnostics.Stopwatch.GetElapsedTime(started));
         }
         finally
         {
@@ -64,7 +65,8 @@ public sealed class CommandGate(GateConfig config)
         ArgumentNullException.ThrowIfNull(attempt);
         if (attempt.Passed)
         {
-            return new GateResult { Gate = attempt.Gate, Status = GateStatus.Passed, BaselinePassed = baseline?.Passed };
+            return new GateResult { Gate = attempt.Gate,
+                Duration = attempt.Duration, Status = GateStatus.Passed, BaselinePassed = baseline?.Passed };
         }
 
         if (baseline is null || baseline.Passed)
@@ -72,6 +74,7 @@ public sealed class CommandGate(GateConfig config)
             return new GateResult
             {
                 Gate = attempt.Gate,
+                Duration = attempt.Duration,
                 Status = GateStatus.Failed,
                 BaselinePassed = baseline?.Passed,
                 NewFailures = attempt.FailingTests?.Order(StringComparer.Ordinal).ToList() ?? [],
@@ -86,6 +89,7 @@ public sealed class CommandGate(GateConfig config)
                 return new GateResult
                 {
                     Gate = attempt.Gate,
+                Duration = attempt.Duration,
                     Status = GateStatus.Failed,
                     BaselinePassed = false,
                     Output = attempt.OutputTail + "\n[tokonomy] test report missing (baseline had one); likely a build failure.",
@@ -96,6 +100,7 @@ public sealed class CommandGate(GateConfig config)
             return new GateResult
             {
                 Gate = attempt.Gate,
+                Duration = attempt.Duration,
                 Status = added.Count == 0 ? GateStatus.PreExisting : GateStatus.Failed,
                 BaselinePassed = false,
                 NewFailures = added,
@@ -103,7 +108,8 @@ public sealed class CommandGate(GateConfig config)
             };
         }
 
-        return new GateResult { Gate = attempt.Gate, Status = GateStatus.PreExisting, BaselinePassed = false, Output = attempt.OutputTail };
+        return new GateResult { Gate = attempt.Gate,
+                Duration = attempt.Duration, Status = GateStatus.PreExisting, BaselinePassed = false, Output = attempt.OutputTail };
     }
 
     internal static string Tail(string text, int max) => text.Length <= max ? text : "...\n" + text[^max..];

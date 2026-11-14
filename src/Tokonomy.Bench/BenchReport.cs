@@ -62,7 +62,7 @@ public static class BenchReport
                     accepted == 0 ? null : total / accepted,
                     trials.Min(t => t.Usd),
                     trials.Max(t => t.Usd),
-                    trials.Any(t => t.CostSource == CostSource.Estimated))
+                    trials.Any(t => t.CostSource != CostSource.Metered))
                 {
                     InputTokens = trials.Sum(t => t.InputTokens),
                     OutputTokens = trials.Sum(t => t.OutputTokens),

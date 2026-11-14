@@ -297,6 +297,12 @@ public static class ConfigLoader
         {
             yield return new(Severity.Error, file, null, "budget.max_architect_token_share must be in (0, 1].");
         }
+
+        if (b.OnArchitectTokenShare is not (BudgetConfig.ShareWarn or BudgetConfig.ShareSkipArchitect or BudgetConfig.ShareStopRun))
+        {
+            yield return new(Severity.Error, file, null,
+                $"budget.on_architect_token_share must be {BudgetConfig.ShareWarn}, {BudgetConfig.ShareSkipArchitect} or {BudgetConfig.ShareStopRun} (got '{b.OnArchitectTokenShare}').");
+        }
     }
 
     private static IEnumerable<ConfigIssue> ValidateGateExecution(Policy policy, string file)

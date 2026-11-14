@@ -252,9 +252,25 @@ public sealed class EscalationConfig
 
 public sealed class BudgetConfig
 {
+    public const string ShareWarn = "warn";
+    public const string ShareSkipArchitect = "skip_architect";
+    public const string ShareStopRun = "stop_run";
+
     public decimal MaxUsdPerTask { get; set; } = 3.00m;
     public decimal? MaxUsdPerRun { get; set; }
+
+    /// <summary>
+    /// Cap on the architect's share of the tokens a run processes (input plus output, as reported by the providers;
+    /// planning is not counted). Checked before every architect call during a run.
+    /// </summary>
     public double MaxArchitectTokenShare { get; set; } = 0.30;
+
+    /// <summary>
+    /// What happens when the share is above the cap: <c>warn</c> (note it and continue), <c>skip_architect</c> (default:
+    /// no further architect calls this run; optional ones are skipped, a unit that needs the architect stops) or
+    /// <c>stop_run</c> (the run stops before its next unit).
+    /// </summary>
+    public string OnArchitectTokenShare { get; set; } = ShareSkipArchitect;
 }
 
 /// <summary><c>planning</c> in policy.yaml. Applies to every strategy that uses an architect plan (3, 4, 5).</summary>

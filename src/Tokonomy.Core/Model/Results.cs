@@ -103,6 +103,9 @@ public sealed record GateResult
     public IReadOnlyList<string> NewFailures { get; init; } = [];
     public string Output { get; init; } = "";
 
+    /// <summary>How long the gate ran (zero for checks Tokonomy evaluates in-process, such as locked regions and lessons).</summary>
+    public TimeSpan Duration { get; init; }
+
     public bool Blocking => Status == GateStatus.Failed;
 }
 

@@ -146,6 +146,9 @@ public sealed partial class RunOrchestrator(
     // A provider timeout must mean "architect unavailable" (and its fallback), never an exception that ends the run.
     private readonly IProvider? architect = Tokonomy.Runtime.Providers.GuardedProvider.Wrap(architect);
 
+    // Per-run state of the architect token-share cap (reset at the start of every run).
+    private ArchitectShareState _share = new();
+
     // Unit currently executing, so metered worker calls (reported on proxy threads) are attributed to it.
     private volatile string? _currentUnit;
     private volatile IRunObserver? _usageObserver;
@@ -156,6 +159,7 @@ public sealed partial class RunOrchestrator(
         using var work = Tokonomy.Runtime.Process.ChildProcesses.BeginWork(); // a Ctrl+C waits for this run's cleanup
         observer ??= new NullObserver();
         _usageObserver = observer;
+        _share = new ArchitectShareState();
         var policy = request.Policy;
         var artifacts = request.Artifacts;
         var units = new List<UnitOutcome>();
@@ -177,7 +181,10 @@ public sealed partial class RunOrchestrator(
 
         using var heldLock = runLock;
         ledger.SetRunStatus(request.RunId, RunStatus.Running);
-        using var budget = new BudgetGuard(policy.Budget.MaxUsdPerTask, request.AlreadySpentUsd);
+        // max_usd_per_task caps the whole task (planning and every earlier run included); max_usd_per_run caps what this one
+        // run may add on top of what was already spent. The tighter of the two applies.
+        var budgetLimit = BudgetLimit(policy.Budget, request.AlreadySpentUsd);
+        using var budget = new BudgetGuard(budgetLimit, request.AlreadySpentUsd);
 
         // Where gates run is settled before anything else exists: an unusable provider stops the run here, before a
         // worktree or a worker, and nothing ever falls back to running gates on the host.
@@ -352,6 +359,18 @@ public sealed partial class RunOrchestrator(
 
             while (plan.NextPending() is { } next)
             {
+                // Spend that crossed the cap after the last attempt (a review, a takeover) must stop the run before the
+                // next worker starts, not only kill a worker that is already running.
+                context.Budget.Token.ThrowIfCancellationRequested();
+                if (_share.StopRequested)
+                {
+                    // budget.on_architect_token_share: stop_run. Accepted units stay committed; the run can be resumed after
+                    // raising budget.max_architect_token_share.
+                    status = RunStatus.AbortedBudget;
+                    error = $"the architect's token share passed budget.max_architect_token_share ({request.Policy.Budget.MaxArchitectTokenShare:P0}); on_architect_token_share is stop_run";
+                    return Finish();
+                }
+
                 plan.MarkRunning(next.Id);
                 var outcome = await RunUnitAsync(context, next.Id, ct);
                 units.Add(outcome);
@@ -393,7 +412,9 @@ public sealed partial class RunOrchestrator(
         catch (OperationCanceledException) when (budget.Exhausted && !ct.IsCancellationRequested)
         {
             status = RunStatus.AbortedBudget;
-            error = $"budget of ${policy.Budget.MaxUsdPerTask} exhausted";
+            error = budgetLimit < policy.Budget.MaxUsdPerTask
+                ? $"budget of ${policy.Budget.MaxUsdPerRun} for this run (budget.max_usd_per_run) exhausted"
+                : $"budget of ${policy.Budget.MaxUsdPerTask} exhausted";
             return Finish();
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -475,8 +496,8 @@ public sealed partial class RunOrchestrator(
         FinalReview review;
         try
         {
-            var response = await architect.CompleteAsync(new ProviderRequest(model, ReviewPrompt.System, prompt), ct);
-            RecordArchitectCall(request.RunId, units.Count > 0 ? units[^1].UnitId : "", response, budget, CallPurposes.FinalReview);
+            var response = await CallArchitectAsync(request, units.Count > 0 ? units[^1].UnitId : "", CallPurposes.FinalReview, new ProviderRequest(model, ReviewPrompt.System, prompt), ct);
+            RecordArchitectCall(request, units.Count > 0 ? units[^1].UnitId : "", response, budget, CallPurposes.FinalReview);
             request.Artifacts.WriteLog("final-review.reply.md", response.Text);
             review = ReviewPrompt.Parse(response.Text, response.Model);
         }
@@ -937,6 +958,7 @@ public sealed partial class RunOrchestrator(
         RunContext ctx, WorkUnit unit, string unitStart, UnitState state, Decision decision, UnitDiff diff, List<GateResult> gateResults, CancellationToken ct,
         UnitTrack? track = null)
     {
+        var started = System.Diagnostics.Stopwatch.GetTimestamp();
         var request = ctx.Request;
         var policy = request.Policy;
         var artifacts = request.Artifacts;
@@ -959,14 +981,14 @@ public sealed partial class RunOrchestrator(
             ProviderResponse response;
             try
             {
-                response = await architect!.CompleteAsync(new ProviderRequest(model, TakeoverPrompt.System, prompt), ct);
+                response = await CallArchitectAsync(request, unit.Id, CallPurposes.Takeover, new ProviderRequest(model, TakeoverPrompt.System, prompt), ct);
             }
             catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or System.ClientModel.ClientResultException)
             {
                 return new TakeoverResult(false, $"the architect call failed: {ex.Message}");
             }
 
-            RecordArchitectCall(request.RunId, unit.Id, response, ctx.Budget, CallPurposes.Takeover);
+            RecordArchitectCall(request, unit.Id, response, ctx.Budget, CallPurposes.Takeover);
             artifacts.WriteLog($"{unit.Id}-takeover{ask}.reply.md", response.Text);
             if (ctx.Budget.Exhausted)
             {
@@ -988,7 +1010,7 @@ public sealed partial class RunOrchestrator(
             return new TakeoverResult(false, $"the architect's edits could not be applied: {problem}");
         }
 
-        var verified = await VerifyArchitectEditAsync(ctx, unit, unitStart, state, model, reply.Edits, applied, "takeover", decision.Trigger, ct);
+        var verified = await VerifyArchitectEditAsync(ctx, unit, unitStart, state, model, reply.Edits, applied, "takeover", decision.Trigger, started, ct);
         if (!verified.Ok)
         {
             return new TakeoverResult(false, verified.Note);
@@ -1017,7 +1039,7 @@ public sealed partial class RunOrchestrator(
     /// </summary>
     private async Task<(bool Ok, string Note, List<GateResult> Gates)> VerifyArchitectEditAsync(
         RunContext ctx, WorkUnit unit, string unitStart, UnitState state, string model, IReadOnlyList<EditBlock> edits, ApplyResult applied,
-        string kind, TakeoverTrigger trigger, CancellationToken ct)
+        string kind, TakeoverTrigger trigger, long startedTimestamp, CancellationToken ct)
     {
         var request = ctx.Request;
         var artifacts = request.Artifacts;
@@ -1053,7 +1075,8 @@ public sealed partial class RunOrchestrator(
             Executor = "architect",
             Model = model,
             ExitCode = 0,
-            Duration = TimeSpan.Zero,
+            // From the start of the architect's step (its call or calls, applying the edits, the gate re-run) to now.
+            Duration = System.Diagnostics.Stopwatch.GetElapsedTime(startedTimestamp),
             DiffLines = newDiff.TotalLines,
             Decision = blocking.Count == 0 ? DecisionKind.Accept : DecisionKind.Fail,
             Reason = blocking.Count == 0 ? $"{kind}: gates pass" : $"{kind}: gate(s) still failing: {string.Join(", ", blocking)}",
@@ -1138,7 +1161,8 @@ public sealed partial class RunOrchestrator(
             // Tokens only (Antigravity reports no cost): use the configured price, so the cost is an API-equivalent figure
             // instead of zero. It stays marked estimated.
             // Executors report cache reads separately from fresh input, while the price table expects the total prompt size.
-            var usd = usage.Usd ?? prices.Cost(usage.Model, usage.InputTokens + usage.CachedTokens, usage.OutputTokens, usage.CachedTokens) ?? 0;
+            var priced = usage.Usd ?? UsagePricing.ReportedCost(prices, usage.Model, usage.InputTokens, usage.OutputTokens, usage.CachedTokens);
+            var usd = priced ?? 0;
             ledger.RecordLlmCall(new LlmCallRecord
             {
                 RunId = runId,
@@ -1149,7 +1173,7 @@ public sealed partial class RunOrchestrator(
                 OutputTokens = usage.OutputTokens,
                 CachedTokens = usage.CachedTokens,
                 Usd = usd,
-                Source = CostSource.Estimated,
+                Source = priced is null ? CostSource.Unknown : CostSource.Estimated,
             });
             budget.Add(usd);
             NotifyUsage(LlmRole.Worker, usage.Model, usage.InputTokens + usage.CachedTokens, usage.OutputTokens, usd, budget);
@@ -1168,23 +1192,83 @@ public sealed partial class RunOrchestrator(
         }
     }
 
-    private void RecordArchitectCall(string runId, string unitId, ProviderResponse response, BudgetGuard budget, string purpose)
+    private sealed class ArchitectShareState
     {
+        public bool Warned { get; set; }
+        public bool NotedUnmeasurable { get; set; }
+        public bool StopRequested { get; set; }
+    }
+
+    /// <summary>
+    /// Every architect call during a run goes through here so the token-share cap is applied first. When the cap refuses
+    /// the call it throws <see cref="ArchitectShareCapException"/>, which each call site handles as "architect unavailable".
+    /// </summary>
+    private async Task<ProviderResponse> CallArchitectAsync(RunRequest request, string unitId, string purpose, ProviderRequest call, CancellationToken ct)
+    {
+        var budget = request.Policy.Budget;
+        var (verdict, share) = ArchitectShare.Evaluate(ledger.GetTokenUse(request.RunId, ArchitectShare.ExcludedPurposes), budget.MaxArchitectTokenShare);
+        if (verdict == ArchitectShare.Verdict.NotMeasurable && !_share.NotedUnmeasurable)
+        {
+            _share.NotedUnmeasurable = true;
+            RecordShareEvent(request, ArchitectShare.UnmeasurableEvent, new
+            {
+                reason = "some worker calls reported no token counts, so the architect token-share cap is not applied in this run",
+                cap = budget.MaxArchitectTokenShare,
+            });
+        }
+
+        if (verdict == ArchitectShare.Verdict.Exceeded)
+        {
+            var mode = budget.OnArchitectTokenShare;
+            var detail = $"the architect has used {share:P0} of this run's tokens, above budget.max_architect_token_share ({budget.MaxArchitectTokenShare:P0})";
+            if (mode == BudgetConfig.ShareWarn)
+            {
+                if (!_share.Warned)
+                {
+                    _share.Warned = true;
+                    RecordShareEvent(request, ArchitectShare.CapEvent, new { action = "warned", purpose, unit = unitId, share, cap = budget.MaxArchitectTokenShare, mode });
+                    _usageObserver?.Warning($"{char.ToUpperInvariant(detail[0])}{detail[1..]}; continuing (on_architect_token_share: warn).");
+                }
+            }
+            else
+            {
+                _share.StopRequested |= mode == BudgetConfig.ShareStopRun;
+                RecordShareEvent(request, ArchitectShare.CapEvent, new { action = "skipped", purpose, unit = unitId, share, cap = budget.MaxArchitectTokenShare, mode });
+                _usageObserver?.Warning($"Architect {purpose} for {unitId} skipped: {detail}. Raise the cap to let the architect continue.");
+                throw new ArchitectShareCapException($"{purpose} skipped: {detail} (on_architect_token_share: {mode}); raise the cap to let the architect continue");
+            }
+        }
+
+        return await architect!.CompleteAsync(call, ct);
+    }
+
+    private void RecordShareEvent(RunRequest request, string kind, object payload) =>
+        ledger.RecordEvent(request.RunId, _clock.UtcNow, kind, System.Text.Json.JsonSerializer.Serialize(payload));
+
+    /// <summary>The spending limit for one run: the task budget, tightened by the per-run cap when one is set.</summary>
+    internal static decimal BudgetLimit(BudgetConfig budget, decimal alreadySpentUsd) =>
+        budget.MaxUsdPerRun is { } perRun ? Math.Min(budget.MaxUsdPerTask, alreadySpentUsd + perRun) : budget.MaxUsdPerTask;
+
+    private void RecordArchitectCall(RunRequest request, string unitId, ProviderResponse response, BudgetGuard budget, string purpose)
+    {
+        // Tokens without a reported cost (CLI providers on a subscription) are priced from the run's price table, never
+        // counted as free; without a price the call is recorded as Unknown.
+        var (usd, source) = UsagePricing.ForArchitect(response, request.Prices);
         ledger.RecordLlmCall(new LlmCallRecord
         {
-            RunId = runId,
+            RunId = request.RunId,
             UnitId = unitId,
             Role = LlmRole.Architect,
             Model = response.Model,
             InputTokens = response.InputTokens,
             OutputTokens = response.OutputTokens,
             CachedTokens = response.CachedTokens,
-            Usd = response.Usd ?? 0,
-            Source = response.Usd is null || response.Estimated ? CostSource.Estimated : CostSource.Metered,
+            Usd = usd,
+            Source = source,
             Purpose = purpose,
         });
-        budget.Add(response.Usd ?? 0);
-        NotifyUsage(LlmRole.Architect, response.Model, response.InputTokens, response.OutputTokens, response.Usd ?? 0, budget);
+        budget.Add(usd);
+        NotifyUsage(LlmRole.Architect, response.Model, response.InputTokens, response.OutputTokens, usd, budget);
     }
 
     /// <summary>Applies strategy limits on top of the supervisor's policy decision, for escalations that are not taken.</summary>

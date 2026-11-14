@@ -28,6 +28,9 @@ public interface ILedger
     RunRecord? GetRun(string runId);
     IReadOnlyList<RunRecord> ListRuns(int limit);
     RunSummary? GetSummary(string runId);
+
+    /// <summary>Tokens the run's calls reported, by role, leaving out calls whose purpose is in <paramref name="excludedPurposes"/>.</summary>
+    TokenUse GetTokenUse(string runId, IReadOnlyCollection<string> excludedPurposes);
 }
 
 /// <summary>
@@ -164,6 +167,10 @@ public sealed class SqliteLedger : ILedger, IDisposable
         );
         CREATE INDEX ix_unit_reviews_run ON unit_reviews(run_id);
         """,
+        // v4: how long each gate run took (0 for rows written by older builds).
+        """
+        ALTER TABLE gate_results ADD COLUMN duration_ms INTEGER NOT NULL DEFAULT 0;
+        """,
     ];
 
     private readonly SqliteConnection _connection;
@@ -200,7 +207,7 @@ public sealed class SqliteLedger : ILedger, IDisposable
         Execute("UPDATE runs SET status = $st, ended = $e WHERE id = $id", ("$st", status.ToString()), ("$e", Iso(ended)), ("$id", runId));
 
     public void MarkEstimated(string runId) =>
-        Execute("UPDATE runs SET cost_source = 'Estimated' WHERE id = $id", ("$id", runId));
+        Execute("UPDATE runs SET cost_source = 'Estimated' WHERE id = $id AND cost_source <> 'Unknown'", ("$id", runId));
 
     public void UpsertUnit(string runId, string unitId, string name, string status, int attempts, int takeovers) =>
         Execute(
@@ -229,10 +236,11 @@ public sealed class SqliteLedger : ILedger, IDisposable
     {
         ArgumentNullException.ThrowIfNull(result);
         Execute(
-            "INSERT INTO gate_results(attempt_id, gate, status, baseline_passed, new_failures_json, output_path) VALUES($a, $g, $s, $b, $f, $o)",
+            "INSERT INTO gate_results(attempt_id, gate, status, baseline_passed, new_failures_json, output_path, duration_ms) VALUES($a, $g, $s, $b, $f, $o, $d)",
             ("$a", attemptId), ("$g", result.Gate), ("$s", result.Status.ToString()),
             ("$b", result.BaselinePassed is { } bp ? (bp ? 1 : 0) : null),
-            ("$f", System.Text.Json.JsonSerializer.Serialize(result.NewFailures)), ("$o", outputPath));
+            ("$f", System.Text.Json.JsonSerializer.Serialize(result.NewFailures)), ("$o", outputPath),
+            ("$d", (long)result.Duration.TotalMilliseconds));
     }
 
     public void RecordBenchResult(BenchResultRecord result)
@@ -314,10 +322,60 @@ public sealed class SqliteLedger : ILedger, IDisposable
             ("$in", call.InputTokens), ("$out", call.OutputTokens), ("$cached", call.CachedTokens),
             ("$usd", ToMicros(call.Usd)), ("$src", call.Source.ToString()), ("$purpose", call.Purpose));
 
-        if (call.Source == CostSource.Estimated)
+        // A run's cost source is the weakest of its calls: Unknown, then Estimated, then Metered.
+        if (call.Source == CostSource.Unknown)
         {
-            Execute("UPDATE runs SET cost_source = 'Estimated' WHERE id = $id", ("$id", call.RunId));
+            Execute("UPDATE runs SET cost_source = 'Unknown' WHERE id = $id", ("$id", call.RunId));
         }
+        else if (call.Source == CostSource.Estimated)
+        {
+            Execute("UPDATE runs SET cost_source = 'Estimated' WHERE id = $id AND cost_source <> 'Unknown'", ("$id", call.RunId));
+        }
+    }
+
+    public TokenUse GetTokenUse(string runId, IReadOnlyCollection<string> excludedPurposes)
+    {
+        ArgumentNullException.ThrowIfNull(excludedPurposes);
+        long architect = 0, worker = 0;
+        int workerCalls = 0, workerWithout = 0;
+        using var cmd = Command("SELECT role, purpose, input_tokens + output_tokens FROM llm_calls WHERE run_id = $id", ("$id", runId));
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            var purpose = reader.IsDBNull(1) ? null : reader.GetString(1);
+            if (purpose is not null && excludedPurposes.Contains(purpose))
+            {
+                continue;
+            }
+
+            var tokens = reader.GetInt64(2);
+            if (reader.GetString(0) == nameof(LlmRole.Architect))
+            {
+                architect += tokens;
+            }
+            else
+            {
+                worker += tokens;
+                workerCalls++;
+                workerWithout += tokens == 0 ? 1 : 0;
+            }
+        }
+
+        return new TokenUse(architect, worker, workerCalls, workerWithout);
+    }
+
+    /// <summary>Payloads of a run's events of one kind, oldest first.</summary>
+    public IReadOnlyList<string> ListEvents(string runId, string kind)
+    {
+        var list = new List<string>();
+        using var cmd = Command("SELECT payload_json FROM events WHERE run_id = $id AND kind = $k ORDER BY id", ("$id", runId), ("$k", kind));
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            list.Add(reader.GetString(0));
+        }
+
+        return list;
     }
 
     public void RecordEvent(string runId, DateTimeOffset ts, string kind, string payloadJson) =>
@@ -545,7 +603,7 @@ public sealed class SqliteLedger : ILedger, IDisposable
 
         using var cmd = Command(
             """
-            SELECT role, COUNT(*), SUM(input_tokens), SUM(output_tokens), SUM(usd_micros), MAX(source = 'Estimated')
+            SELECT role, COUNT(*), SUM(input_tokens), SUM(output_tokens), SUM(usd_micros), MAX(source <> 'Metered')
             FROM llm_calls WHERE run_id = $id GROUP BY role ORDER BY role
             """,
             ("$id", runId));
@@ -566,7 +624,7 @@ public sealed class SqliteLedger : ILedger, IDisposable
         using var byPurpose = Command(
             """
             SELECT role, COALESCE(purpose, CASE role WHEN 'Worker' THEN 'work' ELSE 'unspecified' END), COUNT(*), SUM(input_tokens), SUM(output_tokens),
-                   SUM(usd_micros), MAX(source = 'Estimated')
+                   SUM(usd_micros), MAX(source <> 'Metered')
             FROM llm_calls WHERE run_id = $id GROUP BY 1, 2 ORDER BY 1, 6 DESC
             """,
             ("$id", runId));

@@ -108,8 +108,9 @@ public static class TaskPlanning
                 InputTokens = call.InputTokens,
                 OutputTokens = call.OutputTokens,
                 CachedTokens = call.CachedTokens,
+                // Providers built by the CLI are wrapped in PricedProvider, so a null cost here means no price was available.
                 Usd = call.Usd ?? 0,
-                Source = call.Usd is null || call.Estimated ? CostSource.Estimated : CostSource.Metered,
+                Source = call.Usd is null ? CostSource.Unknown : call.Estimated ? CostSource.Estimated : CostSource.Metered,
                 Purpose = purpose,
             });
         }

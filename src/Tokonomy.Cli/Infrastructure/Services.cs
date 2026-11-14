@@ -21,9 +21,10 @@ public sealed class Services
     private static IProvider CreateProvider(TokonomyConfig config, PriceTable prices) =>
         config.Policy.ArchitectProvider.Kind switch
         {
-            ArchitectProviderConfig.ClaudeCliKind => new ClaudeCliProvider(new ProcessRunner(), config.Policy.ArchitectProvider.CommandOrDefault),
-            ArchitectProviderConfig.AgyCliKind => new AgyCliProvider(new ProcessRunner(), config.Policy.ArchitectProvider.CommandOrDefault),
-            ArchitectProviderConfig.CodexCliKind => new CodexCliProvider(new ProcessRunner(), config.Policy.ArchitectProvider.CommandOrDefault),
+            // CLI providers on a subscription may report tokens without a cost; PricedProvider prices them from prices.yaml.
+            ArchitectProviderConfig.ClaudeCliKind => new PricedProvider(new ClaudeCliProvider(new ProcessRunner(), config.Policy.ArchitectProvider.CommandOrDefault), prices),
+            ArchitectProviderConfig.AgyCliKind => new PricedProvider(new AgyCliProvider(new ProcessRunner(), config.Policy.ArchitectProvider.CommandOrDefault), prices),
+            ArchitectProviderConfig.CodexCliKind => new PricedProvider(new CodexCliProvider(new ProcessRunner(), config.Policy.ArchitectProvider.CommandOrDefault), prices),
             _ => new OpenAiCompatibleProvider(config.Policy.ArchitectProvider.EffectiveProvider(config.Policy.Provider), prices),
         };
 

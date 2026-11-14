@@ -59,11 +59,47 @@ public sealed class ReportCommand(IAnsiConsole console) : Command<ReportSettings
                 Markup.Escape(run.Strategy),
                 StatusMarkup(run.Status),
                 run.Started.UtcDateTime.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture),
-                Money(run.TotalUsd, run.CostSource == CostSource.Estimated));
+                Money(run.TotalUsd, run.CostSource != CostSource.Metered) + (run.CostSource == CostSource.Unknown ? " [red]+ unpriced[/]" : ""));
         }
 
         console.Write(table);
         return ExitCodes.Ok;
+    }
+
+    /// <summary>What the architect token-share cap did in this run: the calls it skipped, or that it could not be applied.</summary>
+    private void ShareCapNotes(SqliteLedger ledger, string runId)
+    {
+        var skipped = new List<string>();
+        var warned = false;
+        foreach (var payload in ledger.ListEvents(runId, Tokonomy.Runtime.Orchestration.ArchitectShare.CapEvent))
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(payload);
+            var root = doc.RootElement;
+            var action = root.TryGetProperty("action", out var a) ? a.GetString() : null;
+            if (action == "warned")
+            {
+                warned = true;
+            }
+            else
+            {
+                skipped.Add($"{(root.TryGetProperty("purpose", out var p) ? p.GetString() : "call")} {(root.TryGetProperty("unit", out var u) ? u.GetString() : "")}".Trim());
+            }
+        }
+
+        if (skipped.Count > 0)
+        {
+            console.MarkupLine($"[yellow]Architect token-share cap: {skipped.Count} architect call(s) skipped ({Markup.Escape(string.Join(", ", skipped))}). " +
+                               "Raise budget.max_architect_token_share to let the architect continue.[/]");
+        }
+        else if (warned)
+        {
+            console.MarkupLine("[yellow]Architect token-share cap was exceeded (on_architect_token_share: warn; nothing was skipped).[/]");
+        }
+
+        if (ledger.ListEvents(runId, Tokonomy.Runtime.Orchestration.ArchitectShare.UnmeasurableEvent).Count > 0)
+        {
+            console.MarkupLine("[grey]Architect token-share cap not applied: some worker calls reported no token counts.[/]");
+        }
     }
 
     private int Detail(SqliteLedger ledger, string runId, bool json)
@@ -101,6 +137,12 @@ public sealed class ReportCommand(IAnsiConsole console) : Command<ReportSettings
         var architectTokens = summary.Tiers.Where(t => t.Role == LlmRole.Architect).Sum(t => t.InputTokens + t.OutputTokens);
         console.MarkupLine($"Total: [bold]{Money(total, summary.Tiers.Any(t => t.AnyEstimated))}[/]" +
                            (totalTokens > 0 ? $"   Architect token share: {(double)architectTokens / totalTokens:P0}" : ""));
+        if (summary.Run.CostSource == CostSource.Unknown)
+        {
+            console.MarkupLine($"[red]{Markup.Escape(Ui.UnpricedNote)}[/]");
+        }
+
+        ShareCapNotes(ledger, runId);
 
         var architectPurposes = summary.Purposes.Where(p => p.Role == LlmRole.Architect).ToList();
         if (architectPurposes.Count > 1 || architectPurposes.Any(p => p.Purpose != "unspecified"))

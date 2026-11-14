@@ -55,7 +55,8 @@ public sealed class RunCommand(IAnsiConsole console, IProcessRunner runner, Serv
         ledger.StartRun(new RunRecord
         {
             Id = newId,
-            Strategy = source.Strategy,
+            // The strategy that will actually run is the one in the saved plan; the source row's label can differ (a reused plan).
+            Strategy = plan.Strategy,
             TaskId = source.TaskId,
             Repo = source.Repo,
             BaseSha = plan.BaseSha,
@@ -184,6 +185,14 @@ public sealed class RunCommand(IAnsiConsole console, IProcessRunner runner, Serv
         var artifacts = new RunArtifacts(config.ConfigDirectory, runId, string.IsNullOrEmpty(key) ? [] : [key]);
         var plan = RunArtifacts.LoadPlan(artifacts.PlanPath);
         var strategy = Strategy.Parse(plan.Strategy);
+
+        // Snapshot of the prices this run is costed with, so its estimated figures can be reproduced after prices.yaml changes.
+        var pricesFile = Path.Combine(config.ConfigDirectory, Tokonomy.Runtime.Config.TokonomyConfig.PricesFile);
+        if (File.Exists(pricesFile))
+        {
+            artifacts.WriteFile($"prices-{DateTimeOffset.UtcNow:yyyyMMdd'T'HHmmss'Z'}.yaml", File.ReadAllText(pricesFile));
+        }
+
         var executorName = policy.Executors.For(strategy.WorkerIsStrong);
         var executor = config.Executors.Executors[executorName];
 
@@ -251,8 +260,12 @@ public sealed class RunCommand(IAnsiConsole console, IProcessRunner runner, Serv
             return (outcome.Status == RunStatus.Pass ? ExitCodes.Ok : ExitCodes.Failed, outcome);
         }
 
-        var estimated = ledger.GetRun(runId)?.CostSource == CostSource.Estimated;
-        Ui.RunSummary(console, outcome, runId, estimated, clock.Elapsed);
+        var costSource = ledger.GetRun(runId)?.CostSource ?? CostSource.Metered;
+        Ui.RunSummary(console, outcome, runId, costSource != CostSource.Metered, clock.Elapsed);
+        if (costSource == CostSource.Unknown)
+        {
+            Output.Warn(console, Ui.UnpricedNote);
+        }
         if (outcome.WorktreePath is not null)
         {
             Ui.Note(console, $"worktree kept at {outcome.WorktreePath}");

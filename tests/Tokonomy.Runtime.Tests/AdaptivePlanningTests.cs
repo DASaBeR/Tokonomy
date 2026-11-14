@@ -426,7 +426,7 @@ public class AdaptiveLedgerTests
 
         using var ledger = new SqliteLedger(path);
 
-        Assert.Equal(3, ledger.SchemaVersion);
+        Assert.Equal(4, ledger.SchemaVersion);
         var summary = ledger.GetSummary("old")!;
         Assert.Equal(0.02m, summary.Tiers.Single().Usd);
         Assert.Equal("unspecified", summary.Purposes.Single().Purpose);
