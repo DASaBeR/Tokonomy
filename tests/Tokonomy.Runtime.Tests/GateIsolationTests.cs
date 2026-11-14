@@ -347,7 +347,7 @@ public sealed class WindowsSandboxProviderTests : IDisposable
         Assert.False(File.Exists(Path.Combine(_dir.Path, "r.xml")));
     }
 
-    [Fact]
+    [WindowsFact]
     public async Task A_hard_linked_report_is_refused()
     {
         var secret = Path.GetFullPath(_dir.File("outside/secret.txt", "TOKEN"));
@@ -575,7 +575,7 @@ public sealed class WindowsSandboxProviderTests : IDisposable
     public void The_commands_exit_code_is_read_from_wsb_output(string output, int? expected) =>
         Assert.Equal(expected, WindowsSandboxProvider.ParseRemoteExitCode(output));
 
-    [Fact]
+    [WindowsFact]
     public async Task Without_wsb_the_provider_is_unavailable_with_instructions()
     {
         _wsb.Missing = true;
@@ -624,7 +624,7 @@ public sealed class SourceSnapshotTests : IDisposable
         Assert.False(File.Exists(Path.Combine(Destination, "keys", "id_ed25519")));
     }
 
-    [Fact]
+    [WindowsFact]
     public void A_hard_link_to_a_file_outside_fails_the_snapshot()
     {
         var outside = Path.GetFullPath(_dir.File("outside/credentials.json", "{\"token\":\"x\"}"));
@@ -698,7 +698,7 @@ public sealed class GateExecutionConfigTests
         Assert.Contains("profile", problem, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [WindowsFact]
     public void Temp_the_repository_and_drive_roots_are_refused_as_toolchains()
     {
         using var repo = new TempDir();
@@ -720,7 +720,7 @@ public sealed class GateExecutionConfigTests
         Assert.Null(Toolchains.Validate(dotnet, "C:/nowhere", []));
     }
 
-    [Fact]
+    [WindowsFact]
     public void Toolchains_are_derived_from_the_gate_commands_and_system_tools_need_no_mapping()
     {
         var (mapped, problems) = Toolchains.Resolve(new GateExecutionConfig(), [["cmd", "/c", "exit"], [".venv/Scripts/python", "-m", "pytest"]], "C:/nowhere");

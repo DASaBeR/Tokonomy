@@ -56,7 +56,7 @@ public sealed class CliTests : IDisposable
     [Fact]
     public async Task Init_scaffolds_config_for_detected_stack()
     {
-        var (exit, output) = await Run("init", "--path", _repo);
+        var (exit, output) = await Run("init", "--strong", "claude", "--cheap", "antigravity", "--path", _repo);
 
         Assert.Equal(0, exit);
         Assert.Contains("python", output, StringComparison.Ordinal);
@@ -69,7 +69,7 @@ public sealed class CliTests : IDisposable
     [Fact]
     public async Task Init_json_output_is_parseable()
     {
-        var (exit, output) = await Run("init", "--path", _repo, "--json");
+        var (exit, output) = await Run("init", "--strong", "claude", "--cheap", "antigravity", "--path", _repo, "--json");
 
         Assert.Equal(0, exit);
         using var doc = JsonDocument.Parse(output);
@@ -83,7 +83,7 @@ public sealed class CliTests : IDisposable
     [InlineData(RunStatus.Running, "no saved plan")]
     public async Task Resume_refuses_runs_that_are_not_resumable(RunStatus status, string message)
     {
-        await Run("init", "--path", _repo);
+        await Run("init", "--strong", "claude", "--cheap", "antigravity", "--path", _repo);
         using (var ledger = new SqliteLedger(Path.Combine(ConfigDir, "ledger.db")))
         {
             ledger.StartRun(new RunRecord { Id = "run-r", Strategy = "4", TaskId = "t", Repo = _repo, Status = status, Started = DateTimeOffset.UtcNow });
@@ -98,7 +98,7 @@ public sealed class CliTests : IDisposable
     [Fact]
     public async Task Resume_cannot_be_combined_with_plan_or_again()
     {
-        await Run("init", "--path", _repo);
+        await Run("init", "--strong", "claude", "--cheap", "antigravity", "--path", _repo);
 
         var (exit, output) = await Run("run", "--resume", "a", "--plan", "b", "--config", ConfigDir);
 
@@ -109,7 +109,7 @@ public sealed class CliTests : IDisposable
     [Fact]
     public async Task Report_shows_architect_spend_by_purpose_interventions_revisions_and_reviews()
     {
-        await Run("init", "--path", _repo);
+        await Run("init", "--strong", "claude", "--cheap", "antigravity", "--path", _repo);
         using (var ledger = new SqliteLedger(Path.Combine(ConfigDir, "ledger.db")))
         {
             ledger.StartRun(new RunRecord { Id = "run-5", Strategy = "5", TaskId = "adaptive", Repo = _repo, Started = DateTimeOffset.UtcNow });
@@ -143,7 +143,7 @@ public sealed class CliTests : IDisposable
     [Fact]
     public async Task Report_lists_runs_from_ledger()
     {
-        await Run("init", "--path", _repo);
+        await Run("init", "--strong", "claude", "--cheap", "antigravity", "--path", _repo);
         using (var ledger = new SqliteLedger(Path.Combine(ConfigDir, "ledger.db")))
         {
             ledger.StartRun(new RunRecord { Id = "run-1", Strategy = "1", TaskId = "demo-task", Repo = _repo, Started = DateTimeOffset.UtcNow });
@@ -174,7 +174,7 @@ public sealed class CliTests : IDisposable
     [Fact]
     public async Task Report_unknown_run_fails()
     {
-        await Run("init", "--path", _repo);
+        await Run("init", "--strong", "claude", "--cheap", "antigravity", "--path", _repo);
 
         var (exit, _) = await Run("report", "nope", "--config", ConfigDir);
 
@@ -184,7 +184,7 @@ public sealed class CliTests : IDisposable
     [Fact]
     public async Task Run_without_a_plan_is_a_usage_error()
     {
-        await Run("init", "--path", _repo);
+        await Run("init", "--strong", "claude", "--cheap", "antigravity", "--path", _repo);
 
         var (exit, output) = await Run("run", "--config", ConfigDir);
 

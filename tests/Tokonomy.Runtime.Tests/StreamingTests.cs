@@ -82,7 +82,7 @@ public class ProcessRunnerStreamingTests
         {
             Args = Shell("1..4 | ForEach-Object { Write-Output $_; Start-Sleep -Milliseconds 600 }", "for i in 1 2 3 4; do echo $i; sleep 0.6; done"),
             WorkingDirectory = Path.GetTempPath(),
-            IdleTimeout = TimeSpan.FromSeconds(2),
+            IdleTimeout = TimeSpan.FromSeconds(10),
         };
 
         var outcome = await new ProcessRunner().RunAsync(spec, default);

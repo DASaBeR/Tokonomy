@@ -115,6 +115,7 @@ public sealed class InitCommand(IAnsiConsole console, IProcessRunner runner, Ser
             var scaffolded = await quiet.RunAsync(root, options, cancellationToken);
             if (scaffolded is null)
             {
+                Output.Error(console, "Setup could not choose who plans and who codes on this machine. Pass --strong and --cheap (for example --strong claude --cheap antigravity), or run `tokonomy init` interactively.");
                 return ExitCodes.Usage;
             }
 
