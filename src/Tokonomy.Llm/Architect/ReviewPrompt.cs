@@ -98,10 +98,11 @@ public static partial class ReviewPrompt
         sb.AppendLine();
     }
 
-    [GeneratedRegex(@"^VERDICT:\s*(APPROVE|CONCERNS)\b", RegexOptions.Multiline | RegexOptions.IgnoreCase)]
+    // Some models bold or quote the label ("**VERDICT: APPROVE**", "> VERDICT: APPROVE"); the words are what matter.
+    [GeneratedRegex(@"^[\s>#*_`]*VERDICT\s*:?\s*[*_`]*\s*(APPROVE|CONCERNS)\b", RegexOptions.Multiline | RegexOptions.IgnoreCase)]
     private static partial Regex VerdictLine();
 
-    [GeneratedRegex(@"^SUMMARY:\s*(.+)$", RegexOptions.Multiline)]
+    [GeneratedRegex(@"^[\s>#*_`]*SUMMARY\s*:?\s*[*_`]*\s*(.+)$", RegexOptions.Multiline)]
     private static partial Regex SummaryLine();
 
     [GeneratedRegex(@"^CONCERNS:\s*$", RegexOptions.Multiline)]

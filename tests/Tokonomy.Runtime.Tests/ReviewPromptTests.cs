@@ -32,6 +32,17 @@ public class ReviewPromptTests
         Assert.Equal(ReviewVerdict.Concerns, review.Verdict);
     }
 
+    [Theory]
+    [InlineData("**VERDICT: APPROVE**\n**SUMMARY:** fine\n")]
+    [InlineData("## Review\n\n**VERDICT:** APPROVE\nSUMMARY: fine\n")]
+    [InlineData("> VERDICT: APPROVE\nSUMMARY: fine\n")]
+    public void A_verdict_the_model_wrapped_in_markdown_is_still_read(string reply)
+    {
+        var review = ReviewPrompt.Parse(reply, "m");
+        Assert.Equal(ReviewVerdict.Approve, review.Verdict);
+        Assert.Equal("fine", review.Summary);
+    }
+
     [Fact]
     public void Concerns_with_nothing_listed_is_still_a_concern()
     {

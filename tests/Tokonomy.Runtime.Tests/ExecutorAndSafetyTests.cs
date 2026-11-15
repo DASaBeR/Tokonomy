@@ -125,6 +125,27 @@ public class ConfigExecutorTests
     }
 
     [Fact]
+    public async Task A_raw_multi_line_task_reaches_claude_on_stdin_not_in_the_command_line()
+    {
+        using var tmp = new TempDir();
+        var runner = new RecordingRunner();
+        var claude = new ExecutorDefinition
+        {
+            Cmd = ["claude", "-p", "{prompt}", "--output-format", "json"],
+            BriefFile = "CLAUDE.md",
+            Capabilities = new ExecutorCapabilities { Headless = true },
+        };
+        var executor = new ConfigExecutor("claude", claude, Session(Path.Combine(tmp.Path, "logs")), runner);
+        var ticket = "Bug: line one.\nLine \"two\" with <angle> brackets.";
+
+        await executor.RunAsync(new Brief { Prompt = ticket, Body = "" }, tmp.Path, null, TimeSpan.FromMinutes(1), default);
+
+        Assert.Equal(ticket, runner.Last!.StdinText);
+        Assert.DoesNotContain(ticket, runner.Last.Args, StringComparer.Ordinal);
+        Assert.Contains("-p", runner.Last.Args);
+    }
+
+    [Fact]
     public async Task Brief_file_is_removed_when_repo_had_none()
     {
         using var tmp = new TempDir();

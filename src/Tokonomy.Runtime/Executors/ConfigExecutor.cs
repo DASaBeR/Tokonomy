@@ -142,6 +142,16 @@ public sealed class ConfigExecutor(string name, ExecutorDefinition definition, E
 
             var args = IsolateWorkerSettings(definition, ShellAccess.Apply(definition, BuildArgs(definition, vars, model), grant));
 
+            // A raw task (the "direct" baseline) is a multi-line ticket. On Windows `claude` is an npm .cmd shim and cmd.exe
+            // cuts an argument at the first line break (and treats < > | in a quoted one as operators), so the ticket goes in
+            // on stdin, which `claude -p` reads when it has no prompt argument.
+            string? stdinPrompt = null;
+            if (briefText.Length == 0 && ProxyIdOf(definition) == "claude" && args.IndexOf(brief.Prompt) is var at and >= 0)
+            {
+                args.RemoveAt(at);
+                stdinPrompt = brief.Prompt;
+            }
+
             var proxy = ProxySettings.Current.ForProvider(ProxyIdOf(definition));
             var env = EnvironmentBuilder.ForWorker(
                 session.ExtraAllowedEnv,
@@ -160,6 +170,7 @@ public sealed class ConfigExecutor(string name, ExecutorDefinition definition, E
                 ReplaceEnvironment = true,
                 Timeout = timeout,
                 Proxy = proxy,
+                StdinText = stdinPrompt,
                 StdoutFile = stdout,
                 StderrFile = stderr,
                 // The logs hold whatever the model read or printed; they are kept for later inspection (threat-model T20).
