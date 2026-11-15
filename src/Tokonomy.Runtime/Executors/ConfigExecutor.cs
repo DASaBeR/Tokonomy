@@ -125,10 +125,14 @@ public sealed class ConfigExecutor(string name, ExecutorDefinition definition, E
             }
 
             // Through the guard: a brief or config file that is a link would make Tokonomy write outside the worktree.
-            var existing = WorktreeGuard.ReadAllText(workdir, definition.BriefFile);
-            restore.Add((definition.BriefFile, existing));
-            var body = existing is null ? briefText : existing.TrimEnd() + "\n\n" + BriefMarker + "\n\n" + briefText;
-            WorktreeGuard.WriteAllText(workdir, definition.BriefFile, body);
+            // An empty brief (the raw "direct" baseline) writes nothing: the prompt alone carries the task.
+            if (briefText.Length > 0)
+            {
+                var existing = WorktreeGuard.ReadAllText(workdir, definition.BriefFile);
+                restore.Add((definition.BriefFile, existing));
+                var body = existing is null ? briefText : existing.TrimEnd() + "\n\n" + BriefMarker + "\n\n" + briefText;
+                WorktreeGuard.WriteAllText(workdir, definition.BriefFile, body);
+            }
 
             foreach (var (relative, template) in definition.Files)
             {

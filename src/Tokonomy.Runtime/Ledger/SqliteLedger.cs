@@ -463,12 +463,25 @@ public sealed class SqliteLedger : ILedger, IDisposable
         int? unplanned = null;
         string? judge = null;
         List<string> concerns = [];
+        var verdicts = new Dictionary<string, string>(StringComparer.Ordinal);
         if (ScalarWith("SELECT payload_json FROM events WHERE run_id = $id AND kind = 'bench_quality' ORDER BY id DESC LIMIT 1", ("$id", runId)) is string quality)
         {
             using var doc = JsonDocument.Parse(quality);
             var root = doc.RootElement;
             unplanned = root.TryGetProperty("unplanned", out var u) && u.ValueKind == JsonValueKind.Number ? u.GetInt32() : null;
             judge = root.TryGetProperty("judge", out var j) && j.ValueKind == JsonValueKind.String ? j.GetString() : null;
+            if (root.TryGetProperty("judges", out var js) && js.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var entry in js.EnumerateArray())
+                {
+                    if (entry.TryGetProperty("name", out var jn) && jn.ValueKind == JsonValueKind.String
+                        && entry.TryGetProperty("verdict", out var jv) && jv.ValueKind == JsonValueKind.String)
+                    {
+                        verdicts[jn.GetString()!] = jv.GetString()!;
+                    }
+                }
+            }
+
             if (root.TryGetProperty("concerns", out var c) && c.ValueKind == JsonValueKind.Array)
             {
                 concerns = c.EnumerateArray().Where(e => e.ValueKind == JsonValueKind.String).Select(e => e.GetString()!).ToList();
@@ -485,6 +498,7 @@ public sealed class SqliteLedger : ILedger, IDisposable
             UsdByPurpose = byPurpose,
             UnplannedChanges = unplanned,
             JudgeVerdict = judge,
+            JudgeVerdicts = verdicts,
             JudgeConcerns = concerns,
             Units = (int)Count("SELECT COUNT(*) FROM units WHERE run_id = $id"),
             UnitsAccepted = accepted,

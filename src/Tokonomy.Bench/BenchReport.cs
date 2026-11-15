@@ -136,6 +136,49 @@ public static class BenchReport
                 $"{v.SupervisedTakeovers} | {v.FailedTakeovers} | {v.Splits} | {v.Lessons} | {trials.Count(IsInfrastructureFailure)} |"));
         }
 
+        var judgeNames = results.SelectMany(r => r.Stats.JudgeVerdicts.Keys).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
+        if (judgeNames.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("## Judges (reported separately)");
+            sb.AppendLine();
+            sb.AppendLine("Approved / judged per judge; \"Unavailable\" verdicts are not counted as judged. Unanimous = every available judge approved. " +
+                          "Judges that share a model family with the architect or the worker can favour its output; read the judges that do not.");
+            sb.AppendLine();
+            sb.AppendLine("| Strategy | " + string.Join(" | ", judgeNames) + " | Unanimous approve |");
+            sb.AppendLine("|---|" + string.Concat(judgeNames.Select(_ => "---:|")) + "---:|");
+            foreach (var s in stats)
+            {
+                var trials = results.Where(r => r.Strategy == s.Strategy).ToList();
+                var cells = judgeNames.Select(n =>
+                {
+                    var v = trials.Select(t => t.Stats.JudgeVerdicts.GetValueOrDefault(n)).Where(x => x is "Approve" or "Concerns").ToList();
+                    return v.Count == 0 ? "n/a" : $"{v.Count(x => x == "Approve")}/{v.Count}";
+                });
+                var withVerdicts = trials.Where(t => t.Stats.JudgeVerdicts.Values.Any(x => x is "Approve" or "Concerns")).ToList();
+                var unanimous = withVerdicts.Count(t => t.Stats.JudgeVerdicts.Values.Where(x => x is "Approve" or "Concerns").All(x => x == "Approve"));
+                sb.AppendLine($"| {s.Strategy} | {string.Join(" | ", cells)} | {(withVerdicts.Count == 0 ? "n/a" : $"{unanimous}/{withVerdicts.Count}")} |");
+            }
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("## Uncertainty (directional only)");
+        sb.AppendLine();
+        sb.AppendLine("95% percentile bootstrap intervals (2000 resamples, fixed seed) over trials, treating trials as independent; this ignores that trials of one task are " +
+                      "correlated, so the real uncertainty is wider. With this few trials per strategy, read differences as hints, not results.");
+        sb.AppendLine();
+        sb.AppendLine("| Strategy | Trials | Pass rate (95% CI) | Cost per success (95% CI) |");
+        sb.AppendLine("|---|---:|---:|---:|");
+        foreach (var s in stats)
+        {
+            var trials = results.Where(r => r.Strategy == s.Strategy).ToList();
+            var (rateLo, rateHi) = Bootstrap(trials, ts => (double)ts.Count(t => t.Accepted) / ts.Count);
+            var (costLo, costHi) = Bootstrap(trials, ts => ts.Any(t => t.Accepted) ? (double)(ts.Sum(t => t.Usd) / ts.Count(t => t.Accepted)) : double.NaN);
+            sb.AppendLine(string.Create(CultureInfo.InvariantCulture,
+                $"| {s.Strategy} | {s.Trials} | {s.PassRate * 100:0}% ({rateLo * 100:0}–{rateHi * 100:0}%) | " +
+                $"{(s.CostPerSuccess is { } c ? $"${c:0.0000}" : "n/a")}{(double.IsNaN(costLo) ? "" : $" (${costLo:0.0000}–${costHi:0.0000})")} |"));
+        }
+
         var purposes = stats.SelectMany(s => s.Supervision.UsdByPurpose.Keys).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
         if (purposes.Count > 0)
         {
@@ -202,10 +245,44 @@ public static class BenchReport
         if (estimated)
         {
             sb.AppendLine();
-            sb.AppendLine("Costs marked (est.) include calls that were not metered or models without a configured price.");
+            sb.AppendLine("Costs marked (est.) include calls that were not metered or models without a configured price. Trials on a subscription login (Claude Code, Antigravity) use plan quota, not cash: their figure is the CLI's API-equivalent estimate.");
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>Percentile bootstrap of <paramref name="statistic"/> over resampled trials; NaN resamples are skipped. NaN when nothing is defined.</summary>
+    internal static (double Low, double High) Bootstrap(IReadOnlyList<BenchResultRecord> trials, Func<IReadOnlyList<BenchResultRecord>, double> statistic, int resamples = 2000, int seed = 17)
+    {
+        if (trials.Count == 0)
+        {
+            return (double.NaN, double.NaN);
+        }
+
+        var random = new Random(seed);
+        var values = new List<double>(resamples);
+        var sample = new BenchResultRecord[trials.Count];
+        for (var i = 0; i < resamples; i++)
+        {
+            for (var k = 0; k < sample.Length; k++)
+            {
+                sample[k] = trials[random.Next(trials.Count)];
+            }
+
+            var v = statistic(sample);
+            if (!double.IsNaN(v))
+            {
+                values.Add(v);
+            }
+        }
+
+        if (values.Count == 0)
+        {
+            return (double.NaN, double.NaN);
+        }
+
+        values.Sort();
+        return (values[(int)(0.025 * (values.Count - 1))], values[(int)Math.Ceiling(0.975 * (values.Count - 1))]);
     }
 
     internal static RunStats Sum(IEnumerable<RunStats> all)

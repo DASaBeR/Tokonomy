@@ -15,11 +15,22 @@ public sealed class Taskset
 
     public List<BenchTask> Tasks { get; set; } = [];
 
+    /// <summary>
+    /// Independent judges that review every trial's final diff against the task. Use models from a different family than the
+    /// architect, and report each judge separately. Empty: the architect model judges when <c>--judge</c> is given.
+    /// </summary>
+    public List<JudgeSpec> Judges { get; set; } = [];
+
+    /// <summary>Criteria and exclusion rules fixed BEFORE the first trial; copied verbatim into the run manifest.</summary>
+    public Preregistration? Preregistration { get; set; }
+
     /// <summary>Directory containing the taskset file; set on load.</summary>
     [YamlIgnore]
     public string BaseDirectory { get; private set; } = "";
 
     public string ConfigDirectory => Resolve(Config);
+
+    internal static readonly string[] JudgeKinds = ["api", "claude-cli", "agy-cli", "codex-cli"];
 
     public string Resolve(string path) => Path.GetFullPath(path, BaseDirectory);
 
@@ -50,6 +61,30 @@ public sealed class Taskset
             errors.Add("taskset has no tasks");
         }
 
+        var judgeNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var j in Judges)
+        {
+            if (string.IsNullOrWhiteSpace(j.Name) || !judgeNames.Add(j.Name))
+            {
+                errors.Add($"judge name '{j.Name}' is empty or duplicated");
+            }
+
+            if (string.IsNullOrWhiteSpace(j.Model))
+            {
+                errors.Add($"judge '{j.Name}': model is required");
+            }
+
+            if (!JudgeKinds.Contains(j.Provider))
+            {
+                errors.Add($"judge '{j.Name}': provider must be one of {string.Join(", ", JudgeKinds)}");
+            }
+
+            if (j.Provider == "api" && (string.IsNullOrWhiteSpace(j.BaseUrl) || string.IsNullOrWhiteSpace(j.ApiKeyEnv)))
+            {
+                errors.Add($"judge '{j.Name}': an api judge needs base_url and api_key_env (the variable NAME, not the key)");
+            }
+        }
+
         var ids = new HashSet<string>(StringComparer.Ordinal);
         foreach (var t in Tasks)
         {
@@ -76,6 +111,32 @@ public sealed class Taskset
 
         return errors;
     }
+}
+
+/// <summary>One judge: a provider kind (api, claude-cli, agy-cli, codex-cli) and the model it uses.</summary>
+public sealed class JudgeSpec
+{
+    public string Name { get; set; } = "";
+
+    /// <summary><c>api</c> (OpenAI-compatible endpoint), <c>claude-cli</c>, <c>agy-cli</c> or <c>codex-cli</c>.</summary>
+    public string Provider { get; set; } = "api";
+
+    public string Model { get; set; } = "";
+
+    /// <summary>For <c>api</c>: the endpoint, e.g. an OpenAI-compatible gateway ending in /v1.</summary>
+    public string? BaseUrl { get; set; }
+
+    /// <summary>For <c>api</c>: the NAME of the environment variable holding the key (never the key).</summary>
+    public string? ApiKeyEnv { get; set; }
+}
+
+public sealed class Preregistration
+{
+    public string Hypothesis { get; set; } = "";
+    public string SuccessCriteria { get; set; } = "";
+
+    /// <summary>When a trial may be excluded from the analysis (for example a provider outage), decided before running.</summary>
+    public string ExclusionRules { get; set; } = "";
 }
 
 public sealed class BenchTask

@@ -22,7 +22,7 @@ public sealed class BenchSettings : CommonSettings
     public string Taskset { get; init; } = "";
 
     [CommandOption("--strategies <LIST>")]
-    [Description("Comma-separated strategies: 1, 1b, 2, 3, 4, 5.")]
+    [Description("Comma-separated strategies: direct, 1, 1b, 2, 3, 4, 5. direct = the strong CLI on the raw task, no Tokonomy brief.")]
     [DefaultValue("1,1b,2")]
     public string Strategies { get; init; } = "1,1b,2";
 
@@ -55,6 +55,28 @@ public sealed class BenchSettings : CommonSettings
     [Description("After each trial, an independent architect call judges the final diff against the task (not charged to the trial).")]
     public bool Judge { get; init; }
 
+    [CommandOption("--seed <N>")]
+    [Description("Shuffle the trial order with this seed (recorded in the manifest) so arms are interleaved instead of run in blocks.")]
+    public int? Seed { get; init; }
+
+    [CommandOption("--max-trials <N>")]
+    [Description("Start at most this many trials (a run-count cap: the budget on a subscription is a number of runs).")]
+    public int? MaxTrials { get; init; }
+
+    [CommandOption("--pause-seconds <N>")]
+    [Description("Wait this long between trials to stay under subscription rate limits.")]
+    [DefaultValue(0)]
+    public int PauseSeconds { get; init; }
+
+    [CommandOption("--stop-after-errors <N>")]
+    [Description("Stop after this many trials in a row ended in an environment error such as a usage limit (0 disables).")]
+    [DefaultValue(3)]
+    public int StopAfterErrors { get; init; } = 3;
+
+    [CommandOption("--max-judge-usd <USD>")]
+    [Description("Cap on the money API judges may spend in total; judging then reports Unavailable. Required when a judge is an api judge.")]
+    public decimal? MaxJudgeUsd { get; init; }
+
     [CommandOption("--dry-run")]
     [Description("Show the trial matrix and budget ceiling without running anything.")]
     public bool DryRun { get; init; }
@@ -80,6 +102,12 @@ public sealed partial class BenchCommand(IAnsiConsole console, IProcessRunner ru
         if (settings.Repeat < 1)
         {
             Output.Error(console, "--repeat must be at least 1.");
+            return ExitCodes.Usage;
+        }
+
+        if (settings.MaxTrials is < 1 || settings.PauseSeconds < 0 || settings.StopAfterErrors < 0 || settings.MaxJudgeUsd is <= 0)
+        {
+            Output.Error(console, "--max-trials must be at least 1; --pause-seconds, --stop-after-errors and --max-judge-usd must not be negative (--max-judge-usd positive).");
             return ExitCodes.Usage;
         }
 
@@ -142,8 +170,22 @@ public sealed partial class BenchCommand(IAnsiConsole console, IProcessRunner ru
             return ExitCodes.ConfigError;
         }
 
+        var apiJudges = taskset.Judges.Where(j => j.Provider == "api").ToList();
+        var unpricedJudges = apiJudges.Where(j => !prices.Has(j.Model)).Select(j => j.Model).ToList();
+        if (unpricedJudges.Count > 0)
+        {
+            Output.Error(console, $"No price in prices.yaml for judge model(s): {string.Join(", ", unpricedJudges)}. Without it the judge spend cap cannot work; add an entry (USD per million tokens).");
+            return ExitCodes.ConfigError;
+        }
+
+        if (apiJudges.Count > 0 && settings.MaxJudgeUsd is null)
+        {
+            Output.Error(console, "The taskset has an api judge: pass --max-judge-usd to cap what judging may spend.");
+            return ExitCodes.Usage;
+        }
+
         var tasks = taskset.Tasks.Where(t => settings.Tasks is null || settings.Tasks.Contains(t.Id)).ToList();
-        var trials = tasks.Count * strategies.Count * settings.Repeat;
+        var trials = Math.Min(tasks.Count * strategies.Count * settings.Repeat, settings.MaxTrials ?? int.MaxValue);
         var ceiling = trials * config.Policy.Budget.MaxUsdPerTask;
         if (settings.MaxUsd is { } totalCap)
         {
@@ -156,6 +198,11 @@ public sealed partial class BenchCommand(IAnsiConsole console, IProcessRunner ru
             $"Budget ceiling: ${ceiling:0.00} (max_usd_per_task ${config.Policy.Budget.MaxUsdPerTask:0.00} per trial{totalCapText})"));
         if (settings.DryRun)
         {
+            foreach (var j in taskset.Judges)
+            {
+                console.MarkupLine($"  judge {Markup.Escape(j.Name)}: {j.Provider} / {Markup.Escape(j.Model)}");
+            }
+
             foreach (var s in strategies)
             {
                 console.MarkupLine($"  {s.Id}: {Markup.Escape(s.Description)}");
@@ -168,7 +215,18 @@ public sealed partial class BenchCommand(IAnsiConsole console, IProcessRunner ru
         IProvider? provider = strategies.Any(s => s.UsesArchitectPlan) ? services.ProviderFactory(config, prices) : null;
 
         using var ledger = new SqliteLedger(config.LedgerPath);
-        var bench = new BenchRunner(runner, ledger, new Supervisor(), provider, services.ExecutorFactory);
+        List<BenchJudge> judges;
+        try
+        {
+            judges = taskset.Judges.Select(j => new BenchJudge(j.Name, services.CreateJudgeProvider(j, prices), j.Model, Metered: j.Provider == "api")).ToList();
+        }
+        catch (Tokonomy.Llm.Providers.MissingApiKeyException ex)
+        {
+            Output.Error(console, ex.Message);
+            return ExitCodes.ConfigError;
+        }
+
+        var bench = new BenchRunner(runner, ledger, new Supervisor(), provider, services.ExecutorFactory, judges: judges);
         var benchId = await bench.RunAsync(taskset, config, new BenchOptions
         {
             Strategies = strategies,
@@ -176,7 +234,13 @@ public sealed partial class BenchCommand(IAnsiConsole console, IProcessRunner ru
             TaskFilter = settings.Tasks,
             MaxUsd = settings.MaxUsd,
             SharePlans = settings.SharePlans,
-            Judge = settings.Judge,
+            Judge = settings.Judge || judges.Count > 0,
+            Seed = settings.Seed,
+            MaxTrials = settings.MaxTrials,
+            Pause = TimeSpan.FromSeconds(settings.PauseSeconds),
+            StopAfterConsecutiveInfraFailures = settings.StopAfterErrors,
+            MaxJudgeUsd = settings.MaxJudgeUsd,
+            Preregistration = taskset.Preregistration,
             Environment = await DescribeEnvironmentAsync(config, cancellationToken),
         }, prices, key, new ConsoleBenchObserver(console), cancellationToken);
 

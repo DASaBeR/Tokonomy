@@ -11,8 +11,15 @@ public sealed record Strategy(
     bool AllowEscalation,
     int? MaxAttempts,
     bool WorkerIsStrong,
-    bool AdaptiveSupervision = false)
+    bool AdaptiveSupervision = false,
+    bool RawPrompt = false)
 {
+    /// <summary>
+    /// The baseline a user would get by running the strong CLI themselves: the task text as the prompt, no Tokonomy brief, no
+    /// plan, no gates, one attempt. Success is still judged only by the hidden acceptance check.
+    /// </summary>
+    public static readonly Strategy Direct = new("direct", "strong CLI run headless on the raw task: no brief, no plan, no gates, single shot", false, false, false, 1, true, RawPrompt: true);
+
     public static readonly Strategy StrongOnly = new("1", "strong model only, single shot", false, false, false, 1, true);
     public static readonly Strategy StrongWithGates = new("1b", "strong model + gates + retry", false, true, false, null, true);
     public static readonly Strategy CheapOnly = new("2", "cheap model only, single shot", false, false, false, 1, false);
@@ -29,7 +36,7 @@ public sealed record Strategy(
     /// <summary>What <c>build</c> and <c>plan</c> use when no strategy is given.</summary>
     public static Strategy Default => Supervised; // strategy 5 stays opt-in until benchmarks justify promoting it
 
-    public static IReadOnlyList<Strategy> All { get; } = [StrongOnly, StrongWithGates, CheapOnly, SplitNoGates, Supervised, Adaptive];
+    public static IReadOnlyList<Strategy> All { get; } = [StrongOnly, StrongWithGates, CheapOnly, SplitNoGates, Supervised, Adaptive, Direct];
 
     public static Strategy Parse(string id) =>
         All.FirstOrDefault(s => string.Equals(s.Id, id.Trim(), StringComparison.OrdinalIgnoreCase))

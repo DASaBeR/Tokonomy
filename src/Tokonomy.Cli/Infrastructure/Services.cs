@@ -1,3 +1,4 @@
+using Tokonomy.Bench;
 using Tokonomy.Core.Abstractions;
 using Tokonomy.Core.Config;
 using Tokonomy.Llm.Providers;
@@ -26,6 +27,19 @@ public sealed class Services
             ArchitectProviderConfig.AgyCliKind => new PricedProvider(new AgyCliProvider(new ProcessRunner(), config.Policy.ArchitectProvider.CommandOrDefault), prices),
             ArchitectProviderConfig.CodexCliKind => new PricedProvider(new CodexCliProvider(new ProcessRunner(), config.Policy.ArchitectProvider.CommandOrDefault), prices),
             _ => new OpenAiCompatibleProvider(config.Policy.ArchitectProvider.EffectiveProvider(config.Policy.Provider), prices),
+        };
+
+    /// <summary>When set, replaces the real judge providers (tests).</summary>
+    public Func<JudgeSpec, PriceTable, IProvider>? JudgeProviderFactory { get; init; }
+
+    /// <summary>Builds the provider for one benchmark judge. An <c>api</c> judge reads its key from the variable the taskset names.</summary>
+    public IProvider CreateJudgeProvider(JudgeSpec judge, PriceTable prices) =>
+        JudgeProviderFactory is { } custom ? custom(judge, prices) : judge.Provider switch
+        {
+            "claude-cli" => new PricedProvider(new ClaudeCliProvider(new ProcessRunner(), "claude"), prices),
+            "agy-cli" => new PricedProvider(new AgyCliProvider(new ProcessRunner(), "agy"), prices),
+            "codex-cli" => new PricedProvider(new CodexCliProvider(new ProcessRunner(), "codex"), prices),
+            _ => new OpenAiCompatibleProvider(new ProviderConfig { BaseUrl = judge.BaseUrl!, ApiKeyEnv = judge.ApiKeyEnv! }, prices, GetEnvironmentVariable),
         };
 
     public static PriceTable LoadPrices(TokonomyConfig config) =>

@@ -12,7 +12,8 @@ A cheap run that fails is not a saving: its cost is still in the numerator.
 
 | Id | Strategy | Question it answers |
 |---|---|---|
-| 1 | Strong model, single shot | Quality and cost baseline |
+| direct | The strong CLI run headless on the raw task: the prompt is the task text, no Tokonomy brief file, no plan, no gates, one attempt | What a user gets by simply running the strong tool. The honest baseline for 4 and 5 |
+| 1 | Strong model, single shot (task wrapped in the Tokonomy brief) | Quality and cost baseline |
 | 1b | Strong model + gates + retry | How much do gates and retries alone help? |
 | 2 | Cheap model, single shot | How far does cheap get alone? |
 | 3 | Architect plan + cheap worker, no gates | Does the split help by itself? |
@@ -35,6 +36,21 @@ planner change are not comparable with older strategy 3/4 results.
 - `--judge`: after each trial an independent architect call reviews the final diff against the **task alone** (not the
   plan), with the same prompt for every strategy. It is told the task may contain wrong assumptions, so working around
   one is not penalised. Its verdict is stored as an event and never charged to the trial.
+- `judges:` in the taskset replaces the single architect judge with several independent ones (an `api` judge on an
+  OpenAI-compatible endpoint, or `claude-cli`, `agy-cli`, `codex-cli` on their own logins). Every judge sees the same
+  prompt and its verdict is reported **separately**, with a "unanimous approve" column; use judges from a different
+  model family than the architect and the worker. An `api` judge needs `base_url`, `api_key_env` (the variable NAME,
+  never the key), a price in `prices.yaml` and `--max-judge-usd`, which caps what judging may spend (after that its
+  verdict is `Unavailable`). A judge that fails yields `Unavailable`; it never loses the trial.
+- `--seed N` shuffles the trial order so strategies are interleaved instead of run in blocks (quota, time of day and
+  provider drift then do not line up with one arm). The seed and the order that ran are in the manifest.
+- `--max-trials N` caps the number of trials started (the budget on a subscription is a run count);
+  `--pause-seconds N` waits between trials; `--stop-after-errors N` (default 3) stops the run after N trials in a row
+  ended in an environment error such as a usage limit, so they are not mistaken for failed strategies.
+- `preregistration:` in the taskset (hypothesis, success criteria, exclusion rules) is copied into the manifest with a hash
+  before the first trial. Write it before running anything.
+- The report adds 95% bootstrap intervals for pass rate and cost per success, marked "directional only". They resample
+  trials as if independent, so they understate the real uncertainty.
 - Every bench writes `runs/<bench-id>.manifest.json` (models, provider kinds, executor and CLI versions, Tokonomy
   version, git commit and a hash of uncommitted changes, policy sections, prompt hashes, task prompt hashes) and
   `runs/<bench-id>.json` (every trial with its ledger-derived statistics) next to the Markdown report.

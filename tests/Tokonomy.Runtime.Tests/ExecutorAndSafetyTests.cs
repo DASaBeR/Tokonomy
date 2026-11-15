@@ -110,6 +110,21 @@ public class ConfigExecutorTests
     }
 
     [Fact]
+    public async Task An_empty_brief_writes_no_brief_file_and_leaves_an_existing_one_untouched()
+    {
+        using var tmp = new TempDir();
+        tmp.File("AGENTS.md", "# Repo rules\n");
+        string? during = null;
+        var runner = new RecordingRunner(spec => during = File.ReadAllText(Path.Combine(spec.WorkingDirectory, "AGENTS.md")));
+        var executor = new ConfigExecutor("agent", Definition(), Session(Path.Combine(tmp.Path, "logs")), runner);
+
+        await executor.RunAsync(new Brief { Prompt = "the raw task", Body = "" }, tmp.Path, null, TimeSpan.FromMinutes(1), default);
+
+        Assert.Equal("# Repo rules\n", during);
+        Assert.Contains("the raw task", runner.Last!.Args, StringComparer.Ordinal);
+    }
+
+    [Fact]
     public async Task Brief_file_is_removed_when_repo_had_none()
     {
         using var tmp = new TempDir();

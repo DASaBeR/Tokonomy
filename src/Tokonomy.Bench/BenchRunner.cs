@@ -37,6 +37,27 @@ public sealed record BenchOptions
     /// </summary>
     public bool Judge { get; init; }
 
+    /// <summary>
+    /// Shuffles the trial order with this seed (recorded in the manifest, with the resulting order), so arms are not run in
+    /// blocks: time-of-day, quota and provider drift then do not line up with one strategy. Null keeps task, strategy, repeat order.
+    /// </summary>
+    public int? Seed { get; init; }
+
+    /// <summary>Hard cap on the number of trials started, independent of money (the budget on a subscription is a run count).</summary>
+    public int? MaxTrials { get; init; }
+
+    /// <summary>Wait between trials, to stay under a subscription's rate limits.</summary>
+    public TimeSpan Pause { get; init; }
+
+    /// <summary>Stop after this many trials in a row ended in an environment error (provider outage, usage limit). 0 disables.</summary>
+    public int StopAfterConsecutiveInfraFailures { get; init; } = 3;
+
+    /// <summary>Cap on the money spent by API judges in total. Judging stops (verdict "Unavailable") once it is reached. Null: no cap.</summary>
+    public decimal? MaxJudgeUsd { get; init; }
+
+    /// <summary>Copied into the manifest before the first trial: hypothesis, success criteria and exclusion rules.</summary>
+    public Preregistration? Preregistration { get; init; }
+
     /// <summary>Written to <c>runs/&lt;bench-id&gt;.manifest.json</c> for reproducibility (tool versions, code state).</summary>
     public IReadOnlyDictionary<string, string> Environment { get; init; } = new Dictionary<string, string>();
 }
@@ -48,6 +69,9 @@ public interface IBenchObserver
     void Stopped(string reason, int skippedTrials) { }
 }
 
+/// <summary>An independent reviewer of a trial's final diff: a provider and the model it should use.</summary>
+public sealed record BenchJudge(string Name, IProvider Provider, string Model, bool Metered = false);
+
 /// <summary>
 /// Runs every (task, strategy, repeat) trial in a fresh clone, then judges the result branch with the task's
 /// hidden acceptance check. Acceptance, not the supervisor's verdict, defines success.
@@ -58,7 +82,8 @@ public sealed class BenchRunner(
     ISupervisor supervisor,
     IProvider? provider,
     Func<ExecutorSession, IExecutor>? executorFactory = null,
-    IClock? clock = null)
+    IClock? clock = null,
+    IReadOnlyList<BenchJudge>? judges = null)
 {
     /// <summary>Below this remaining budget a new trial is not started: it could not finish a plan and one attempt.</summary>
     public const decimal MinTrialBudgetUsd = 0.01m;
@@ -75,14 +100,30 @@ public sealed class BenchRunner(
         var benchId = "bench-" + RunArtifacts.NewRunId(_clock.UtcNow);
         var tasks = taskset.Tasks.Where(t => options.TaskFilter is null || options.TaskFilter.Contains(t.Id)).ToList();
         var trials = (from task in tasks from strategy in options.Strategies from r in Enumerable.Range(1, options.Repeat) select (task, strategy, r)).ToList();
+        if (options.Seed is { } seed)
+        {
+            Shuffle(trials, seed);
+        }
+
+        if (options.MaxTrials is { } maxTrials && maxTrials < trials.Count)
+        {
+            trials = trials.Take(maxTrials).ToList();
+        }
+
         var cacheRoot = Path.Combine(Path.GetTempPath(), "tokonomy", "bench-cache");
-        WriteManifest(benchId, taskset, config, options, tasks, trials.Count);
+        WriteManifest(benchId, taskset, config, options, tasks, trials.Select(t => $"{t.task.Id}/{t.strategy.Id}/{t.r}").ToList());
         var plans = new Dictionary<(string Task, int Repeat), (PlannedTask Planned, string RunId)>();
 
         decimal spent = 0;
+        var infraStreak = 0;
         for (var i = 0; i < trials.Count; i++)
         {
             ct.ThrowIfCancellationRequested();
+            if (i > 0 && options.Pause > TimeSpan.Zero)
+            {
+                await Task.Delay(options.Pause, ct);
+            }
+
             decimal? remaining = options.MaxUsd is { } cap ? cap - spent : null;
             if (remaining < MinTrialBudgetUsd)
             {
@@ -97,14 +138,34 @@ public sealed class BenchRunner(
             var trialCap = remaining is { } r ? Math.Min(config.Policy.Budget.MaxUsdPerTask, r) : config.Policy.Budget.MaxUsdPerTask;
             observer?.TrialStarted(task, strategy, repeat, i + 1, trials.Count);
             var result = await RunTrialAsync(benchId, taskset, task, strategy, repeat, config, trialCap, prices, upstreamKey, cacheRoot,
-                options.SharePlans ? plans : null, options.Judge, ct);
+                options.SharePlans ? plans : null, options.Judge, options.MaxJudgeUsd, ct);
             ledger.RecordBenchResult(result);
             spent += result.Usd;
             observer?.TrialFinished(result);
+
+            infraStreak = BenchReport.IsInfrastructureFailure(result) ? infraStreak + 1 : 0;
+            if (options.StopAfterConsecutiveInfraFailures > 0 && infraStreak >= options.StopAfterConsecutiveInfraFailures)
+            {
+                observer?.Stopped($"{infraStreak} trials in a row ended in an environment error (usage limit or outage?); remaining trials were not started so they do not count as failures", trials.Count - i - 1);
+                break;
+            }
         }
 
         return benchId;
     }
+
+    /// <summary>Deterministic Fisher-Yates shuffle (System.Random with a fixed seed is stable across runs of the same runtime).</summary>
+    internal static void Shuffle<T>(List<T> items, int seed)
+    {
+        var random = new Random(seed);
+        for (var i = items.Count - 1; i > 0; i--)
+        {
+            var j = random.Next(i + 1);
+            (items[i], items[j]) = (items[j], items[i]);
+        }
+    }
+
+    private decimal _judgeSpent;
 
     /// <summary>The policy with this trial's spend cap applied. Everything else is shared with the original.</summary>
     internal static Policy WithTrialCap(Policy policy, decimal capUsd) => new()
@@ -134,7 +195,7 @@ public sealed class BenchRunner(
     private async Task<BenchResultRecord> RunTrialAsync(
         string benchId, Taskset taskset, BenchTask task, Strategy strategy, int repeat, TokonomyConfig config, decimal trialCap,
         PriceTable prices, string? upstreamKey, string cacheRoot,
-        Dictionary<(string Task, int Repeat), (PlannedTask Planned, string RunId)>? plans, bool judge, CancellationToken ct)
+        Dictionary<(string Task, int Repeat), (PlannedTask Planned, string RunId)>? plans, bool judge, decimal? maxJudgeUsd, CancellationToken ct)
     {
         decimal sharedPlanUsd = 0;
         var judgeTime = TimeSpan.Zero; // the judge is measurement, not part of the trial
@@ -216,6 +277,7 @@ public sealed class BenchRunner(
                 UseGates = strategy.UseGates,
                 AllowEscalation = strategy.AllowEscalation,
                 AdaptiveSupervision = strategy.AdaptiveSupervision,
+                RawPrompt = strategy.RawPrompt,
                 MaxAttempts = strategy.MaxAttempts,
                 Prices = prices,
                 UpstreamKey = upstreamKey,
@@ -230,7 +292,7 @@ public sealed class BenchRunner(
             note = string.Join("; ", new[] { note, acceptanceNote }.Where(s => !string.IsNullOrEmpty(s)));
             if (outcome.Branch.Length > 0)
             {
-                judgeTime = await MeasureQualityAsync(task, clone, baseSha, outcome.Branch, artifacts.LoadPlanState()?.Current ?? planned.Contract, runId, policy, judge, ct);
+                judgeTime = await MeasureQualityAsync(task, clone, baseSha, outcome.Branch, artifacts.LoadPlanState()?.Current ?? planned.Contract, runId, policy, judge, maxJudgeUsd, ct);
             }
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
@@ -346,7 +408,7 @@ public sealed class BenchRunner(
     /// alone. Stored as a <c>bench_quality</c> event; the judge's tokens are never charged to the trial.
     /// </summary>
     private async Task<TimeSpan> MeasureQualityAsync(
-        BenchTask task, string clone, string baseSha, string branch, Contract plan, string runId, Policy policy, bool judge, CancellationToken ct)
+        BenchTask task, string clone, string baseSha, string branch, Contract plan, string runId, Policy policy, bool judge, decimal? maxJudgeUsd, CancellationToken ct)
     {
         var changed = (await _git.RunAsync(clone, ["diff", "--name-only", "--no-renames", baseSha, branch], ct))
             .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
@@ -358,45 +420,69 @@ public sealed class BenchRunner(
             unplanned = Tokonomy.Core.Supervision.PlanDeviation.Detect(all, changed, policy.Acceptance.Enabled ? policy.Acceptance.Dir : null).Unplanned.Count;
         }
 
-        string? verdict = null;
-        string? summary = null;
-        IReadOnlyList<string> concerns = [];
-        decimal judgeUsd = 0;
-        long judgeTokens = 0;
+        var judgeResults = new List<JudgeResult>();
         var judgeStarted = _clock.UtcNow;
-        if (judge && provider is not null)
+        var activeJudges = judges is { Count: > 0 }
+            ? judges
+            : provider is not null ? [new BenchJudge("architect", provider, policy.Models.Architect)] : [];
+        if (judge && activeJudges.Count > 0)
         {
             var patch = await _git.RunAsync(clone, ["diff", "--no-renames", baseSha, branch], ct);
-            try
+            foreach (var j in activeJudges)
             {
-                var response = await provider.CompleteAsync(new ProviderRequest(policy.Models.Architect, JudgeSystem,
-                    Tokonomy.Llm.Architect.ReviewPrompt.Build(Strategy.SingleUnit(task.Prompt), patch, [])), ct);
-                var review = Tokonomy.Llm.Architect.ReviewPrompt.Parse(response.Text, response.Model);
-                (verdict, summary, concerns) = (review.Verdict.ToString(), review.Summary, review.Concerns);
-                judgeUsd = response.Usd ?? 0;
-                judgeTokens = response.InputTokens + response.OutputTokens;
-            }
-            catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or System.ClientModel.ClientResultException)
-            {
-                (verdict, summary) = ("Unavailable", ex.Message);
+                judgeResults.Add(await RunJudgeAsync(j, task, patch, maxJudgeUsd, ct));
             }
         }
+
+        var first = judgeResults.FirstOrDefault();
 
         ledger.RecordEvent(runId, _clock.UtcNow, "bench_quality", System.Text.Json.JsonSerializer.Serialize(new
         {
             changed = changed.Count,
             unplanned,
-            judge = verdict,
-            summary,
-            concerns,
-            judge_usd = judgeUsd,
-            judge_tokens = judgeTokens,
+            judge = first?.Verdict,
+            summary = first?.Summary,
+            concerns = first?.Concerns ?? [],
+            judge_usd = judgeResults.Sum(r => r.Usd),
+            judge_tokens = judgeResults.Sum(r => r.Tokens),
             judge_seconds = (int)(_clock.UtcNow - judgeStarted).TotalSeconds,
+            judges = judgeResults.Select(r => new { name = r.Name, model = r.Model, verdict = r.Verdict, summary = r.Summary, concerns = r.Concerns, usd = r.Usd, tokens = r.Tokens, seconds = r.Seconds }),
         }));
         return judge ? _clock.UtcNow - judgeStarted : TimeSpan.Zero;
     }
 
-    private void WriteManifest(string benchId, Taskset taskset, TokonomyConfig config, BenchOptions options, IReadOnlyList<BenchTask> tasks, int trials)
+    private sealed record JudgeResult(string Name, string Model, string Verdict, string? Summary, IReadOnlyList<string> Concerns, decimal Usd, long Tokens, int Seconds);
+
+    /// <summary>One judge's review. A failing judge yields "Unavailable"; it never loses the trial or stops the others.</summary>
+    private async Task<JudgeResult> RunJudgeAsync(BenchJudge j, BenchTask task, string patch, decimal? maxJudgeUsd, CancellationToken ct)
+    {
+        var started = _clock.UtcNow;
+        int Seconds() => (int)(_clock.UtcNow - started).TotalSeconds;
+        if (j.Metered && maxJudgeUsd is { } cap && _judgeSpent >= cap)
+        {
+            return new JudgeResult(j.Name, j.Model, "Unavailable", $"judge budget ${cap:0.00} reached", [], 0, 0, 0);
+        }
+
+        try
+        {
+            var response = await j.Provider.CompleteAsync(new ProviderRequest(j.Model, JudgeSystem,
+                Tokonomy.Llm.Architect.ReviewPrompt.Build(Strategy.SingleUnit(task.Prompt), patch, [])), ct);
+            var review = Tokonomy.Llm.Architect.ReviewPrompt.Parse(response.Text, response.Model);
+            var usd = response.Usd ?? 0;
+            if (j.Metered)
+            {
+                _judgeSpent += usd;
+            }
+
+            return new JudgeResult(j.Name, j.Model, review.Verdict.ToString(), review.Summary, review.Concerns, usd, response.InputTokens + response.OutputTokens, Seconds());
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return new JudgeResult(j.Name, j.Model, "Unavailable", ex.Message, [], 0, 0, Seconds());
+        }
+    }
+
+    private void WriteManifest(string benchId, Taskset taskset, TokonomyConfig config, BenchOptions options, IReadOnlyList<BenchTask> tasks, List<string> trialOrder)
     {
         var p = config.Policy;
         var manifest = new
@@ -407,7 +493,18 @@ public sealed class BenchRunner(
             tasks = tasks.Select(t => new { t.Id, t.Repo, prompt_sha = Sha(t.Prompt), acceptance = t.Acceptance.Files }),
             strategies = options.Strategies.Select(s => new { s.Id, s.Description }),
             options.Repeat,
-            trials,
+            trials = trialOrder.Count,
+            seed = options.Seed,
+            trial_order = trialOrder,
+            max_trials = options.MaxTrials,
+            pause_seconds = (int)options.Pause.TotalSeconds,
+            stop_after_consecutive_infra_failures = options.StopAfterConsecutiveInfraFailures,
+            max_judge_usd = options.MaxJudgeUsd,
+            judges = (judges ?? []).Select(j => new { j.Name, j.Model, metered = j.Metered }),
+            judge_rubric_sha = Sha(JudgeSystem),
+            preregistration = options.Preregistration is { } pre
+                ? new { pre.Hypothesis, pre.SuccessCriteria, pre.ExclusionRules, sha = Sha(pre.Hypothesis + "|" + pre.SuccessCriteria + "|" + pre.ExclusionRules) }
+                : null,
             options.MaxUsd,
             share_plans = options.SharePlans,
             judge = options.Judge,

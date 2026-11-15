@@ -62,8 +62,26 @@ public sealed class OrchestratorTests : IDisposable
             UseGates = strategy.UseGates,
             AllowEscalation = strategy.AllowEscalation,
             MaxAttempts = strategy.MaxAttempts,
+            RawPrompt = strategy.RawPrompt,
             Prices = prices ?? Tokonomy.Llm.Providers.PriceTable.Empty,
         }, null, default);
+    }
+
+    [Fact]
+    public async Task Direct_strategy_sends_the_raw_task_with_no_brief_no_gates_and_the_strong_model()
+    {
+        var executor = new FakeExecutor(FakeExecutor.Write("app.txt", "direct\n"));
+
+        var outcome = await Run(Strategy.SingleUnit("Add a feature to app.txt"), PolicyWithGate(), executor, Strategy.Direct);
+
+        Assert.Equal(RunStatus.Pass, outcome.Status);
+        var (brief, model) = Assert.Single(executor.Calls);
+        Assert.Equal("strong", model);
+        Assert.Equal("Add a feature to app.txt", brief.Prompt);
+        Assert.Equal("", brief.Body);
+        Assert.False(Strategy.Direct.UsesArchitectPlan || Strategy.Direct.UseGates || Strategy.Direct.AllowEscalation);
+        Assert.Equal(1, Strategy.Direct.MaxAttempts);
+        Assert.Same(Strategy.Direct, Strategy.Parse("direct"));
     }
 
     [Fact]

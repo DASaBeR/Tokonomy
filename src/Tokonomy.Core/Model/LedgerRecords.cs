@@ -173,6 +173,9 @@ public sealed record RunStats
     /// <summary>Benchmark only: the independent judge's verdict on the final diff (Approve, Concerns, Unavailable). Null when not judged.</summary>
     public string? JudgeVerdict { get; init; }
 
+    /// <summary>Benchmark only: every judge's verdict by judge name (a trial may have several independent judges). Empty when not judged.</summary>
+    public IReadOnlyDictionary<string, string> JudgeVerdicts { get; init; } = new Dictionary<string, string>();
+
     /// <summary>Benchmark only: the judge's concerns, kept for the analysis.</summary>
     public IReadOnlyList<string> JudgeConcerns { get; init; } = [];
 }

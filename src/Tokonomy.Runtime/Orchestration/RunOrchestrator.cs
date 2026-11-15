@@ -44,6 +44,9 @@ public sealed record RunRequest
     /// </summary>
     public bool AdaptiveSupervision { get; init; }
 
+    /// <summary>Send the unit's spec as the prompt and write no brief file (the <c>direct</c> benchmark baseline).</summary>
+    public bool RawPrompt { get; init; }
+
     /// <summary>Cap on attempts per unit regardless of policy (1 for single-shot strategies).</summary>
     public int? MaxAttempts { get; init; }
 
@@ -569,7 +572,9 @@ public sealed partial class RunOrchestrator(
             // The worker always gets the latest approved revision of its unit, never a stale copy.
             unit = ctx.Plan.Unit(unitId);
             state.Attempts++;
-            var brief = BriefWriter.Compile(new BriefInput
+            var brief = request.RawPrompt
+                ? new Brief { Prompt = unit.Spec, Body = "", Label = $"{unit.Id}-a{state.Attempts}" }
+                : BriefWriter.Compile(new BriefInput
             {
                 Plan = ctx.Plan.Current,
                 Unit = unit,
