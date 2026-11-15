@@ -1,0 +1,14 @@
+{
+  "rooms": [
+    { "id": "atlas", "name": "Atlas", "capacity": 8, "utc_offset_minutes": 0, "features": ["screen", "whiteboard"] },
+    { "id": "borealis", "name": "Borealis", "capacity": 4, "utc_offset_minutes": 60, "features": ["screen"] },
+    { "id": "cedar", "name": "Cedar", "capacity": 12, "utc_offset_minutes": -300, "features": ["screen", "video"] },
+    { "id": "dune", "name": "Dune", "capacity": 6, "utc_offset_minutes": 210, "features": [] }
+  ],
+  "users": [
+    { "id": "alice", "name": "Alice Moreau", "role": "admin" },
+    { "id": "bob", "name": "Bob Okafor" },
+    { "id": "carol", "name": "Carol Lindqvist" },
+    { "id": "dave", "name": "Dave Tanaka" }
+  ]
+}

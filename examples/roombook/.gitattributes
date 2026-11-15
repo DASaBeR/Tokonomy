@@ -1,0 +1,2 @@
+# The sample is a byte-exact Excel export (UTF-8 BOM, CRLF); git must not normalise it.
+samples/*.csv -text

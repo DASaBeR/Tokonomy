@@ -1,0 +1,143 @@
+# Milestone 3 baseline pilot: one realistic fixture (examples/roombook), five original tasks, arms direct / 4 / 5.
+# Success is judged ONLY by the hidden tests in pilot/acceptance/<task>/, copied over the result after the run.
+#
+#   python examples/verify_pilot.py      # each task fails on the base, passes with the reference, and catches wrong solutions
+#   tokonomy bench examples/tasks-pilot.yaml --strategies direct,4,5 --repeat 3 --seed 20261115 --dry-run
+#
+# Keep pilot/reference/ and pilot/acceptance/ away from workers: they only ever see a snapshot of examples/roombook.
+#
+# The task mix (evaluation 12.3): a small bug fix suited to trial-first (back-to-back), a multi-component feature whose
+# trap only shows when the code runs on a real export (csv-import), a rule with a hidden requirement and a local-day
+# trap (daily-quota), a feature with a genuine ambiguity (maintenance) and a security fix that changes a signature used
+# across the code (cancel-permissions).
+
+config: .tokonomy-pilot
+
+# Fixed before the first trial; copied into every manifest with a hash. Do not edit after the pilot has started.
+preregistration:
+  hypothesis: >-
+    With Claude Sonnet planning (and supervising, in strategy 5) and Gemini 3.8 Flash writing the code, strategies 4
+    and 5 accept about as many tasks as Claude Sonnet working alone (the direct arm) at a lower cost per accepted task,
+    and use fewer Sonnet tokens per accepted task.
+  success_criteria: >-
+    Primary metric: API-equivalent cost per accepted task (total trial cost / trials whose hidden tests pass), per arm,
+    with 95% bootstrap intervals, read as directional. Secondary: pass rate; Sonnet fresh-input plus output tokens per
+    accepted task (the subscription quota a user actually spends); judge approval per judge and unanimous; wall-clock
+    per trial. An arm "beats direct" if its cost per accepted task is lower AND it passes at least as many trials as
+    direct minus 2 (of 15). If neither 4 nor 5 beats direct, the kill criterion (evaluation 12.5) is met at pilot level
+    and one full round with more repos decides. No composite score.
+  exclusion_rules: >-
+    A trial the report marks as an infrastructure failure (usage limit, outage, sandbox unavailable, architect call
+    failed) is excluded from pass rates and cost, and re-run once at the end with --task; if the re-run fails the same
+    way it stays excluded and is listed. No other exclusions: slow, expensive or odd trials count as they are. A judge
+    verdict of Unavailable is left out of that judge's counts only. For the maintenance task, how existing bookings
+    inside a new window are handled is NOT scored by the hidden tests; a human classifies each trial from its diff and
+    run artifacts as (a) asked or flagged before implementing, (b) chose and documented the choice, (c) chose
+    silently, (d) ignored the question. A human also spot-checks 7 trials (15%) picked with the bench seed.
+
+# Each verdict is reported separately. Opus shares a family with the Sonnet architect and direct arm; Gemini shares one
+# with the worker; DeepSeek shares neither. Read disagreements as information, not noise.
+judges:
+  - { name: opus, provider: claude-cli, model: claude-opus-5-5 }
+  - { name: gemini, provider: agy-cli, model: gemini-3.8-flash-high }
+  - { name: deepseek, provider: api, model: deepseek-v4.1-flash, base_url: "https://api.avalai.ir/v1", api_key_env: AVALAI_API_KEY }
+
+tasks:
+  - id: back-to-back
+    repo: roombook
+    prompt: |
+      Bug: back-to-back bookings are rejected. To reproduce: book Atlas on 2026-12-02 from 10:00 to 11:00 local time,
+      then try to book it from 11:00 to 12:00. The second booking raises ConflictError, although the room is free then.
+      A booking that starts exactly when another ends, or ends exactly when another starts, must be accepted.
+      Bookings that really overlap must still be refused. BookingService.find_free_slots has the same problem: it
+      must offer a slot that ends exactly when a booking starts, or starts exactly when one ends. Add regression tests.
+    acceptance:
+      files: pilot/acceptance/back-to-back
+      cmd: ["python", "-m", "unittest", "discover", "-s", "tests", "-t", "."]
+      timeout_seconds: 120
+
+  - id: csv-import
+    repo: roombook
+    prompt: |
+      Facilities keep a spreadsheet of standing bookings and want to load it into roombook. They export it from Excel
+      as CSV; samples/bookings_export.csv is a real export. Add bulk import:
+
+      - New module roombook/importer.py with import_bookings(service, path, partial=False) -> ImportResult.
+        ImportResult has imported (list of the Booking objects created) and errors (list of ImportErrorRow).
+        ImportErrorRow has line (int, the line number in the file; the header is line 1) and message (str).
+      - Columns: room, user, start, end, title (title may be empty). start and end are wall-clock times in the room's
+        own local time, formatted "YYYY-MM-DD HH:MM".
+      - Every row goes through exactly the same checks as BookingService.book: known room and user, the booking rules,
+        and conflicts, both with existing bookings and with valid rows earlier in the same file. A row that cannot be
+        read (wrong number of fields, unparseable time) is an error on its line, not a crash.
+      - By default the import is all-or-nothing: if any row fails, nothing is booked, imported is empty, no
+        notifications are sent, and errors lists every failing row. With partial=True the valid rows are booked (each
+        with its normal confirmation notification) and the failing rows are reported.
+      - CLI: python -m roombook import-csv PATH [--partial] prints one line per failing row as "line N: <message>",
+        then "imported K booking(s)". Exit code 1 if any row failed, otherwise 0.
+
+      Add tests.
+    acceptance:
+      files: pilot/acceptance/csv-import
+      cmd: ["python", "-m", "unittest", "discover", "-s", "tests", "-t", "."]
+      timeout_seconds: 120
+
+  - id: daily-quota
+    repo: roombook
+    prompt: |
+      Some members block rooms all day. Add a daily quota: a member may hold at most 4 hours of bookings per calendar
+      day.
+
+      - Add daily_quota_minutes: int | None = 240 to BookingPolicy (None turns the quota off).
+      - When a member books, add up the durations of the bookings they currently hold, in any room, whose start falls
+        on the same calendar day as the new booking's start. Both days are taken in the local time of the room being
+        booked. If the new booking would bring the total above the quota, refuse it with PolicyError whose code is
+        "daily_quota". A refused booking is not stored and sends no notification.
+      - Admins are exempt.
+
+      Add tests.
+    acceptance:
+      files: pilot/acceptance/daily-quota
+      cmd: ["python", "-m", "unittest", "discover", "-s", "tests", "-t", "."]
+      timeout_seconds: 120
+
+  - id: maintenance
+    repo: roombook
+    prompt: |
+      Facilities need to take rooms out of service for maintenance.
+
+      - BookingService.schedule_maintenance(room_id, start, end, reason, actor_id) creates a maintenance window and
+        returns it. Only admins may do this; anyone else gets PermissionDeniedError, an unknown user or room
+        NotFoundError, and a window that does not end after it starts ValidationError.
+      - BookingService.maintenance_for_room(room_id) returns the room's windows ordered by start. A window has at least
+        room_id, start, end and reason.
+      - Windows are stored in the database like bookings, so they survive a restart.
+      - A new booking that overlaps a window is refused with MaintenanceError, a new subclass of BookingError in
+        roombook/errors.py. find_free_slots must not offer slots that overlap a window.
+      - Existing bookings that overlap a newly scheduled window need to be handled appropriately.
+
+      Add tests.
+    acceptance:
+      files: pilot/acceptance/maintenance
+      cmd: ["python", "-m", "unittest", "discover", "-s", "tests", "-t", "."]
+      timeout_seconds: 120
+
+  - id: cancel-permissions
+    repo: roombook
+    prompt: |
+      Security fix: anyone can cancel anyone's booking. BookingService.cancel(booking_id) must become
+      cancel(booking_id, actor_id):
+
+      - The booking's owner or an admin may cancel it. Any other user gets PermissionDeniedError and the booking stays
+        active; an unknown actor gets NotFoundError.
+      - When an admin cancels someone else's booking, the owner's cancellation notice must say who did it, ending in
+        "cancelled by <the admin's name>". The admin gets no notification.
+      - The CLI cancel command gets a required --as USER option for the acting user. A refused cancel prints
+        "error: ..." and exits 1, like other refusals; a missing --as is a usage error (exit 2).
+      - Update every caller and the existing tests.
+
+      Add tests.
+    acceptance:
+      files: pilot/acceptance/cancel-permissions
+      cmd: ["python", "-m", "unittest", "discover", "-s", "tests", "-t", "."]
+      timeout_seconds: 120

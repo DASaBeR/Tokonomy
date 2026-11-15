@@ -425,9 +425,11 @@ public sealed class BenchRunner(
         var activeJudges = judges is { Count: > 0 }
             ? judges
             : provider is not null ? [new BenchJudge("architect", provider, policy.Models.Architect)] : [];
+        int? diffChars = null;
         if (judge && activeJudges.Count > 0)
         {
             var patch = await _git.RunAsync(clone, ["diff", "--no-renames", baseSha, branch], ct);
+            diffChars = patch.Length;
             foreach (var j in activeJudges)
             {
                 judgeResults.Add(await RunJudgeAsync(j, task, patch, maxJudgeUsd, ct));
@@ -446,6 +448,9 @@ public sealed class BenchRunner(
             judge_usd = judgeResults.Sum(r => r.Usd),
             judge_tokens = judgeResults.Sum(r => r.Tokens),
             judge_seconds = (int)(_clock.UtcNow - judgeStarted).TotalSeconds,
+            // Judges see at most ReviewPrompt.MaxDiffChars of the diff; a truncated view must be visible in the analysis.
+            diff_chars = diffChars,
+            judge_diff_truncated = diffChars > Tokonomy.Llm.Architect.ReviewPrompt.MaxDiffChars,
             judges = judgeResults.Select(r => new { name = r.Name, model = r.Model, verdict = r.Verdict, summary = r.Summary, concerns = r.Concerns, usd = r.Usd, tokens = r.Tokens, seconds = r.Seconds }),
         }));
         return judge ? _clock.UtcNow - judgeStarted : TimeSpan.Zero;
