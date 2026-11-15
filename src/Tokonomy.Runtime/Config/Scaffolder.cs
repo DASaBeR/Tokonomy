@@ -310,7 +310,7 @@ public static class Scaffolder
 
           claude-code:
             # UNVERIFIED: confirm flags against current Claude Code docs before first use (M3).
-            cmd: ["claude", "-p", "{prompt}", "--output-format", "json", "--permission-mode", "acceptEdits"]
+            cmd: ["claude", "-p", "{prompt}", "--output-format", "json", "--permission-mode", "acceptEdits", "--setting-sources", "", "--strict-mcp-config"]
             model_args: ["--model", "{model}"]
             brief_file: CLAUDE.md
             version_cmd: ["claude", "--version"]
@@ -329,9 +329,10 @@ public static class Scaffolder
 
           claude-code-sub:
             # Claude Code on a subscription login (no API key). No proxy and no endpoint override, so the login keeps
-            # working; usage and cost come from Claude Code's own JSON output and are recorded as estimated.
+            # working. --setting-sources "" and --strict-mcp-config stop the repository's own hooks and MCP servers from
+            # running as the worker (threat-model T21; Tokonomy adds them at run time too, `trust_project_config: true` opts out); usage and cost come from Claude Code's own JSON output and are recorded as estimated.
             # Check your plan's terms before running automated batches. Smoke-tested against Claude Code 2.1.316.
-            cmd: ["claude", "-p", "{prompt}", "--output-format", "json", "--permission-mode", "acceptEdits", "--no-session-persistence"]
+            cmd: ["claude", "-p", "{prompt}", "--output-format", "json", "--permission-mode", "acceptEdits", "--no-session-persistence", "--setting-sources", "", "--strict-mcp-config"]
             model_args: ["--model", "{model}"]
             brief_file: CLAUDE.md
             version_cmd: ["claude", "--version"]
@@ -351,7 +352,9 @@ public static class Scaffolder
             # No proxy and no endpoint override. Tokens come from the --json event stream; cost is unknown and recorded as
             # estimated. Codex's own sandbox (workspace-write) limits what it can touch. Not yet verified against a live run
             # on a signed-in account: `tokonomy init` tests the connection with a tiny call.
-            cmd: ["codex", "exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "workspace-write", "--json", "--color", "never", "{prompt}"]
+            # --ignore-rules keeps the repository's own execpolicy .rules files from allowing commands outside the sandbox
+            # (accepted by codex 0.123.0; a full model call with it has not been verified).
+            cmd: ["codex", "exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "workspace-write", "--json", "--color", "never", "--ignore-rules", "{prompt}"]
             model_args: ["--model", "{model}"]
             brief_file: AGENTS.md
             version_cmd: ["codex", "--version"]

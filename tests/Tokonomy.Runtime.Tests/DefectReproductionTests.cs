@@ -46,7 +46,7 @@ public sealed class DefectReproductionTests : IDisposable
 
     // ------------------------------------------------------------------------------------------------ D5
 
-    [Theory(Skip = "Open defect D5: fixed by worker settings isolation (Milestone 2); remove this Skip with the fix")]
+    [Theory]
     [Trait("Defect", "D5")]
     [InlineData("claude-code")]
     [InlineData("claude-code-sub")]
@@ -61,18 +61,28 @@ public sealed class DefectReproductionTests : IDisposable
         var definition = ConfigLoader.Load(Path.Combine(root, ".tokonomy")).Executors.Executors[executor];
 
         // --bare is NOT accepted as the fix: it may drop the subscription login that claude-code-sub depends on (unverified).
-        // The live check (Milestone 0, step 2b) showed `--setting-sources "" --strict-mcp-config` blocks repo hooks and
-        // keeps the call working. Limitation: this checks the scaffolded YAML only; a fix that injects the flags at run time
-        // in ConfigExecutor (which would also protect existing executors.yaml files) needs this test moved to the built
-        // command line.
-        var cmd = definition.Cmd;
+        // `--setting-sources "" --strict-mcp-config` blocks repo hooks and keeps the call working (live-checked on 2.1.316,
+        // including a CLAUDE.md brief and acceptEdits writes). Both the scaffolded YAML and the command line ConfigExecutor
+        // really builds must carry it; the second is what protects an executors.yaml written before the fix.
+        AssertIsolated(executor, [.. definition.Cmd]);
+
+        var vars = new Dictionary<string, string> { ["prompt"] = "p", ["model"] = "haiku", ["workdir"] = root };
+        AssertIsolated(executor + " (built)", ConfigExecutor.IsolateWorkerSettings(definition, ConfigExecutor.BuildArgs(definition, vars, "haiku")));
+
+        var legacy = new Tokonomy.Core.Config.ExecutorDefinition { Cmd = ["claude", "-p", "{prompt}", "--output-format", "json"] };
+        AssertIsolated("legacy executors.yaml (built)", ConfigExecutor.IsolateWorkerSettings(legacy, ConfigExecutor.BuildArgs(legacy, vars, null)));
+    }
+
+    private static void AssertIsolated(string label, List<string> cmd)
+    {
         var shown = string.Join(' ', cmd);
         var at = cmd.IndexOf("--setting-sources");
-        Assert.True(at >= 0 && at + 1 < cmd.Count, $"{executor} loads project settings and hooks: {shown}");
+        Assert.True(at >= 0 && at + 1 < cmd.Count, $"{label} loads project settings and hooks: {shown}");
         var sources = cmd[at + 1].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         Assert.DoesNotContain("project", sources);
         Assert.DoesNotContain("local", sources);
-        Assert.True(cmd.Contains("--strict-mcp-config"), $"{executor} loads project MCP servers: {shown}");
+        Assert.True(cmd.Contains("--strict-mcp-config"), $"{label} loads project MCP servers: {shown}");
+        Assert.DoesNotContain("--bare", cmd);
     }
 
     // ------------------------------------------------------------------------------------------------ D6

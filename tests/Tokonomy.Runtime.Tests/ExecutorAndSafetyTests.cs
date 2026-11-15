@@ -69,6 +69,47 @@ public class ConfigExecutorTests
     }
 
     [Fact]
+    public async Task Claude_worker_gets_settings_isolation_at_run_time_even_from_an_old_executors_yaml()
+    {
+        using var tmp = new TempDir();
+        var runner = new RecordingRunner();
+        var old = new ExecutorDefinition { Cmd = ["claude", "-p", "{prompt}", "--output-format", "json"], BriefFile = "CLAUDE.md" };
+        var executor = new ConfigExecutor("claude-code", old, Session(Path.Combine(tmp.Path, "logs")), runner);
+
+        await executor.RunAsync(new Brief { Prompt = "p", Body = "b" }, tmp.Path, null, TimeSpan.FromMinutes(1), default);
+
+        Assert.Equal(["claude", "-p", "p", "--output-format", "json", "--setting-sources", "", "--strict-mcp-config"], runner.Last!.Args);
+    }
+
+    [Fact]
+    public void Isolation_respects_the_opt_out_other_executables_and_flags_the_user_already_set()
+    {
+        var args = new List<string> { "claude", "-p", "x" };
+        Assert.Equal(args, ConfigExecutor.IsolateWorkerSettings(new ExecutorDefinition { Cmd = ["claude"], TrustProjectConfig = true }, args));
+        Assert.Equal(args, ConfigExecutor.IsolateWorkerSettings(new ExecutorDefinition { Cmd = ["codex"] }, args));
+        Assert.Equal(args, ConfigExecutor.IsolateWorkerSettings(new ExecutorDefinition { Cmd = ["opencode"] }, args));
+
+        var own = new List<string> { "claude", "--setting-sources", "user", "--strict-mcp-config" };
+        Assert.Equal(own, ConfigExecutor.IsolateWorkerSettings(new ExecutorDefinition { Cmd = ["claude"] }, own));
+        Assert.Equal(["claude.cmd", "--setting-sources", "", "--strict-mcp-config"],
+            ConfigExecutor.IsolateWorkerSettings(new ExecutorDefinition { Cmd = ["tools/claude.cmd"] }, ["claude.cmd"]));
+    }
+
+    [Fact]
+    public async Task Worker_logs_are_written_through_the_redactor()
+    {
+        using var tmp = new TempDir();
+        var runner = new RecordingRunner();
+        var executor = new ConfigExecutor("agent", Definition(), Session(Path.Combine(tmp.Path, "logs")), runner);
+
+        await executor.RunAsync(new Brief { Prompt = "p", Body = "b" }, tmp.Path, null, TimeSpan.FromMinutes(1), default);
+
+        var fakeKey = "sk-" + new string('a', 30);
+        Assert.NotNull(runner.Last!.RedactLogs);
+        Assert.DoesNotContain(fakeKey, runner.Last.RedactLogs!("key is " + fakeKey), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Brief_file_is_removed_when_repo_had_none()
     {
         using var tmp = new TempDir();

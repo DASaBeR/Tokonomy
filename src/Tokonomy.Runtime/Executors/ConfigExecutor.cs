@@ -136,7 +136,7 @@ public sealed class ConfigExecutor(string name, ExecutorDefinition definition, E
                 WorktreeGuard.WriteAllText(workdir, relative, ShellAccess.ApplyToFile(definition, relative, Substitute(template, vars), grant));
             }
 
-            var args = ShellAccess.Apply(definition, BuildArgs(definition, vars, model), grant);
+            var args = IsolateWorkerSettings(definition, ShellAccess.Apply(definition, BuildArgs(definition, vars, model), grant));
 
             var proxy = ProxySettings.Current.ForProvider(ProxyIdOf(definition));
             var env = EnvironmentBuilder.ForWorker(
@@ -158,6 +158,8 @@ public sealed class ConfigExecutor(string name, ExecutorDefinition definition, E
                 Proxy = proxy,
                 StdoutFile = stdout,
                 StderrFile = stderr,
+                // The logs hold whatever the model read or printed; they are kept for later inspection (threat-model T20).
+                RedactLogs = static text => Tokonomy.Runtime.Ledger.Redactor.Redact(text),
             }, ct);
 
             var stdoutText = File.Exists(stdout) ? await File.ReadAllTextAsync(stdout, CancellationToken.None) : outcome.Stdout;
@@ -214,7 +216,10 @@ public sealed class ConfigExecutor(string name, ExecutorDefinition definition, E
                 TimedOut = outcome.TimedOut,
                 StdoutPath = stdout,
                 StderrPath = stderr,
-                Usage = ReadUsage(definition.UsageFormat, stdoutText, model),
+                // The log is redacted; if that ever damaged the JSON, the unredacted tail still holds the usage.
+                Usage = ReadUsage(definition.UsageFormat, stdoutText, model) is { Count: > 0 } fromLog
+                    ? fromLog
+                    : ReadUsage(definition.UsageFormat, outcome.Stdout, model),
                 // A non-zero exit is a failed run even if some files changed; never let the gates talk it into an accept.
                 Fault = !outcome.TimedOut && outcome.ExitCode != 0
                     ? new WorkerFault(WorkerFaultKind.ProcessFailed, $"exit code {outcome.ExitCode}: {CommandGate.Tail(outcome.Stderr, 400)}")
@@ -258,6 +263,33 @@ public sealed class ConfigExecutor(string name, ExecutorDefinition definition, E
 
         restore.Clear();
         return problems;
+    }
+
+    /// <summary>
+    /// For the <c>claude</c> executable: stops Claude Code from loading the target repository's settings, hooks and MCP servers
+    /// (threat-model T21). Applied to the built command line so it also protects an existing executors.yaml. Never
+    /// <c>--bare</c>: it can drop the subscription login. A flag already present is left as the user wrote it.
+    /// </summary>
+    internal static List<string> IsolateWorkerSettings(ExecutorDefinition definition, List<string> args)
+    {
+        if (definition.TrustProjectConfig || ProxyIdOf(definition) != "claude")
+        {
+            return args;
+        }
+
+        var result = new List<string>(args);
+        if (!result.Contains("--setting-sources"))
+        {
+            result.Add("--setting-sources");
+            result.Add("");
+        }
+
+        if (!result.Contains("--strict-mcp-config"))
+        {
+            result.Add("--strict-mcp-config");
+        }
+
+        return result;
     }
 
     internal static string AgyBriefSection(AgySettingsFile settings, ShellGrant grant)

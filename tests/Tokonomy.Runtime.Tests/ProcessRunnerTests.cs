@@ -127,4 +127,32 @@ public class ProcessRunnerTests
 
         Assert.Contains("git version", await File.ReadAllTextAsync(file), StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task Redacts_secrets_in_log_files_even_when_split_across_reads_and_keeps_the_in_memory_capture_raw()
+    {
+        using var tmp = new TempDir();
+        var outFile = Path.Combine(tmp.Path, "out.log");
+        var errFile = Path.Combine(tmp.Path, "err.log");
+        var fakeKey = "sk-" + new string('Z', 32); // not a real key
+        var script = $"[Console]::Out.Write('token={fakeKey[..10]}'); [Console]::Out.Flush(); Start-Sleep -Milliseconds 400; [Console]::Out.Write('{fakeKey[10..]}'+[char]10+'tail ok'); [Console]::Error.WriteLine('err {fakeKey}')";
+        var unix = $"printf 'token={fakeKey[..10]}'; sleep 0.4; echo '{fakeKey[10..]}'; printf 'tail ok'; echo 'err {fakeKey}' >&2";
+
+        var outcome = await _runner.RunAsync(new ProcessSpec
+        {
+            Args = Shell(unix, script),
+            WorkingDirectory = Cwd,
+            StdoutFile = outFile,
+            StderrFile = errFile,
+            RedactLogs = text => Tokonomy.Runtime.Ledger.Redactor.Redact(text),
+        }, default);
+
+        Assert.True(outcome.Succeeded);
+        var logged = await File.ReadAllTextAsync(outFile);
+        Assert.DoesNotContain(fakeKey[10..], logged, StringComparison.Ordinal);
+        Assert.Contains("token=[REDACTED]", logged, StringComparison.Ordinal);
+        Assert.Contains("tail ok", logged, StringComparison.Ordinal);
+        Assert.DoesNotContain(fakeKey, await File.ReadAllTextAsync(errFile), StringComparison.Ordinal);
+        Assert.Contains(fakeKey, outcome.Stdout, StringComparison.Ordinal);
+    }
 }

@@ -47,8 +47,8 @@ public sealed class ProcessRunner : IProcessRunner
 
         long lastActivity = System.Environment.TickCount64;
         void Touch() => Interlocked.Exchange(ref lastActivity, System.Environment.TickCount64);
-        var stdout = new StreamCapture(spec.MaxCaptureChars, spec.StdoutFile, spec.MaxFileBytes, Touch, spec.OnStdoutLine);
-        var stderr = new StreamCapture(spec.MaxCaptureChars, spec.StderrFile, spec.MaxFileBytes, Touch, null);
+        var stdout = new StreamCapture(spec.MaxCaptureChars, spec.StdoutFile, spec.MaxFileBytes, Touch, spec.OnStdoutLine, spec.RedactLogs);
+        var stderr = new StreamCapture(spec.MaxCaptureChars, spec.StderrFile, spec.MaxFileBytes, Touch, null, spec.RedactLogs);
         var stdoutTask = stdout.PumpAsync(process.StandardOutput);
         var stderrTask = stderr.PumpAsync(process.StandardError);
 
@@ -195,12 +195,13 @@ public sealed class ProcessRunner : IProcessRunner
         await grace.CancelAsync();
     }
 
-    private sealed class StreamCapture(int maxChars, string? filePath, long maxFileBytes, Action? onActivity, Action<string>? onLine) : IDisposable
+    private sealed class StreamCapture(int maxChars, string? filePath, long maxFileBytes, Action? onActivity, Action<string>? onLine, Func<string, string>? redact = null) : IDisposable
     {
         private readonly StringBuilder _line = new();
 
         private readonly StringBuilder _buffer = new();
         private readonly Lock _gate = new();
+        private readonly StringBuilder _unwritten = new();
         private StreamWriter? _file;
         private long _fileBytes;
         private bool _disposed;
@@ -246,17 +247,76 @@ public sealed class ProcessRunner : IProcessRunner
                         Truncated = true;
                     }
 
-                    if (_file is not null && _fileBytes < maxFileBytes)
-                    {
-                        _file.Write(chunk, 0, read);
-                        _fileBytes += read;
-                    }
+                    WriteToFile(chunk, read);
                 }
+            }
+
+            lock (_gate)
+            {
+                FlushUnwritten(all: true);
             }
 
             if (_line.Length > 0)
             {
                 Deliver(); // the last line may have no trailing newline
+            }
+        }
+
+        private void WriteToFile(char[] chunk, int read)
+        {
+            if (_file is null || _fileBytes >= maxFileBytes)
+            {
+                return;
+            }
+
+            if (redact is null)
+            {
+                _file.Write(chunk, 0, read);
+                _fileBytes += read;
+                return;
+            }
+
+            _unwritten.Append(chunk, 0, read);
+            FlushUnwritten(all: false);
+        }
+
+        /// <summary>
+        /// Writes redacted text. Only whole lines go out, so a secret split across two reads is redacted as one; a line that
+        /// never ends is cut loose once it is long, keeping a tail that is longer than any secret pattern.
+        /// </summary>
+        private void FlushUnwritten(bool all)
+        {
+            if (redact is null || _file is null || _disposed || _unwritten.Length == 0)
+            {
+                return;
+            }
+
+            var text = _unwritten.ToString();
+            int cut;
+            if (all)
+            {
+                cut = text.Length;
+            }
+            else
+            {
+                cut = text.LastIndexOf((char)10) + 1;
+                if (cut == 0 && text.Length > 1_000_000)
+                {
+                    cut = text.Length - 1024;
+                }
+            }
+
+            if (cut == 0)
+            {
+                return;
+            }
+
+            _unwritten.Remove(0, cut);
+            if (_fileBytes < maxFileBytes)
+            {
+                var written = redact(text[..cut]);
+                _file.Write(written);
+                _fileBytes += written.Length;
             }
         }
 
@@ -304,6 +364,7 @@ public sealed class ProcessRunner : IProcessRunner
                     return;
                 }
 
+                FlushUnwritten(all: true);
                 _disposed = true;
                 if (_buffer.Length > maxChars)
                 {

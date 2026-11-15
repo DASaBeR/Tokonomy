@@ -37,6 +37,12 @@ public sealed record ProcessSpec
 
     public string? StderrFile { get; init; }
 
+    /// <summary>
+    /// Applied to the text written to <see cref="StdoutFile"/> and <see cref="StderrFile"/> (not to the in-memory capture or
+    /// <see cref="OnStdoutLine"/>). The files are written line by line so a secret split across two reads is still seen whole.
+    /// </summary>
+    public Func<string, string>? RedactLogs { get; init; }
+
     /// <summary>In-memory capture keeps the last N characters of each stream (the tail holds most failure summaries).</summary>
     public int MaxCaptureChars { get; init; } = 256 * 1024;
 

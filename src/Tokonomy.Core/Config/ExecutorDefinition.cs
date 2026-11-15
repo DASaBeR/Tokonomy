@@ -70,6 +70,15 @@ public sealed class ExecutorDefinition
     /// </summary>
     public bool VerifyModel { get; set; } = true;
 
+    /// <summary>
+    /// Opt-out of worker settings isolation (threat-model T21). By default Tokonomy makes <c>claude</c> ignore the target
+    /// repository's own <c>.claude/settings*.json</c> (hooks), <c>.mcp.json</c> servers and user settings
+    /// (<c>--setting-sources ""</c>, <c>--strict-mcp-config</c>), because a cloned repository could otherwise run its own
+    /// commands at the worker's privileges. Set true only for a repository you wrote and trust, when the worker needs its hooks
+    /// or MCP servers. Flags you already put in <see cref="Cmd"/> are never overridden.
+    /// </summary>
+    public bool TrustProjectConfig { get; set; }
+
     public ExecutorCapabilities Capabilities { get; set; } = new();
 }
 
