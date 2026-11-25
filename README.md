@@ -2,7 +2,7 @@
 
 # Tokonomy
 
-**Adaptive orchestration for AI coding agents.**
+**A strong AI plans. A cheaper AI builds. Automatic checks decide what is accepted.**
 
 [![CI](https://github.com/DASaBeR/Tokonomy/actions/workflows/ci.yml/badge.svg)](https://github.com/DASaBeR/Tokonomy/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -11,13 +11,67 @@
 
 </div>
 
-Tokonomy (token + economy) is an open-source CLI that sits on top of the coding agents you already use. A strong model plans the work once. A cheaper model writes the code, one unit at a time. Deterministic gates (build, lint, tests) decide whether each unit is accepted, and the strong model steps in only where it is needed: to retry with better instructions, split an oversized unit, review a risky diff, or take over. Every call is recorded in a cost ledger, so you can see what each accepted unit actually cost.
+Think of building a house: an expensive architect draws the plan once, affordable builders do the bricklaying, and an inspector with a checklist approves each part. Tokonomy (token + economy) does the same for AI coding. It is an open-source CLI that sits on top of the coding agents you already use. A strong model plans the work once and steps in only where needed: to retry with better instructions, split an oversized unit, review a risky diff, or take over. A cheaper model writes the code, one unit at a time. Deterministic gates (build, lint, tests) decide whether each unit is accepted, not the model's own claim of "done". Every call is recorded in a cost ledger, so you can see what each accepted unit actually cost.
+
+```text
+                 T O K O N O M Y
+      PLAN  ->  BUILD  ->  PROVE  ->  KEEP
+
+              .-------------------.
+             /      ARCHITECT      \
+            /    [ STRONG MODEL ]   \
+           '------------+------------'
+                        | plans once
+                        v
+              .-------------------.
+              |     BLUEPRINT     |
+              |  [1] [2] [3] ...  |
+              '---------+---------'
+                        | one unit at a time
+                        v
+              .-------------------.
+              |     WORKER AI     |
+      +------>|  [ CHEAP MODEL ]  |<------------------------------+
+      |       '-------------------'                               |
+      |                 | writes code                             |
+      |                 v                                         |
+      |       +-------------------+                               |
+      |       |       GATES       |                               |
+      |       |build . lint . test|                               |
+      |       |  run in a SANDBOX |                               |
+      |       |    (no network)   |                               |
+      |       +-------------------+                               |
+      |                 |                                         |
+      |                 v                                         |
+      |       <  all gates pass?  >--NO-------------+             |
+next  |                 |                           |             |
+unit  |                 | YES                       v             |
+      |                 v               +-----------------------+ |
+      |       +-------------------+     |         RETRY         |-+
+      +-------|       COMMIT      |<-+  | worker sees the error |
+              |    one per unit   |  |  +-----------------------+
+              +-------------------+  |              | still failing?
+                        |            |              v
+                        v            |  +-----------------------+
+             .---------------------. +---  ARCHITECT TAKES OVER |
+             |      GIT BRANCH     |    |   fix is gated again  |
+             |  (1)--(2)--(3)--(4) |    +-----------------------+
+             '---------------------'
+                        |
+                        v
+            [ YOU REVIEW  >  MERGE ]
+
+ .------------------------------------------------------------------.
+ |  LEDGER: every call, token, cost, attempt and gate is recorded   |
+ '------------------------------------------------------------------'
+
+         STRONG MODEL PLANS AND RESCUES  .  CHEAP MODEL BUILDS
+           GATES DECIDE  .  GIT AND LEDGER ARE THE EVIDENCE
+
+                    TRUST EVIDENCE. NOT AI CLAIMS.
+```
 
 > ⭐ If you find Tokonomy interesting or useful, consider giving it a star! It helps the project gain visibility and motivates further development. Every star is appreciated.
-
-<p align="center">
-  <img src="docs/assets/readme/cli-overview.png" alt="Output of tokonomy --help: the build, init, doctor, plan, run, login, proxy, report and bench commands" width="680">
-</p>
 
 > **Status: pre-alpha.** The core hypothesis (a strong model used sparingly plus a cheap model verified by gates is cheaper per successful task) is still being tested, and the evidence so far is small. See [what the benchmarks do and do not show](#benchmarks).
 
@@ -220,6 +274,10 @@ Both installers verify SHA-256 checksums. Single-file binaries are published for
 **Prerequisites:** `git`, and at least one way to reach a model: a Claude Code, Antigravity or Codex login, or an API key (OpenRouter, Anthropic, Gemini, OpenAI, DeepSeek, or any OpenAI-compatible endpoint). Python is needed if you want the strong model to write acceptance tests. Gate isolation uses **Windows Sandbox**, which is Windows-only; see [gate isolation](docs/gate-isolation.md) and the [threat model](docs/threat-model.md) before running on other platforms or on code you do not trust.
 
 ## Quick start
+
+<p align="center">
+  <img src="docs/assets/readme/cli-overview.png" alt="Output of tokonomy --help: the build, init, doctor, plan, run, login, proxy, report and bench commands" width="680">
+</p>
 
 **One command.** In any folder:
 
