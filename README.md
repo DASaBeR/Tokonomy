@@ -72,6 +72,8 @@ unit  |                 | YES                       v             |
 ```
 
 > ⭐ If you find Tokonomy interesting or useful, consider giving it a star! It helps the project gain visibility and motivates further development. Every star is appreciated.
+>
+> 🔬 **Work in progress.** We are running more and harder benchmarks, and developing the project further, to find out where the strong-model-plus-cheap-worker approach really saves money and where it does not, and to keep optimizing token usage, cost and reliability. Early results are small and mixed, and we publish them as they are (see [Benchmarks](#benchmarks)). Stars, tasksets and results from your own runs all help.
 
 > **Status: pre-alpha.** The core hypothesis (a strong model used sparingly plus a cheap model verified by gates is cheaper per successful task) is still being tested, and the evidence so far is small. See [what the benchmarks do and do not show](#benchmarks).
 
